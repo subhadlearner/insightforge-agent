@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Local data
+*.db
+*.sqlite3

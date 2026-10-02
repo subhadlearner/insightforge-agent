@@ -1,0 +1,3 @@
+# Research fan-out uses the `task` tool, and the graph verifies the result
+
+The research stage is a graph node that runs a supervisor deep agent. It calls `task` once per Sub-task to start isolated Researcher subagents, as the assignment requires. Parallelism through `task` depends on the model emitting several calls in one turn, so the graph does not trust it. After the node returns, a post-condition checks that there are at most 6 Sub-tasks and a result for every Sub-task ID, and marks any missing one `Failed`. We rejected a pure LangGraph `Send` fan-out, which has stronger guarantees but would not use `task`, and async subagents, which need separate Agent Protocol servers.
