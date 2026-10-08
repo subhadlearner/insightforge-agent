@@ -17,7 +17,7 @@ The structured, cited output of a Run that reaches `COMPLETE`. Persisted across 
 _Avoid_: briefing, output
 
 **Watchlist Item**:
-A standing Brief plus a cadence. Spawns a new Run on each tick. Always uses web search, and never uploaded documents. It is `active`, or `blocked` with a reason when no enabled source is available; a blocked tick creates no Run, and the item returns to `active` on its own.
+A standing Brief plus a cadence. Spawns a new Run on each tick. Always uses web search, and never uploaded documents.
 _Avoid_: monitor, subscription
 
 **Sub-task**:
@@ -25,7 +25,7 @@ One scoped unit of research that a Brief is decomposed into. Belongs to a Run.
 _Avoid_: task (reserved for the DeepAgents tool), branch
 
 **Aspect**:
-One distinct thing a Brief asks about. Every Sub-task covers exactly one Aspect, and every Aspect is covered by at least one Sub-task. A Brief with more than 6 Aspects is too broad to plan.
+One distinct thing a Brief asks about. Every Sub-task covers exactly one Aspect, and every Aspect is covered by at least one Sub-task. Genuinely related Aspects may be consolidated into one, but a requested Aspect is never silently dropped. A Brief that still has more than 6 Aspects is too broad to plan.
 _Avoid_: theme, facet, topic
 
 **Sub-task plan**:

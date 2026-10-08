@@ -23,8 +23,8 @@ INGESTING -> PLANNING -> RESEARCHING -> EXTRACTING -> SYNTHESIZING -> WRITING ->
 - `INGESTING` is skipped when there are no uploaded documents (section 5).
 - **Submission check.** The Planner may assign only source types that are enabled and available. Web is always available. Uploaded documents are available when at least one was uploaded for this Run. Memory is available when the User has at least one eligible Report (section 5). A Brief with no available source type is rejected with 422 before a Run is created. This covers "all toggles off".
 - **Planning.** The Planner produces the Aspects of the Brief and a `SubTaskPlan` in which every Sub-task covers one Aspect.
-  - **Bounds.** The plan must hold 3 to 6 Sub-tasks. A plan outside the bounds gets exactly one corrective re-prompt that states the violation.
-  - **Too many.** If there are still more than 6, Sub-tasks are trimmed deterministically by priority while keeping at least one per Aspect. If there are more than 6 Aspects, trimming is impossible and the Run fails.
+  - **Bounds.** The plan must hold 3 to 6 Sub-tasks, each covering exactly one Aspect, with every Aspect covered. A plan outside the bounds, or with more than 6 Aspects, gets exactly one corrective re-prompt that states the violation. For too many Aspects, the re-prompt asks the Planner to consolidate genuinely related Aspects, never to drop one.
+  - **Too many.** If there are still more than 6 Sub-tasks, they are trimmed deterministically by priority while keeping at least one per Aspect. If there are still more than 6 Aspects, trimming is impossible and the Run fails with that reason.
   - **Too few.** If there are still fewer than 3, the Run fails, including after a clarification timeout.
   - **Logging and limits.** Corrections, trimmed Sub-tasks, assumptions and failure reasons go to the Run log. Corrective attempts count against the Run-wide limits.
 - **Clarification.** `AWAITING_CLARIFICATION` is a non-terminal state entered when the Planner asks its one question. It uses LangGraph interrupt and resume with the checkpoint in the database.
@@ -100,7 +100,7 @@ Graph state carries IDs and small structured values only, never Source bodies or
 
 ## 6. Persistence
 
-- **Database (SQLite behind repository interfaces).** Users' Runs, Sub-tasks, Sources, Observations, Passages, Reports, Watchlist Items and their status, Baselines, the Diff log, Alerts, `run_events`, failure records, revoked share links, and the APScheduler job store.
+- **Database (SQLite behind repository interfaces).** Users' Runs, Sub-tasks, Sources, Observations, Passages, Reports, Watchlist Items, Baselines, the Diff log, Alerts, `run_events`, failure records, revoked share links, and the APScheduler job store.
 - **Qdrant.** `doc_chunks`, `entities` (cross-run), `report_sections` (prior Reports). One configurable embedding model, with its name recorded in each collection's metadata. Every query is filtered by `owner_id` inside the repository. `doc_chunks` is Run-scoped for visibility only: a Run searches only its own uploads, but chunks are kept while a Report cites them.
 - **Progress.** The pipeline appends to `run_events`. The SSE endpoint tails it with a cursor (`Last-Event-ID`), so a reconnecting client loses nothing.
 - **Retention.** A periodic sweep removes material based on what still refers to it, not on the originating Run's status.
@@ -128,7 +128,7 @@ Graph state carries IDs and small structured values only, never Source bodies or
 
 - **Ticks.** APScheduler runs one Run per Watchlist Item per tick, using the same pipeline. At most one active Run per item. Overlapping and missed ticks are skipped.
 - **Watchlist sources.** A Watchlist Item always has web search enabled and can never use uploaded documents. It may add Prior Reports for background. Both rules are checked at creation.
-- **Revalidation.** Source availability is re-checked at every tick. If no enabled source is available, the tick creates no Run, records the reason, sets the item to `blocked`, and neither raises an Alert nor touches the Baseline. The item returns to `active` on its own at the next tick that passes.
+- **No Watchlist status.** Because web search is always enabled and always available, a tick can never lack a source, so a Watchlist Item has no `blocked` state and there is no per-tick source check. A missing provider key stops the app at startup (section 10). A provider outage during a Run ends in a Failed Run, which raises no Alert and leaves the Baseline unchanged. The dashboard shows each item's recent Failed Runs from Run data.
 - **Baseline.** The Baseline is the latest established state of each Finding for the item, with the provenance, Observation date and As-of period that established it. It is not a Report (ADR-0004).
   - **First Run.** The first successful Run creates the Baseline without a Diff and raises no Alert.
   - **Successful Diff.** Each successful Diff updates the Findings that the Run established, changed or showed to be no longer true. It leaves Not reconfirmed Findings unchanged.
@@ -198,7 +198,13 @@ Reported as confirmed by the review:
 
 Still open:
 
-- **Spike:** the Planner reliably emits parallel `task` calls in one turn, and a `deepagents` graph resumed across two LangGraph nodes on one thread behaves as section 2 assumes (ADR-0001, ADR-0003).
+- **Spike (first ticket, blocks every research-pipeline ticket):** one checkpointed Planner thread resumed across two outer LangGraph nodes (ADR-0001, ADR-0003). One minimal executable integration test, with a fake researcher tool and a real model, passes when:
+  1. `PLANNING` produces a `SubTaskPlan` on a checkpointed thread and the outer graph advances.
+  2. `RESEARCHING` resumes the same thread with the approved Sub-tasks intact and emits one `task` per Sub-task.
+  3. Every Sub-task ID gets a result, and a deliberately dropped Sub-task is recovered by the repair round.
+  4. Over 5 runs, the share of runs in which all `task` calls arrive in one turn is recorded. This is measured, not required.
+
+  If 1 to 3 fail, the fallback is two invocations of the same Planner definition: `RESEARCHING` starts a fresh Planner seeded only with the approved `SubTaskPlan`. The Planner root agent still spawns the Researchers via `task`, so this stays compliant, and only ADR-0001's "one thread" wording changes. Scheduling, API and persistence tickets do not wait for the spike.
 - Whether `write_todos` / `TodoListMiddleware` is on by default or must be passed explicitly.
 - Qdrant can create and delete a temporary collection cheaply enough where one is needed, or a payload-scoped alternative is used instead.
 - Token counting for the Evidence budget and the per-call cap matches the provider's tokenizer closely enough for a deterministic test.
