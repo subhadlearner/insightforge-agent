@@ -2,7 +2,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.12.4
     ports:
-      - "6333:6333"
+      - "6335:6333"
     volumes:
       - qdrant_data:/qdrant/storage
 

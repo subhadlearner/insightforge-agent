@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     anthropic_planner_model: str = "claude-sonnet-5-5"
     anthropic_writer_model: str = "claude-sonnet-5-5"
     anthropic_light_model: str = "claude-haiku-5-5"
-    gemini_planner_model: str = "gemini-2.5-flash"
-    gemini_writer_model: str = "gemini-2.5-flash"
-    gemini_light_model: str = "gemini-2.5-flash-lite"
+    gemini_planner_model: str = "gemini-3.5-flash"
+    gemini_writer_model: str = "gemini-3.5-flash"
+    gemini_light_model: str = "gemini-3.5-flash-lite"
     groq_planner_model: str = "openai/gpt-oss-120b"
     groq_writer_model: str = "openai/gpt-oss-120b"
     groq_light_model: str = "openai/gpt-oss-20b"
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     brave_api_key: str | None = None
 
     # Infrastructure.
-    qdrant_url: str = "http://localhost:6333"
+    qdrant_url: str = "http://localhost:6335"
     database_url: str = "sqlite:///insightforge.db"
     personas_file: str = "personas.json"
 
