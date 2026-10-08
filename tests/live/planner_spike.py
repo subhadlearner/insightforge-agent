@@ -1,17 +1,17 @@
 """Spike harness: one checkpointed Planner thread resumed across outer graph nodes.
 
-See docs/design.md section 12 and ADR-0001 / ADR-0003. Uses a real model and a
-fake researcher tool. Not imported by the default test run.
+See docs/design.md section 12 and ADR-0001 / ADR-0003. Models are injectable, so the
+same graph runs against real models (live tests) or scripted ones (default tests).
 """
 
-import re
 import uuid
 from dataclasses import dataclass, field
 from typing import TypedDict
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import TodoListMiddleware
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -19,6 +19,15 @@ from langgraph.graph import END, START, StateGraph
 from insightforge_agent.config import Settings
 from insightforge_agent.domain.plan import SubTaskPlan
 from insightforge_agent.llm import build_chat_model
+from tests.live.spike_checks import (
+    Dispatch,
+    Outcome,
+    dispatches,
+    missing_ids,
+    resolve,
+    segments,
+    tasks_per_turn,
+)
 
 BRIEF = (
     "Compare the 2025 market position of Tesla, BYD and Volkswagen in battery "
@@ -39,7 +48,8 @@ Dispatch `task` only for those, with the same description format. Do not replan.
 
 RESEARCHER_PROMPT = (
     "You are a Researcher. Call `lookup` once with your task's query, then reply "
-    "with exactly 'RESULT: ' followed by a one-line summary of what lookup returned."
+    "with exactly 'RESULT: ' followed by a one-line summary of what lookup returned. "
+    "If you cannot, reply with 'FAILED: ' and the reason."
 )
 
 
@@ -55,7 +65,7 @@ def submit_plan(plan: SubTaskPlan) -> str:
     return "Plan recorded."
 
 
-def _submitted_plan(messages) -> SubTaskPlan:
+def submitted_plan(messages) -> SubTaskPlan:
     for m in reversed(messages):
         if isinstance(m, AIMessage):
             for c in m.tool_calls:
@@ -67,72 +77,62 @@ def _submitted_plan(messages) -> SubTaskPlan:
 class State(TypedDict, total=False):
     thread_id: str
     plan: dict
-    results: dict[str, str]
     missing: list[str]
     repaired: bool
-    drop_id: str
+    discard: list[str]
 
 
 @dataclass
 class SpikeOutcome:
+    """Everything the tests assert on, recomputed from the final thread."""
+
     plan: SubTaskPlan | None = None
-    missing_after_research: list[str] = field(default_factory=list)
-    final_results: dict[str, str] = field(default_factory=dict)
+    thread_plan: SubTaskPlan | None = None  # the plan as submitted in the thread
+    research_prompt: str = ""  # the RESEARCH message text, to show it carries no plan
+    research: list[Dispatch] = field(default_factory=list)
+    repair: list[Dispatch] = field(default_factory=list)
     research_turn_task_counts: list[int] = field(default_factory=list)
-    plan_survived_resume: bool = False
+    before_repair: dict[str, Outcome] = field(default_factory=dict)
+    after_repair: dict[str, Outcome] = field(default_factory=dict)
+    discarded: frozenset[str] = frozenset()
 
 
-def _task_calls(messages) -> dict[str, str]:
-    """tool_call_id -> sub-task id, for `task` calls in the given messages."""
-    out = {}
-    for m in messages:
-        if isinstance(m, AIMessage):
-            for c in m.tool_calls:
-                if c["name"] == "task":
-                    found = re.search(r"SUBTASK_ID=(\w+)", str(c["args"].get("description", "")))
-                    if found:
-                        out[c["id"]] = found.group(1)
-    return out
-
-
-def _collect(messages) -> dict[str, str]:
-    calls = _task_calls(messages)
-    results: dict[str, str] = {}
-    for m in messages:
-        if isinstance(m, ToolMessage) and m.tool_call_id in calls and "RESULT:" in str(m.content):
-            results.setdefault(calls[m.tool_call_id], str(m.content))
-    return results
-
-
-def _turn_counts(messages) -> list[int]:
-    return [
-        n for m in messages if isinstance(m, AIMessage)
-        if (n := sum(1 for c in m.tool_calls if c["name"] == "task"))
-    ]
-
-
-def _spike_model(role: str, s: Settings):
-    model = build_chat_model(role, s)
+def _spike_model(role: str, s: Settings) -> BaseChatModel:
+    model = build_chat_model(role, s)  # type: ignore[arg-type]
     if s.llm_provider == "anthropic":
         # Thinking blocks are signed against the exact message prefix; deepagents
         # rewrites earlier messages on resume, which the API then rejects.
-        model.thinking = {"type": "disabled"}
+        model.thinking = {"type": "disabled"}  # type: ignore[attr-defined]
     return model
 
 
-def run_spike(settings: Settings | None = None) -> SpikeOutcome:
-    s = settings or Settings()
-    outcome = SpikeOutcome()
+def run_spike(
+    settings: Settings | None = None,
+    *,
+    planner_model: BaseChatModel | None = None,
+    researcher_model: BaseChatModel | None = None,
+    brief: str = BRIEF,
+    simulate_drop: bool = True,
+) -> SpikeOutcome:
+    """Run PLANNING -> RESEARCHING -> verify -> (repair) on one checkpointed thread.
+
+    With `simulate_drop`, the verifier ignores the last Sub-task's research result, as
+    if it never arrived. Scripted tests instead make the Planner genuinely omit one."""
+    if planner_model is None or researcher_model is None:
+        s = settings or Settings()
+        planner_model = planner_model or _spike_model("planner", s)
+        researcher_model = researcher_model or _spike_model("light", s)
+
     with SqliteSaver.from_conn_string(":memory:") as saver:
         planner = create_deep_agent(
-            model=_spike_model("planner", s),
+            model=planner_model,
             system_prompt=PLANNER_PROMPT,
             subagents=[{
                 "name": "researcher",
                 "description": "Researches one Sub-task and returns RESULT: <summary>.",
                 "system_prompt": RESEARCHER_PROMPT,
                 "tools": [lookup],
-                "model": _spike_model("light", s),
+                "model": researcher_model,
             }],
             tools=[submit_plan],
             middleware=[TodoListMiddleware()],
@@ -142,13 +142,24 @@ def run_spike(settings: Settings | None = None) -> SpikeOutcome:
         def cfg(state: State) -> dict:
             return {"configurable": {"thread_id": state["thread_id"]}, "recursion_limit": 60}
 
-        def planning(state: State) -> State:
-            res = planner.invoke(
-                {"messages": [HumanMessage(f"PLAN. Brief: {BRIEF}")]}, cfg(state)
+        def thread(state: State) -> list:
+            return planner.get_state(cfg(state)).values["messages"]
+
+        def outcomes(state: State, *, with_repair: bool) -> dict[str, Outcome]:
+            segs = segments(thread(state))
+            ids = [t["id"] for t in state["plan"]["sub_tasks"]]
+            return resolve(
+                ids,
+                dispatches(segs.get("RESEARCH", [])),
+                dispatches(segs.get("REPAIR", [])) if with_repair else [],
+                frozenset(state["discard"]),
             )
-            plan = _submitted_plan(res["messages"])
-            return {"plan": plan.model_dump(), "repaired": False,
-                    "drop_id": plan.sub_tasks[-1].id}
+
+        def planning(state: State) -> State:
+            res = planner.invoke({"messages": [HumanMessage(f"PLAN. Brief: {brief}")]}, cfg(state))
+            plan = submitted_plan(res["messages"])
+            discard = [plan.sub_tasks[-1].id] if simulate_drop else []
+            return {"plan": plan.model_dump(), "repaired": False, "discard": discard}
 
         def researching(state: State) -> State:
             planner.invoke(
@@ -158,18 +169,15 @@ def run_spike(settings: Settings | None = None) -> SpikeOutcome:
             return {}
 
         def verify(state: State) -> State:
-            results = _collect(planner.get_state(cfg(state)).values["messages"])
-            if not state["repaired"]:
-                # Deliberately drop one Sub-task's result to exercise the repair round.
-                results.pop(state["drop_id"], None)
-            ids = [t["id"] for t in state["plan"]["sub_tasks"]]
-            return {"results": results, "missing": [i for i in ids if i not in results]}
+            return {"missing": missing_ids(outcomes(state, with_repair=state["repaired"]))}
 
         def repair(state: State) -> State:
             by_id = {t["id"]: t for t in state["plan"]["sub_tasks"]}
             listing = "\n".join(f"- {i}: {by_id[i]['query']}" for i in state["missing"])
             planner.invoke(
-                {"messages": [HumanMessage(f"REPAIR: dispatch only these missing Sub-tasks:\n{listing}")]},
+                {"messages": [HumanMessage(
+                    f"REPAIR: dispatch only these missing Sub-tasks:\n{listing}"
+                )]},
                 cfg(state),
             )
             return {"repaired": True}
@@ -191,25 +199,23 @@ def run_spike(settings: Settings | None = None) -> SpikeOutcome:
         graph = g.compile()
 
         thread_id = f"spike-{uuid.uuid4()}"
-        first_verify = True
-        final: State = {}
-        for update in graph.stream({"thread_id": thread_id}, stream_mode="updates"):
-            for node, delta in update.items():
-                if node == "planning":
-                    outcome.plan = SubTaskPlan.model_validate(delta["plan"])
-                if node == "verify":
-                    if first_verify:
-                        outcome.missing_after_research = list(delta["missing"])
-                        first_verify = False
-                    final = delta
+        final = graph.invoke({"thread_id": thread_id})
 
-        outcome.final_results = final.get("results", {})
-        msgs = planner.get_state({"configurable": {"thread_id": thread_id}}).values["messages"]
-        human = [i for i, m in enumerate(msgs) if isinstance(m, HumanMessage)]
-        outcome.plan_survived_resume = len(human) >= 2 and "PLAN." in str(msgs[human[0]].content)
-        research_start = next(i for i in human if str(msgs[i].content).startswith("RESEARCH"))
-        repair_start = next(
-            (i for i in human if str(msgs[i].content).startswith("REPAIR")), len(msgs)
+        msgs = thread(final)
+        segs = segments(msgs)
+        plan = SubTaskPlan.model_validate(final["plan"])
+        research = dispatches(segs.get("RESEARCH", []))
+        repair_ds = dispatches(segs.get("REPAIR", []))
+        ids = [t.id for t in plan.sub_tasks]
+        discard = frozenset(final["discard"])
+        return SpikeOutcome(
+            plan=plan,
+            thread_plan=submitted_plan(msgs),
+            research_prompt=str(segs["RESEARCH"][0].content),
+            research=research,
+            repair=repair_ds,
+            research_turn_task_counts=tasks_per_turn(segs.get("RESEARCH", [])),
+            before_repair=resolve(ids, research, [], discard),
+            after_repair=resolve(ids, research, repair_ds, discard),
+            discarded=discard,
         )
-        outcome.research_turn_task_counts = _turn_counts(msgs[research_start:repair_start])
-    return outcome

@@ -6,6 +6,7 @@ import time
 import pytest
 
 from tests.live.planner_spike import run_spike
+from tests.live.spike_checks import check_dispatches
 
 pytestmark = pytest.mark.live
 
@@ -20,16 +21,30 @@ def test_planning_produces_plan_and_graph_advances(outcome):
     assert 3 <= len(outcome.plan.sub_tasks) <= 6
 
 
-def test_researching_resumes_same_thread_one_task_per_subtask(outcome):
-    assert outcome.plan_survived_resume
-    ids = {t.id for t in outcome.plan.sub_tasks}
-    assert sum(outcome.research_turn_task_counts) == len(ids)
+def test_researching_uses_the_approved_plan_from_the_thread(outcome):
+    ids = [t.id for t in outcome.plan.sub_tasks]
+    assert outcome.thread_plan == outcome.plan
+    # The RESEARCH message carries no plan text, yet every dispatch is one-to-one
+    # with the approved Sub-tasks and carries each approved query verbatim.
+    for t in outcome.plan.sub_tasks:
+        assert t.query not in outcome.research_prompt
+    check_dispatches(outcome.plan, outcome.research, ids)
 
 
-def test_every_subtask_gets_result_and_dropped_one_is_repaired(outcome):
-    ids = {t.id for t in outcome.plan.sub_tasks}
-    assert len(outcome.missing_after_research) == 1  # the deliberately dropped one
-    assert set(outcome.final_results) == ids
+def test_dropped_subtask_gets_a_fresh_result_from_the_repair_dispatch(outcome):
+    ids = [t.id for t in outcome.plan.sub_tasks]
+    (dropped,) = outcome.discarded
+    assert {i for i, o in outcome.before_repair.items() if o.status == "missing"} == {dropped}
+    # Repair dispatches only the missing ID with its original scope.
+    check_dispatches(outcome.plan, outcome.repair, [dropped])
+    fixed = outcome.after_repair[dropped]
+    assert (fixed.status, fixed.phase) == ("succeeded", "REPAIR")
+    original_ids = {d.tool_call_id for d in outcome.research}
+    assert fixed.dispatch.tool_call_id not in original_ids
+    # Everything else keeps its original RESEARCH result.
+    for sid in ids:
+        if sid != dropped:
+            assert outcome.after_repair[sid].dispatch.tool_call_id == outcome.before_repair[sid].dispatch.tool_call_id
 
 
 def _run_with_rate_limit_retry(attempts: int = 4):
