@@ -7,7 +7,13 @@ authors = [
     { name = "Subhadeep Majumder", email = "subhadlearner@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "langchain-anthropic>=1.7.5",
+    "langchain-core>=1.6.7",
+    "langchain-google-genai>=4.4.0",
+    "langchain-groq>=1.1.3",
+    "pydantic-settings>=2.15.0",
+]
 
 [project.scripts]
 insightforge-agent = "insightforge_agent:main"
@@ -15,3 +21,32 @@ insightforge-agent = "insightforge_agent:main"
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.15",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["live: needs a real model or server; run on demand with -m live"]
+addopts = "-m 'not live'"
+
+[tool.importlinter]
+root_package = "insightforge_agent"
+
+[[tool.importlinter.contracts]]
+name = "domain imports nothing from the other packages"
+type = "forbidden"
+source_modules = ["insightforge_agent.domain"]
+forbidden_modules = [
+    "insightforge_agent.pipeline",
+    "insightforge_agent.agents",
+    "insightforge_agent.stores",
+    "insightforge_agent.api",
+    "insightforge_agent.scheduler",
+    "insightforge_agent.config",
+    "insightforge_agent.llm",
+]
