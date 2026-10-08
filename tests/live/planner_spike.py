@@ -111,19 +111,28 @@ def _turn_counts(messages) -> list[int]:
     ]
 
 
+def _spike_model(role: str, s: Settings):
+    model = build_chat_model(role, s)
+    if s.llm_provider == "anthropic":
+        # Thinking blocks are signed against the exact message prefix; deepagents
+        # rewrites earlier messages on resume, which the API then rejects.
+        model.thinking = {"type": "disabled"}
+    return model
+
+
 def run_spike(settings: Settings | None = None) -> SpikeOutcome:
     s = settings or Settings()
     outcome = SpikeOutcome()
     with SqliteSaver.from_conn_string(":memory:") as saver:
         planner = create_deep_agent(
-            model=build_chat_model("planner", s),
+            model=_spike_model("planner", s),
             system_prompt=PLANNER_PROMPT,
             subagents=[{
                 "name": "researcher",
                 "description": "Researches one Sub-task and returns RESULT: <summary>.",
                 "system_prompt": RESEARCHER_PROMPT,
                 "tools": [lookup],
-                "model": build_chat_model("light", s),
+                "model": _spike_model("light", s),
             }],
             tools=[submit_plan],
             middleware=[TodoListMiddleware()],

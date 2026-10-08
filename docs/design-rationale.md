@@ -180,11 +180,12 @@ Run `/implement #<n>` per ticket in a fresh session. A ticket can start when it 
 
 ## Spike results for ticket 1 (2026-10-08)
 
-The spike verified the deepagents and LangGraph facts against the installed versions and found no reason to use the ADR-0001 fallback: one checkpointed Planner thread resumed across `PLANNING`, `RESEARCHING` and the repair round (criteria 1 to 3). Details, versions and the two findings (no `response_format` on the Planner, `TodoListMiddleware` passed explicitly) are in `design.md` �12.
+The spike verified the deepagents and LangGraph facts against the installed versions and found no reason to use the ADR-0001 fallback: one checkpointed Planner thread resumed across `PLANNING`, `RESEARCHING` and the repair round (criteria 1 to 3). Details, versions and the two findings (no `response_format` on the Planner, `TodoListMiddleware` passed explicitly) are in `design.md` §12.
 
 Decisions made while doing it:
 
 - The plan reaches the graph through a `submit_plan` tool call, not structured output, because `response_format` forces a structured call on every resume.
-- Criterion 4 is left unmeasured. The free tiers available could not complete five runs (Gemini 20 requests/day, Groq 8,000 TPM). It is measured, not required, so the ticket proceeds; re-run it on Anthropic in ticket 18 alongside criteria 1 to 3.
+- The final run used Anthropic Haiku 5.5 for every role at the user's request, because the free tiers could not complete the runs. Design §10 reserves Anthropic for ticket 18, so this uses it earlier than planned, on the cheapest model. Thinking had to be disabled for the Planner thread to resume.
+- Criterion 4 measured 5 of 5 runs with all `task` calls in one turn. It is measured, not required.
 - Dropping a Sub-task is simulated in the verifier (it discards one result before checking), so the repair round is deterministic.
 
