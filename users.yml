@@ -1,0 +1,24 @@
+# Personas. A persona picker in the UI selects one of these; this is identity
+# selection, not security. Fields: id, display_name, and optional defaults
+# (source_toggles, webhook_url). Never put keys or secrets here.
+users:
+  - id: alice
+    display_name: Alice Analyst
+    source_toggles:
+      web: true
+      documents: true
+      memory: true
+
+  - id: bob
+    display_name: Bob Strategist
+    source_toggles:
+      web: true
+      documents: false
+      memory: true
+
+  - id: carol
+    display_name: Carol Consultant
+    source_toggles:
+      web: true
+      documents: true
+      memory: false

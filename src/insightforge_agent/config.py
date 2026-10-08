@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # Infrastructure.
     qdrant_url: str = "http://localhost:6335"
     database_url: str = "sqlite:///insightforge.db"
-    personas_file: str = "personas.json"
+    personas_file: str = "users.yml"
 
     @field_validator("search_providers", mode="before")
     @classmethod
