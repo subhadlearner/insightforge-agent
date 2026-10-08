@@ -177,3 +177,14 @@ Deliverables that had no owner and now do: the sample brief library (#16), Slack
 ### Execution
 
 Run `/implement #<n>` per ticket in a fresh session. A ticket can start when it is open, labelled `ready-for-agent`, and has no open blockers in GitHub's native "Blocked by". Close each ticket when it's done, because blockers only clear when closed.
+
+## Spike results for ticket 1 (2026-10-08)
+
+The spike verified the deepagents and LangGraph facts against the installed versions and found no reason to use the ADR-0001 fallback: one checkpointed Planner thread resumed across `PLANNING`, `RESEARCHING` and the repair round (criteria 1 to 3). Details, versions and the two findings (no `response_format` on the Planner, `TodoListMiddleware` passed explicitly) are in `design.md` §12.
+
+Decisions made while doing it:
+
+- The plan reaches the graph through a `submit_plan` tool call, not structured output, because `response_format` forces a structured call on every resume.
+- Criterion 4 is left unmeasured. The free tiers available could not complete five runs (Gemini 20 requests/day, Groq 8,000 TPM). It is measured, not required, so the ticket proceeds; re-run it on Anthropic in ticket 18 alongside criteria 1 to 3.
+- Dropping a Sub-task is simulated in the verifier (it discards one result before checking), so the repair round is deterministic.
+

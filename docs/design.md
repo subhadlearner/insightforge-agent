@@ -211,9 +211,30 @@ Still open:
   4. Over 5 runs, the share of runs in which all `task` calls arrive in one turn is recorded. This is measured, not required.
 
   If 1 to 3 fail, the fallback is two invocations of the same Planner definition: `RESEARCHING` starts a fresh Planner seeded only with the approved `SubTaskPlan`. The Planner root agent still spawns the Researchers via `task`, so this stays compliant, and only ADR-0001's "one thread" wording changes. Scheduling, API and persistence tickets do not wait for the spike.
-- Whether `write_todos` / `TodoListMiddleware` is on by default or must be passed explicitly.
+- ~~Whether `write_todos` / `TodoListMiddleware` is on by default or must be passed explicitly.~~ Resolved by the spike: it must be passed explicitly (see spike results).
 - Qdrant can create and delete a temporary collection cheaply enough where one is needed, or a payload-scoped alternative is used instead.
 - Token counting for the Evidence budget and the per-call cap matches the provider's tokenizer closely enough for a deterministic test.
+
+### Spike results (ticket 1, 2026-10-08)
+
+Installed: `deepagents` 0.7.23, `langgraph` 1.2.14, `langgraph-checkpoint-sqlite` 3.1.1, `langchain` 1.4.3. Run on the Groq dev provider (`openai/gpt-oss-120b`) after the Gemini free tier hit its 20 requests/day cap on `gemini-3.5-flash`. Harness: `tests/live/planner_spike.py`; live tests: `pytest -m live tests/live`.
+
+Verified:
+
+- **`write_todos` is not on by default.** `create_deep_agent(model=...)` exposes `ls, read_file, write_file, edit_file, delete, glob, grep, execute, task`. `TodoListMiddleware` is only added by the OpenAI Codex harness profile. Pass `middleware=[TodoListMiddleware()]` explicitly. This resolves the open question below.
+- **Subagents are isolated.** `SubAgent.mode` defaults to `isolated`, and `messages` and `todos` are excluded from state passed to and returned from a subagent. Only the final message returns, as the `task` ToolMessage. `create_deep_agent` also adds `SummarizationMiddleware` (per its docstring; not exercised by the spike).
+- **Checkpointing, interrupt and resume.** A SQLite checkpointer persists the Planner thread across outer graph nodes. A LangGraph `interrupt()` resumes with `Command(resume=...)` from a new graph instance on the same SQLite file (`tests/test_interrupt_resume.py`).
+- **Criteria 1 to 3 passed on one live run** (`pytest -m live -k "not parallel"`, 3 passed; no log is committed). The dropped Sub-task is simulated: the verifier discards one result before checking, so the repair round is deterministic, though the Planner really did re-dispatch it. In that run: `PLANNING` produced a `SubTaskPlan` and the outer graph advanced; `RESEARCHING` resumed the same thread with the plan intact and emitted exactly one `task` per Sub-task; a deliberately dropped Sub-task was recovered by the repair round and every ID ended with a result. The fallback is not needed, and ADR-0001 stands.
+
+Findings that change how later tickets build on this:
+
+- **Do not use `response_format` on the Planner.** It forces a structured-output call on every invocation of the thread, so the RESEARCH and REPAIR resumes break (`Tool choice is required` on Groq; JSON mode cannot be combined with tools on Groq). The spike has the Planner call a `submit_plan(plan: SubTaskPlan)` tool in `PLANNING`, and the graph reads the plan from that tool call.
+- **Token footprint.** The deepagents system prompt plus the accumulated thread is large. On the Groq free tier (8,000 tokens/minute) a later run's repair request (8,172 tokens) exceeded the limit, so criteria 1 to 3 are not reliably repeatable on that tier.
+- **Plan model bounds are not enforced yet.** `SubTaskPlan` checks only that Sub-tasks reference known Aspects. The 3 to 6 bound and Aspect coverage belong to the Planner-bounds ticket (T4), which needs invalid plans to stay representable for the corrective re-prompt.
+
+Not completed:
+
+- **Criterion 4 (share of 5 runs with all `task` calls in one turn) was not measured.** Gemini's free tier allows 20 requests/day on the dev model and Groq's 8,000 TPM rejects the repair request, so five runs cannot complete on either. The test is in place (`test_parallel_dispatch_share_over_5_runs`); run it on a provider with enough quota. It is measured, not required.
 
 ## 13. Frontend
 
