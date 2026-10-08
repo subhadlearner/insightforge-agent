@@ -58,7 +58,7 @@ Graph state carries IDs and small structured values only, never Source bodies or
 
 ## 4. Context engineering
 
-- **Scratch store.** Sources, Observations and Passages live in our database behind a `SourceStore` interface. `read_source(source_id)` is a thin tool over it. PDF chunk text lives in Qdrant, and the same interface resolves those IDs. Source IDs are content-derived and immutable within a Run.
+- **Scratch store.** Sources, Observations and Passages live in our database behind a `SourceStore` interface. `read_source(source_id)` is a thin tool over it. PDF chunk text lives in Qdrant, and the same interface resolves those IDs. Source IDs are content-derived and immutable within a Run. For a web Source the ID is derived from its URL, not from the page body, so a page that changes stays one Source and gains Observations; for an uploaded PDF it is derived from the file's content hash. What a fetch contained is identified one level down: the Observation ID hashes the body together with the Source, the User and the fetch time.
 - **Passages.** An Observation is split into Passages once, when it is first stored. A web body is split into paragraphs, and an uploaded PDF's Passages are its Docling chunks, chunked by paragraph where the structure allows and keeping page and section heading.
   - **Identity.** A Passage is identified by `(observation_id, passage_index)` and its text is stored with that identity.
   - **No re-splitting.** An existing Observation is never re-split, so a later change to parsing cannot break a citation.
