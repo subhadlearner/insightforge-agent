@@ -211,9 +211,35 @@ Still open:
   4. Over 5 runs, the share of runs in which all `task` calls arrive in one turn is recorded. This is measured, not required.
 
   If 1 to 3 fail, the fallback is two invocations of the same Planner definition: `RESEARCHING` starts a fresh Planner seeded only with the approved `SubTaskPlan`. The Planner root agent still spawns the Researchers via `task`, so this stays compliant, and only ADR-0001's "one thread" wording changes. Scheduling, API and persistence tickets do not wait for the spike.
-- Whether `write_todos` / `TodoListMiddleware` is on by default or must be passed explicitly.
+- ~~Whether `write_todos` / `TodoListMiddleware` is on by default or must be passed explicitly.~~ Resolved by the spike: it must be passed explicitly (see spike results).
 - Qdrant can create and delete a temporary collection cheaply enough where one is needed, or a payload-scoped alternative is used instead.
 - Token counting for the Evidence budget and the per-call cap matches the provider's tokenizer closely enough for a deterministic test.
+
+### Spike results (ticket 1, 2026-10-08)
+
+Installed: `deepagents` 0.7.23, `langgraph` 1.2.14, `langgraph-checkpoint-sqlite` 3.1.1, `langchain` 1.4.3. Final run on Anthropic `claude-haiku-5-5` for every role (at the user's request, because the Gemini free tier hit its 20 requests/day cap on `gemini-3.5-flash` and Groq's 8,000 tokens/minute cap rejected larger requests). Earlier partial runs on Gemini and Groq reached the same plan and research steps. Harness: `tests/live/planner_spike.py`; live tests: `pytest -m live tests/live`.
+
+Verified:
+
+- **`write_todos` is not on by default.** `create_deep_agent(model=...)` exposes `ls, read_file, write_file, edit_file, delete, glob, grep, execute, task`. `TodoListMiddleware` is only added by the OpenAI Codex harness profile. Pass `middleware=[TodoListMiddleware()]` explicitly. This resolves the open question below.
+- **Subagents are isolated.** `SubAgent.mode` defaults to `isolated`, and `messages` and `todos` are excluded from state passed to and returned from a subagent. Only the final message returns, as the `task` ToolMessage. `create_deep_agent` also adds `SummarizationMiddleware` (per its docstring; not exercised by the spike).
+- **Checkpointing, interrupt and resume.** A SQLite checkpointer persists the Planner thread across outer graph nodes. A LangGraph `interrupt()` resumes with `Command(resume=...)` from a new graph instance on the same SQLite file (`tests/test_interrupt_resume.py`).
+- **Criteria 1 to 3 pass** on Haiku 5.5 (`pytest -m live tests/live -k "not parallel"`, one run, 3 passed in 25 s; no log is committed). The checks are pure functions in `tests/live/spike_checks.py` with deterministic tests, and the whole graph also runs with scripted models and no API calls (`tests/test_planner_spike_scripted.py`):
+  - **One-to-one dispatch.** The initial `task` calls match the approved Sub-task IDs exactly (none missing, duplicated or invented), and each description contains the approved query verbatim.
+  - **Plan continuity.** The plan held by the graph equals the plan submitted in the thread, and the `RESEARCH` message contains no plan text, so the dispatches can only come from the checkpointed thread.
+  - **Repair.** The missing Sub-task's result is credited only from a `task` call after the `REPAIR` message, with a `tool_call_id` that differs from every original dispatch. Repair dispatches only the missing ID with its original scope. A test where the original result stays in history and repair does nothing leaves the Sub-task `missing`. An explicit `FAILED:` result is `failed`, is final and is never retried, and a later or duplicate result never overwrites a success.
+  - **Isolation.** A scripted Researcher records everything it receives: only its own task description, never the Brief, the plan or other Sub-tasks' queries.
+  - In the live run the drop is simulated (the verifier ignores one research result). The scripted tests make the Planner genuinely omit a Sub-task.
+  The fallback is not needed, and ADR-0001 stands.
+
+Findings that change how later tickets build on this:
+
+- **Do not use `response_format` on the Planner.** It forces a structured-output call on every invocation of the thread, so the RESEARCH and REPAIR resumes break (`Tool choice is required` on Groq; JSON mode cannot be combined with tools on Groq). The spike has the Planner call a `submit_plan(plan: SubTaskPlan)` tool in `PLANNING`, and the graph reads the plan from that tool call.
+- **Disable thinking when resuming the Planner thread on Anthropic.** Haiku 5.5 returns signed thinking blocks by default, and deepagents rewrites earlier messages in the thread, so the repair resume fails with `Invalid signature in thinking block`. The spike sets `thinking={"type": "disabled"}` on the model. The production model factory does not do this yet; tickets that resume the Planner on Anthropic must.
+- **Token footprint.** The deepagents system prompt plus the accumulated thread is large: on Groq's free tier (8,000 tokens/minute) a repair request of 8,172 tokens was rejected.
+- **Plan model bounds are not enforced yet.** `SubTaskPlan` checks only that Sub-tasks reference known Aspects. The 3 to 6 bound and Aspect coverage belong to the Planner-bounds ticket (T4), which needs invalid plans to stay representable for the corrective re-prompt.
+
+Criterion 4 (measured, not required): over 5 runs on Haiku 5.5, all `task` calls arrived in a single turn in **5 of 5** runs (`test_parallel_dispatch_share_over_5_runs`). This is one small model and one Brief, so it is not a guarantee, which is why the graph still verifies results (ADR-0003). Re-run criteria 1 to 3 in ticket 18 as planned.
 
 ## 13. Frontend
 

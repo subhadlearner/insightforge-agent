@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     # Models. "fake" is for tests only and needs no secret.
     llm_provider: LLMProvider = "gemini"
-    anthropic_planner_model: str = "claude-sonnet-5-5"
-    anthropic_writer_model: str = "claude-sonnet-5-5"
+    anthropic_planner_model: str = "claude-haiku-5-5"
+    anthropic_writer_model: str = "claude-haiku-5-5"
     anthropic_light_model: str = "claude-haiku-5-5"
     gemini_planner_model: str = "gemini-3.5-flash"
     gemini_writer_model: str = "gemini-3.5-flash"
