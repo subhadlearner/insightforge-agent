@@ -18,6 +18,7 @@ from insightforge_agent.domain.models import (
     SubTaskRecord,
     SubTaskStatus,
 )
+from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.plan import SubTask
 
 SCHEMA = """
@@ -44,6 +45,10 @@ CREATE TABLE IF NOT EXISTS observations (
     owner_id TEXT NOT NULL, id TEXT NOT NULL, source_id TEXT NOT NULL, run_id TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (owner_id, id)
+);
+CREATE TABLE IF NOT EXISTS split_observations (
+    owner_id TEXT NOT NULL, observation_id TEXT NOT NULL,
+    PRIMARY KEY (owner_id, observation_id)
 );
 CREATE TABLE IF NOT EXISTS passages (
     owner_id TEXT NOT NULL, observation_id TEXT NOT NULL, idx INTEGER NOT NULL,
@@ -227,23 +232,20 @@ class SqlitePassageRepository(_Base):
         return Passage(observation_id=observation_id, index=row[0], text=row[1], page=row[2],
                        section_heading=row[3])
 
-    def add_all(self, owner_id: str, passages: list[Passage]) -> None:
-        with self._db:
-            for observation_id in {p.observation_id for p in passages}:
-                existing = self._db.execute(
-                    "SELECT 1 FROM passages WHERE owner_id=? AND observation_id=? LIMIT 1",
-                    (owner_id, observation_id),
-                ).fetchone()
-                if existing:
-                    continue  # already split: never re-split
-                indices = [p.index for p in passages if p.observation_id == observation_id]
-                if len(indices) != len(set(indices)):
-                    raise ValueError(f"duplicate passage index in observation {observation_id}")
-                self._db.executemany(
-                    "INSERT INTO passages VALUES (?,?,?,?,?,?)",
-                    [(owner_id, p.observation_id, p.index, p.text, p.page, p.section_heading)
-                     for p in passages if p.observation_id == observation_id],
-                )
+    def add_all(self, owner_id: str, observation_id: str, passages: list[Passage]) -> None:
+        check_passages(observation_id, passages)
+        with self._db:  # marker and Passages commit together or not at all
+            marked = self._db.execute(
+                "INSERT OR IGNORE INTO split_observations VALUES (?,?)",
+                (owner_id, observation_id),
+            ).rowcount
+            if not marked:
+                return  # already split, possibly into nothing: never re-split
+            self._db.executemany(
+                "INSERT INTO passages VALUES (?,?,?,?,?,?)",
+                [(owner_id, observation_id, p.index, p.text, p.page, p.section_heading)
+                 for p in passages],
+            )
 
     def list(self, owner_id: str, observation_id: str) -> list[Passage]:
         rows = self._db.execute(

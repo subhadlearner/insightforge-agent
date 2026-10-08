@@ -9,8 +9,10 @@ def _digest(*parts: str) -> str:
 
 
 def derive_source_id(kind: str, locator: str) -> str:
-    """Derived from what the Source is: a URL for the web, a file's content hash for a PDF.
-    The same locator always gives the same id, so a Source is never duplicated."""
+    """Derived from what identifies the Source: a URL for the web, a file's content hash for
+    a PDF. It is deliberately not a hash of a web page's body: a page changes over time, and
+    the Source must stay the same while it gains Observations. What a fetch contained is
+    identified one level down, by `derive_observation_id`, which does hash the body."""
     return f"src_{_digest(kind, locator)}"
 
 

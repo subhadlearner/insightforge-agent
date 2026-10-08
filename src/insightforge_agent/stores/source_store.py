@@ -101,15 +101,18 @@ class SourceStore:
             return self._observations.get(owner_id, oid)
         except NotFoundError:
             pass
-        observation = self._observations.add(Observation(
-            id=oid, owner_id=owner_id, source_id=sid, run_id=run_id, fetched_at=fetched_at,
-        ))
-        self._passages.add_all(owner_id, [
+        # Passages and their split marker go first, in one atomic write; the Observation
+        # row goes last. A crash between the two leaves only a finished split with no
+        # Observation, and a retry keeps that split and adds the Observation. An Observation
+        # that exists therefore always has its Passages.
+        self._passages.add_all(owner_id, oid, [
             Passage(observation_id=oid, index=i, text=d.text, page=d.page,
                     section_heading=d.section_heading)
             for i, d in enumerate(drafts())
         ])
-        return observation
+        return self._observations.add(Observation(
+            id=oid, owner_id=owner_id, source_id=sid, run_id=run_id, fetched_at=fetched_at,
+        ))
 
     def read_source(self, owner_id: str, source_id: str) -> SourceContents:
         """Resolve a Source ID. Raises NotFoundError if it is missing or not the User's."""

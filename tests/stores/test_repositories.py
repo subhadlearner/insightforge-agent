@@ -117,26 +117,26 @@ class TestObservationsAndPassages:
 
     def test_passages_round_trip_in_index_order(self, repos):
         ps = [passage(2), passage(0), passage(1, page=3, section_heading="Intro")]
-        repos.passages.add_all("alice", ps)
+        repos.passages.add_all("alice", "obs_1", ps)
         listed = repos.passages.list("alice", "obs_1")
         assert [p.index for p in listed] == [0, 1, 2]
         assert listed[1].page == 3 and listed[1].section_heading == "Intro"
 
     def test_get_passage_by_identity(self, repos):
-        repos.passages.add_all("alice", [passage(0), passage(1)])
+        repos.passages.add_all("alice", "obs_1", [passage(0), passage(1)])
         assert repos.passages.get("alice", "obs_1", 1).text == "paragraph 1"
         with pytest.raises(NotFoundError):
             repos.passages.get("alice", "obs_1", 7)
 
     def test_an_observation_is_never_re_split(self, repos):
-        repos.passages.add_all("alice", [passage(0, "original"), passage(1, "original 1")])
-        repos.passages.add_all("alice", [passage(0, "different split")])
+        repos.passages.add_all("alice", "obs_1", [passage(0, "original"), passage(1, "original 1")])
+        repos.passages.add_all("alice", "obs_1", [passage(0, "different split")])
         listed = repos.passages.list("alice", "obs_1")
         assert [p.text for p in listed] == ["original", "original 1"]
 
     def test_other_user_cannot_read_passages(self, repos):
         repos.observations.add(observation())
-        repos.passages.add_all("alice", [passage(0)])
+        repos.passages.add_all("alice", "obs_1", [passage(0)])
         assert repos.passages.list("bob", "obs_1") == []
         with pytest.raises(NotFoundError):
             repos.passages.get("bob", "obs_1", 0)

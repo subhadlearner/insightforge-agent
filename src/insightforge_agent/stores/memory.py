@@ -1,6 +1,7 @@
 """In-memory fakes of every repository. Used by default tests: no keys, no Docker."""
 
 from insightforge_agent.domain.errors import NotFoundError
+from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.models import (
     Observation,
     Passage,
@@ -108,16 +109,10 @@ class MemoryPassageRepository:
     def __init__(self) -> None:
         self._passages: dict[tuple[str, str], dict[int, Passage]] = {}
 
-    def add_all(self, owner_id: str, passages: list[Passage]) -> None:
-        for observation_id in {p.observation_id for p in passages}:
-            if (owner_id, observation_id) in self._passages:
-                continue  # already split: never re-split
-            indices = [p.index for p in passages if p.observation_id == observation_id]
-            if len(indices) != len(set(indices)):
-                raise ValueError(f"duplicate passage index in observation {observation_id}")
-            self._passages[(owner_id, observation_id)] = {
-                p.index: p for p in passages if p.observation_id == observation_id
-            }
+    def add_all(self, owner_id: str, observation_id: str, passages: list[Passage]) -> None:
+        check_passages(observation_id, passages)
+        # A present key is the split marker, so an empty split counts as done.
+        self._passages.setdefault((owner_id, observation_id), {p.index: p for p in passages})
 
     def list(self, owner_id: str, observation_id: str) -> list[Passage]:
         by_index = self._passages.get((owner_id, observation_id), {})
@@ -135,6 +130,8 @@ class MemoryReportRepository:
         self._reports: dict[tuple[str, str], Report] = {}
 
     def add(self, report: Report) -> None:
+        if (report.owner_id, report.id) in self._reports:
+            raise ValueError(f"report {report.id} already exists")
         if any(r.owner_id == report.owner_id and r.run_id == report.run_id
                for r in self._reports.values()):
             raise ValueError(f"run {report.run_id} already has a Report")

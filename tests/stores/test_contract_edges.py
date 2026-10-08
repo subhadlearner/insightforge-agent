@@ -59,7 +59,7 @@ def test_report_uniqueness_is_per_user_and_does_not_leak_across_users(repos):
 
 def test_duplicate_passage_index_is_rejected_and_stores_nothing(repos):
     with pytest.raises(ValueError):
-        repos.passages.add_all("alice", [passage(0), passage(0, "again")])
+        repos.passages.add_all("alice", "obs_1", [passage(0), passage(0, "again")])
     assert repos.passages.list("alice", "obs_1") == []
 
 

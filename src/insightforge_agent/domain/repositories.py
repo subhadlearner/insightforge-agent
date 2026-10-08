@@ -63,10 +63,11 @@ class ObservationRepository(Protocol):
 
 @runtime_checkable
 class PassageRepository(Protocol):
-    def add_all(self, owner_id: str, passages: list[Passage]) -> None:
-        """Stores an Observation's Passages once. An Observation that already has
-        Passages is left untouched, so it is never re-split. Raises ValueError on a
-        duplicate index within one Observation."""
+    def add_all(self, owner_id: str, observation_id: str, passages: list[Passage]) -> None:
+        """Stores an Observation's Passages once, and records that the split is done, even
+        when it produced no Passages. All of it is one atomic write. An Observation already
+        split is left untouched, so it is never re-split. Raises ValueError if a Passage
+        belongs to another Observation or an index is repeated; nothing is stored then."""
         ...
 
     def list(self, owner_id: str, observation_id: str) -> list[Passage]:
