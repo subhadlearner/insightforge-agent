@@ -55,7 +55,7 @@ The session started from an external review of `design.md` that listed 7 gaps. I
 
 - **Q11: Aspects make "essential coverage" checkable by code** rather than left to the LLM's judgement, and they give the Report's thematic sections a clean source.
   - Rejected: no trimming at all.
-- **Q30: kept one Aspect per Sub-task (each Sub-task references exactly one Aspect; an Aspect may be covered by several Sub-tasks, for example with different source types).** The second review claimed Q11 had allowed several Aspects per Sub-task. That was wrong: Q11 decided one. The proposal was considered as a new decision instead: `aspect_ids[]` with a cap of 2 Aspects per Sub-task.
+- **Q30: kept one Aspect per Sub-task (each Sub-task references exactly one `aspect_id`, every Aspect must have at least one Sub-task, and several Sub-tasks may cover the same Aspect, for example with different source types).** The second review claimed Q11 had allowed several Aspects per Sub-task. That was wrong: Q11 decided one. The proposal was considered as a new decision instead: `aspect_ids[]` with a cap of 2 Aspects per Sub-task.
   - The user chose to keep one Aspect per Sub-task. Narrower Researcher scopes give more relevant retrieval, and ownership and progress tracking stay simple. Sub-tasks still map cleanly to Report sections, trimming and coverage checks stay simple, and it fits the assignment's maximum of 6.
   - Added: a corrective attempt to consolidate genuinely related Aspects, and a rule that a requested Aspect is never silently dropped.
 
