@@ -55,7 +55,7 @@ The session started from an external review of `design.md` that listed 7 gaps. I
 
 - **Q11: Aspects make "essential coverage" checkable by code** rather than left to the LLM's judgement, and they give the Report's thematic sections a clean source.
   - Rejected: no trimming at all.
-- **Q30: kept one Aspect per Sub-task.** The second review claimed Q11 had allowed several Aspects per Sub-task. That was wrong: Q11 decided one. The proposal was considered as a new decision instead: `aspect_ids[]` with a cap of 2 Aspects per Sub-task.
+- **Q30: kept one Aspect per Sub-task (each Sub-task references exactly one Aspect; an Aspect may be covered by several Sub-tasks, for example with different source types).** The second review claimed Q11 had allowed several Aspects per Sub-task. That was wrong: Q11 decided one. The proposal was considered as a new decision instead: `aspect_ids[]` with a cap of 2 Aspects per Sub-task.
   - The user chose to keep one Aspect per Sub-task. Narrower Researcher scopes give more relevant retrieval, and ownership and progress tracking stay simple. Sub-tasks still map cleanly to Report sections, trimming and coverage checks stay simple, and it fits the assignment's maximum of 6.
   - Added: a corrective attempt to consolidate genuinely related Aspects, and a rule that a requested Aspect is never silently dropped.
 
@@ -155,10 +155,10 @@ A second session derived the next steps from the documents above. The docs were 
 | 15 | Watchlist dashboard, Diff view, alerts, plus the export, PDF and share-link endpoints | 11, 12, 14 |
 | 16 | Sample brief library (first step), eval command, evaluation report | 6 |
 | 17 | README. Starts early and grows as features land. Final acceptance embeds the Anthropic results | final acceptance after 18 |
-| 18 | Final Anthropic verification (`ready-for-human`): all 5 briefs, spike criteria 1 to 3 re-run, results recorded, under 80% fact-check pass rate triggers a documented remediation | 8, 9, 12, 15, 16 |
+| 18 | Final Anthropic verification (`ready-for-human`): all 5 briefs, spike criteria 1 to 3 re-run, results recorded, document and memory paths actually exercised in the evaluation, under 80% fact-check pass rate triggers a documented remediation | 7, 8, 9, 12, 15, 16 |
 | 19 | Demo (5 to 7 minutes) and LinkedIn post. Preparation starts early, with a demo Watchlist Item that sets `max_runs`. Checklist: repo is public. Final acceptance after 18 | final acceptance after 18 |
 
-Retention (#13) does not block #18. After the spike, only persistence (#2) and the frontend scaffold run alongside it. The API (#10) needs #3, and scheduling (#11) needs #6.
+Retention (#13) does not block #18. Document ingestion (#7) does, so the evaluation cannot run without a working document path. After the spike, only persistence (#2) and the frontend scaffold run alongside it. The API (#10) needs #3, and scheduling (#11) needs #6.
 
 ### Rubric map
 
