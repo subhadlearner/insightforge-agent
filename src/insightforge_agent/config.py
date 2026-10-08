@@ -23,15 +23,15 @@ class Settings(BaseSettings):
 
     # Models. "fake" is for tests only and needs no secret.
     llm_provider: LLMProvider = "gemini"
-    anthropic_planner_model: str = "claude-opus-5-5"
-    anthropic_writer_model: str = "claude-opus-5-5"
+    anthropic_planner_model: str = "claude-sonnet-5-5"
+    anthropic_writer_model: str = "claude-sonnet-5-5"
     anthropic_light_model: str = "claude-haiku-5-5"
     gemini_planner_model: str = "gemini-2.5-flash"
     gemini_writer_model: str = "gemini-2.5-flash"
     gemini_light_model: str = "gemini-2.5-flash-lite"
-    groq_planner_model: str = "llama-3.3-70b-versatile"
-    groq_writer_model: str = "llama-3.3-70b-versatile"
-    groq_light_model: str = "llama-3.1-8b-instant"
+    groq_planner_model: str = "openai/gpt-oss-120b"
+    groq_writer_model: str = "openai/gpt-oss-120b"
+    groq_light_model: str = "openai/gpt-oss-20b"
 
     # Embeddings: local in every environment, independent of the chat provider.
     embedding_model: str = "BAAI/bge-small-en-v1.5"
