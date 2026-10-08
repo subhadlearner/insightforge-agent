@@ -17,7 +17,7 @@ The structured, cited output of a Run that reaches `COMPLETE`. Persisted across 
 _Avoid_: briefing, output
 
 **Watchlist Item**:
-A standing Brief plus a cadence. Spawns a new Run on each tick. Always uses web search, and never uploaded documents.
+A standing Brief plus a cadence. Spawns a new Run on each tick. Always uses web search, and never uploaded documents. May carry a maximum Run count, after which it stops spawning Runs.
 _Avoid_: monitor, subscription
 
 **Sub-task**:

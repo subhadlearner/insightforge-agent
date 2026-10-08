@@ -127,6 +127,7 @@ Graph state carries IDs and small structured values only, never Source bodies or
 ## 8. Scheduling and diffing
 
 - **Ticks.** APScheduler runs one Run per Watchlist Item per tick, using the same pipeline. At most one active Run per item. Overlapping and missed ticks are skipped.
+- **Run limit.** A Watchlist Item has an optional `max_runs`. Once that many Runs have started, the item stops scheduling and the dashboard shows "completed N of N runs". This is a field, not a status. A cadence under 15 minutes is accepted only when `max_runs` is set, so a demo item cannot spend provider calls indefinitely.
 - **Watchlist sources.** A Watchlist Item always has web search enabled and can never use uploaded documents. It may add Prior Reports for background. Both rules are checked at creation.
 - **No Watchlist status.** Because web search is always enabled and always available, a tick can never lack a source, so a Watchlist Item has no `blocked` state and there is no per-tick source check. A missing provider key stops the app at startup (section 10). A provider outage during a Run ends in a Failed Run, which raises no Alert and leaves the Baseline unchanged. The dashboard shows each item's recent Failed Runs from Run data.
 - **Baseline.** The Baseline is the latest established state of each Finding for the item, with the provenance, Observation date and As-of period that established it. It is not a Report (ADR-0004).
@@ -160,7 +161,11 @@ Graph state carries IDs and small structured values only, never Source bodies or
 
 One typed settings object (pydantic-settings, from the environment and `.env`). The app refuses to start when a required secret for the chosen provider is missing. `.env.example` is committed and `.env` is ignored.
 
-- Model name, provider keys, search provider (`tavily | brave | serpapi`), Qdrant URL, database URL, personas file path.
+- **Models.** `LLM_PROVIDER` (`anthropic | gemini | groq`) and a model name per role (Planner and Writer; a cheaper one for Researcher summaries and entailment calls). One `build_chat_model(role)` factory is the only code that knows about providers. Development and dev tests use the Gemini free tier (Groq is selectable). Anthropic is used only for the final verification run (ticket 18).
+- **Embeddings.** A local `fastembed` model (default `BAAI/bge-small-en-v1.5`) in every environment, so embeddings do not change with the chat provider.
+- **Search.** An ordered list, `SEARCH_PROVIDERS=tavily,serpapi` (`brave` also allowed). A provider that errors or has exhausted its quota falls through to the next. A Run fails on search only when every listed provider fails.
+- **Tests.** The default `pytest` run uses fake or scripted chat models, recorded search fixtures and in-memory Qdrant, so it needs no keys or Docker. Tests that need a real model or server carry a `live` marker and run on demand. Dev uses `docker compose` for a Qdrant server.
+- Provider keys, Qdrant URL, database URL, personas file path.
 - Evidence token budget 6,000, per-call Passage token cap, Sub-tasks 3 to 6, Fact-Checker rate 20% (minimum 5) and similarity threshold 0.85, recency and credibility bucket thresholds, clarification timeout 30 minutes, Not reconfirmed display threshold 3, retention period, share-link TTL 7 days, JWT secret.
 - Limits, all configurable: Run wall-clock timeout, per-Sub-task timeout, per-fetch timeout (also applied to Fact-Checker re-fetches), LLM token cap per Run, `task` recursion depth. A Sub-task limit fails the Sub-task. A Run limit fails the Run with the reason in the Run log.
 - Runtime estimate shown before submit is `base + n_pdfs x ingest_cost + per-source costs`, refined live once the real Sub-task count arrives.
@@ -183,7 +188,14 @@ Dependencies point inward, so `domain` imports nothing from the other packages. 
 - A Run left `RESUMING` is resumed again from its checkpoint with its stored resolution, which is idempotent.
 - A Run in `AWAITING_CLARIFICATION` whose deadline passed while the process was down is resolved as a timeout. One still within its deadline is left alone.
 
-An `insightforge-agent eval` command runs the 5 sample briefs and writes the evaluation report. Fact-check pass rate and citation accuracy are deterministic, and synthesis quality uses an LLM judge with a fixed rubric.
+An `insightforge-agent eval` command runs the 5 sample briefs and writes the evaluation report. Fact-check pass rate and citation accuracy are deterministic, and synthesis quality uses an LLM judge with a fixed rubric. The sample brief library (5 briefs across industries and question types, each with its expected report structure) is part of the eval ticket. Results are recorded per provider. A fact-check pass rate under 80% on the Anthropic run triggers a documented remediation attempt.
+
+## 13. Frontend
+
+- The Next.js 14+ (App Router) app lives in `web/` in the same repository.
+- A Next.js `rewrites` rule proxies `/api/*` to FastAPI, so the browser sees one origin. This keeps the signed persona cookie and the SSE `EventSource` (which cannot set headers) working, and needs no CORS.
+- Dev runs `uvicorn` and `next dev` locally, with `docker compose` for Qdrant only.
+- Scope: brief input, live SSE progress, report viewer with citation drawer, watchlist dashboard, alerts, and export. Bonus items (including click-any-sentence citation trace and LangSmith tracing) are out of scope unless fully built and demonstrated.
 
 ## 12. Facts to verify at build time
 
@@ -198,7 +210,7 @@ Reported as confirmed by the review:
 
 Still open:
 
-- **Spike (first ticket, blocks every research-pipeline ticket):** one checkpointed Planner thread resumed across two outer LangGraph nodes (ADR-0001, ADR-0003). One minimal executable integration test, with a fake researcher tool and a real model, passes when:
+- **Spike (ticket 1, after the minimal scaffold in ticket 0; blocks every research-pipeline ticket):** it first verifies the library facts below against the installed versions, then proves the integration. Verification comes first and covers `write_todos` / `TodoListMiddleware` defaults, checkpointing, interrupt and resume, and subagent isolation. Library versions, findings and references are recorded here and in the design rationale. The proof uses only verified APIs and applies the fallback if checkpoint continuity fails. It runs on the dev provider and is re-run on Anthropic in ticket 18, where criteria 1 to 3 must also pass. One checkpointed Planner thread resumed across two outer LangGraph nodes (ADR-0001, ADR-0003). One minimal executable integration test (marked `live`), with a fake researcher tool and a real model, passes when:
   1. `PLANNING` produces a `SubTaskPlan` on a checkpointed thread and the outer graph advances.
   2. `RESEARCHING` resumes the same thread with the approved Sub-tasks intact and emits one `task` per Sub-task.
   3. Every Sub-task ID gets a result, and a deliberately dropped Sub-task is recovered by the repair round.

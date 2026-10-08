@@ -116,13 +116,64 @@ The session started from an external review of `design.md` that listed 7 gaps. I
 - **Library facts are not verified.** The design's §12 lists facts that the external review reports as confirmed. None of them were checked against installed packages in this session.
   - The most doubtful is whether `write_todos` / `TodoListMiddleware` is opt-in. The design assumed opt-in, but current `deepagents` may include it by default.
 - **ADR-0001's filename** (`…planner-as-node.md`) no longer matches its title. It was kept so existing references don't break.
-- **Tooling.** The `gh` CLI was not installed at the end of the session. `/to-spec` and `/to-tickets` need it.
-- **Commits.** Everything from this session is uncommitted: `CLAUDE.md` (triage-labels section), `docs/agents/triage-labels.md`, `CONTEXT.md`, `docs/design.md`, ADR-0001, ADR-0003, ADR-0004 and this file.
+- **Tooling and commits.** Resolved: `gh` is installed and the docs are committed. See the next-steps section below.
 
-## Next steps
+## Next-steps grilling of 2026-10-08 (Q1 to Q17)
 
-1. Commit the docs.
-2. Install `gh` and run `gh auth login`.
-3. Run `/to-spec`, then `/to-tickets`. They can run in a fresh session, which reads `design.md`, `CONTEXT.md`, the ADRs and this file.
-4. Ask `/to-tickets` to make the §12 spike ticket 1, blocking every research-pipeline ticket. Scheduling, API and persistence tickets can go ahead in parallel.
-5. Run `/implement #<n>` per ticket in a fresh session. A ticket can start when it is open, labelled `ready-for-agent`, and has no open blockers in GitHub's native "Blocked by". Close each ticket when it's done, because blockers only clear when closed.
+A second session derived the next steps from the documents above. The docs were already committed and `gh` is installed and authenticated. Where this section and the older text disagree, this section and `design.md` win.
+
+### Decisions and their reasoning
+
+- **Spike verifies before it proves.** Ticket 0 is a minimal scaffold. Ticket 1 verifies library facts (`write_todos` defaults, checkpointing, interrupt and resume, subagent isolation) against installed versions and then runs the integration proof. A separate investigation between tickets would be a manual dependency, and the checks are only relevant to the spike.
+- **Free-tier development.** Gemini free tier by default (Groq selectable), local `fastembed` embeddings, Tavily with SerpAPI fallback. Anthropic only for the final verification. Embeddings stay the same across providers, and Anthropic has no embedding API.
+- **Fake models by default, `live` marker for real ones.** Free tiers are rate-limited and vary in tool-calling quality, so the default suite must be deterministic. The spike and the happy-path ticket are the exceptions and need a live run.
+- **Provider-dependent results are recorded per provider.** The spike's criteria 1 to 3 must pass on Anthropic as well, because Gemini passing proves nothing about Anthropic compatibility.
+- **Next.js frontend added to the design.** The assignment mandates it, and the design was silent. A `web/` directory with an `/api/*` rewrite proxy keeps one origin for the cookie and SSE.
+- **No `/to-spec`.** `design.md` is the spec, so tickets cite its sections.
+- **Stretch goals and bonuses are out of scope.** Citation drawer is not the citation-trace bonus, and an optional LangSmith setting is not the tracing bonus. LangSmith was removed from ticket 0.
+- **`max_runs` on Watchlist Items.** Allows a short demo cadence without unbounded provider calls. A field, not a status.
+
+### Tickets (to be created with `/to-tickets`)
+
+| # | Ticket | Blocked by |
+|---|---|---|
+| 0 | Scaffold: dependencies, `Settings`, `build_chat_model`, package skeleton, import-linter, `.env.example`, `docker compose` for Qdrant | none |
+| 1 | Spike: verify library facts, then the checkpointed Planner thread (§12) | 0 |
+| 2 | Persistence core: SQLite repositories, `SourceStore`, `run_events`, personas | 0 |
+| 3 | Thin web-only Brief to Report path. Acceptance includes one successful live run on the dev provider | 1, 2 |
+| 4 | Planner bounds, Aspects, source availability check and 422 | 3 |
+| 5 | Extraction and synthesis: entailment, Confidence, ranking. Acceptance names bounded Passage retrieval, isolation, the 6,000-token bundle, compression logs, and payload-capture tests for the cap and the budget | 3 |
+| 6 | Writer, Fact-Checker and citation Passages | 5 |
+| 7 | Document ingestion (Docling) and the Doc Reader. Adds its eval brief | 3 |
+| 8 | Memory researcher and Run summaries. Adds its eval brief | 6 |
+| 9 | Clarification: interrupt, timeout job, `RESUMING`, startup sweep | 4 |
+| 10 | API: `/research/*`, SSE with cursor, `/reports` list and retrieve, persona auth | 3 |
+| 11 | Watchlist CRUD (with `max_runs`), ticks and Baseline | 2, 6 |
+| 12 | Diff Agent, Findings, Alerts, Slack-format webhook | 11 |
+| 13 | Retention sweep | 6, 7 |
+| 14 | Next.js UI: brief input, live progress, report viewer, citation drawer | 10 |
+| 15 | Watchlist dashboard, Diff view, alerts, plus the export, PDF and share-link endpoints | 11, 12, 14 |
+| 16 | Sample brief library (first step), eval command, evaluation report | 6 |
+| 17 | README. Starts early and grows as features land. Final acceptance embeds the Anthropic results | final acceptance after 18 |
+| 18 | Final Anthropic verification (`ready-for-human`): all 5 briefs, spike criteria 1 to 3 re-run, results recorded, under 80% fact-check pass rate triggers a documented remediation | 8, 9, 12, 15, 16 |
+| 19 | Demo (5 to 7 minutes) and LinkedIn post. Preparation starts early, with a demo Watchlist Item that sets `max_runs`. Checklist: repo is public. Final acceptance after 18 | final acceptance after 18 |
+
+Retention (#13) does not block #18. After the spike, only persistence (#2) and the frontend scaffold run alongside it. The API (#10) needs #3, and scheduling (#11) needs #6.
+
+### Rubric map
+
+| Rubric item | Weight | Proven by |
+|---|---|---|
+| Multi-agent architecture | 20%, gate at 60% | #1, #3, #4, #9 |
+| Context engineering | 20%, gate at 60% | #5, #3, #6 |
+| Report quality | 20% | #6, #16 |
+| Fact-check pass rate (at least 80%) | 15% | #6, #16, #18 |
+| Scheduler and diff | 10% | #11, #12 |
+| UI completeness | 10% | #10, #14, #15 |
+| Code quality | 5% | #0 and every ticket |
+
+Deliverables that had no owner and now do: the sample brief library (#16), Slack-format webhook (#12), and the demo and post (#19). Entity extraction is LLM-based, which the README states.
+
+### Execution
+
+Run `/implement #<n>` per ticket in a fresh session. A ticket can start when it is open, labelled `ready-for-agent`, and has no open blockers in GitHub's native "Blocked by". Close each ticket when it's done, because blockers only clear when closed.
