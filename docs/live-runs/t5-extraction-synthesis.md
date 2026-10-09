@@ -37,7 +37,7 @@ The Run reached `COMPLETE` and stored one Report with 27 Claims. Planner, Resear
    - years or figures the model took from a different Passage than the one it cited (the check is per Passage).
    These are safe drops (nothing unsupported got in) but they cost recall.
 4. **Compound structured values are rejected often**, for example "1,636 million units, down 8.6%" or "about $36-40k vs many global EVs". That is the intended conservative behaviour, though it means those items cannot take part in conflict decisions.
-5. **No contradiction was found,** so conflict handling was not exercised by a real contradiction in this run. The one `contradiction_ignored` event was a same-value verdict.
+5. **No contradiction was found,** so conflict handling was not exercised by a real contradiction in this run. The one `contradiction_ignored` event was a `CONTRADICTED` verdict that failed the context check (same value, or a different entity, predicate, scope or period; the log does not say which).
 6. **Derived As-of dates are broad:** 22 items took the observation date, including timeless statements (a cell's shape, a charger's rated power). This follows the spec's present-state rule but is the model's call in the entailment step.
 7. **Five model replies were unparseable JSON** and their batches were skipped and logged. The log keeps only the start of each reply, so the cause (an output limit on long replies is one candidate) is not established.
 
