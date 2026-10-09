@@ -19,7 +19,7 @@ from langgraph.graph import END, START, StateGraph
 from insightforge_agent.config import Settings
 from insightforge_agent.domain.plan import SubTaskPlan
 from insightforge_agent.llm import build_chat_model
-from tests.live.spike_checks import (
+from insightforge_agent.pipeline.dispatch import (
     Dispatch,
     Outcome,
     dispatches,

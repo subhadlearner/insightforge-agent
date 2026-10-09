@@ -247,3 +247,15 @@ Criterion 4 (measured, not required): over 5 runs on Haiku 5.5, all `task` calls
 - A Next.js `rewrites` rule proxies `/api/*` to FastAPI, so the browser sees one origin. This keeps the signed persona cookie and the SSE `EventSource` (which cannot set headers) working, and needs no CORS.
 - Dev runs `uvicorn` and `next dev` locally, with `docker compose` for Qdrant only.
 - Scope: brief input, live SSE progress, report viewer with citation drawer, watchlist dashboard, alerts, and export. Bonus items (including click-any-sentence citation trace and LangSmith tracing) are out of scope unless fully built and demonstrated.
+
+### T3 notes: the thin Brief to Report path
+
+Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that later tickets thicken:
+
+- **Not yet done:** `INGESTING`, `FACT_CHECKING`, clarification, the Submission check and 422, Planner bounds (T4), Aspect coverage, memory and documents source types.
+- **Extraction (T5):** one light-model call per Passage batch, no conflict detection.
+- **Synthesis (T5):** no model call. Each extracted statement is checked against its Passage (existence, every number present), de-duplicated, and given a Confidence (HIGH for two domains, else MEDIUM or LOW by credibility). Domain difference stands in for Independent Sources, and `as_of_period` is always `UNKNOWN`. Evidence over budget is cut and logged, not yet compressed.
+- **Per-call cap:** a single Passage over the cap is a batch of its own, since cutting it would break its identity. The Researcher summary reads the lead Passages that fit the cap, and logs `summary_input_limited` when it does not read the whole page.
+- **Researcher refs:** the Researcher names Source IDs in its `RESULT:` reply. The graph rebuilds `{source_id, title, summary}` from the in-process `SummaryBook`, so summaries are not persisted and a restart mid-Run loses them. Persisting them belongs with the Run executor ticket.
+- **Search:** only Tavily is implemented; other listed providers are skipped with a warning.
+- **State:** the outer graph is not checkpointed (only the Planner thread is). State holds the plan, extracted statements, Evidence bundle and draft, which are short sentences and not Source bodies.

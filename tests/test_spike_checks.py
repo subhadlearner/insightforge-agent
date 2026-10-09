@@ -3,7 +3,7 @@
 import pytest
 
 from insightforge_agent.domain.plan import Aspect, SubTask, SubTaskPlan
-from tests.live.spike_checks import Dispatch, check_dispatches, missing_ids, resolve
+from insightforge_agent.pipeline.dispatch import Dispatch, check_dispatches, missing_ids, resolve
 
 PLAN = SubTaskPlan(
     aspects=[Aspect(id="a1", name="x")],

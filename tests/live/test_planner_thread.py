@@ -6,7 +6,7 @@ import time
 import pytest
 
 from tests.live.planner_spike import run_spike
-from tests.live.spike_checks import check_dispatches
+from insightforge_agent.pipeline.dispatch import check_dispatches
 
 pytestmark = pytest.mark.live
 

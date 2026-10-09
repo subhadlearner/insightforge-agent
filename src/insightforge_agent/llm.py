@@ -23,7 +23,12 @@ def build_chat_model(role: Role, settings: Settings | None = None) -> BaseChatMo
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(model=name, api_key=s.anthropic_api_key)
+        extra = {}
+        if role == "planner":
+            # The Planner thread is resumed, and deepagents rewrites earlier messages; signed
+            # thinking blocks then fail with "Invalid signature" (design.md section 12).
+            extra["thinking"] = {"type": "disabled"}
+        return ChatAnthropic(model=name, api_key=s.anthropic_api_key, **extra)
     if provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
 

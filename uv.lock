@@ -666,6 +666,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "deepagents" },
+    { name = "httpx" },
     { name = "langchain-anthropic" },
     { name = "langchain-core" },
     { name = "langchain-google-genai" },
@@ -685,6 +686,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "deepagents", specifier = ">=0.7.23" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "langchain-anthropic", specifier = ">=1.7.5" },
     { name = "langchain-core", specifier = ">=1.6.7" },
     { name = "langchain-google-genai", specifier = ">=4.4.0" },

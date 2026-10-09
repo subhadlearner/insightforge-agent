@@ -1,0 +1,125 @@
+"""T3: a Brief goes in, a Report comes out, web search only, scripted models, recorded search."""
+
+import json
+
+from insightforge_agent.domain.contracts import Brief
+from insightforge_agent.domain.models import RunState, SubTaskStatus
+from insightforge_agent.pipeline.graph import run_brief
+from tests.pipeline import fakes
+
+BRIEF = "Compare BYD and Tesla in electric vehicles: sales, pricing, battery technology."
+
+
+def events(deps, run):
+    return deps.repos.events.read_after("alice", run.id)
+
+
+def test_brief_reaches_complete_and_stores_a_report(make_deps):
+    deps = make_deps()
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE, [e.payload for e in events(deps, run)]
+    stages = [e.payload["state"] for e in events(deps, run) if e.type == "stage"]
+    assert stages == ["PLANNING", "RESEARCHING", "EXTRACTING", "SYNTHESIZING", "WRITING",
+                      "COMPLETE"]  # INGESTING skipped
+    report = deps.repos.reports.get_for_run("alice", run.id)
+    claims = [c for s in report.body["draft"]["sections"] for c in s["claims"]]
+    assert claims
+    evidence = {i["id"]: i for s in report.body["evidence"]["sections"] for i in s["items"]}
+    assert all(c["evidence_id"] in evidence for c in claims)
+    assert {r.status for r in deps.repos.subtasks.list("alice", run.id)} == {SubTaskStatus.SUCCEEDED}
+
+
+def test_report_is_private_to_its_owner(make_deps):
+    deps = make_deps()
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert deps.repos.reports.list_for_owner("bob") == []
+    assert len(deps.repos.reports.list_for_owner("alice")) == 1
+    assert run.owner_id == "alice"
+
+
+def test_graph_state_carries_no_source_body(make_deps):
+    big = "A very long paragraph about electric vehicle sales volumes. " * 400  # ~23k chars
+    search = fakes.FixtureSearch()
+    search._data["pages"]["https://www.example-auto-news.com/byd-sales-2025"]["body"] += "\n\n" + big
+    deps = make_deps(search=search, fetcher=search)
+    snapshots = []
+    run = run_brief(deps, "alice", Brief(text=BRIEF), on_state=snapshots.append)
+    assert run.state == RunState.COMPLETE
+    stored = max(len(p.text) for s in deps.repos.sources.list_for_run("alice", run.id)
+                 for o in deps.repos.observations.list_for_source("alice", s.id)
+                 for p in deps.repos.passages.list("alice", o.id))
+    assert stored > 20_000  # the body really is big, and really is in the store
+    assert snapshots
+    for snap in snapshots:
+        assert len(json.dumps(snap)) < 20_000
+        assert "A very long paragraph" not in json.dumps(snap)
+
+
+def test_fetch_tool_summarises_and_the_researcher_sees_only_refs(make_deps):
+    researcher, light = fakes.researcher(), fakes.light()
+    deps = make_deps(researcher_model=researcher, light_model=light)
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    bodies = ["4.27 million vehicles", "17 million in 2025", "32,000 dollars"]
+    researcher_text = "\n".join(str(m.content) for conv in researcher.seen for m in conv)
+    assert not any(b in researcher_text for b in bodies)
+    tool_replies = [json.loads(str(m.content)) for conv in researcher.seen for m in conv
+                    if m.type == "tool"]
+    assert tool_replies
+    for refs in tool_replies:
+        for ref in refs:
+            assert set(ref) == {"source_id", "title", "summary"}
+            assert ref["summary"] == "A page about electric vehicles."
+    summary_calls = [conv for conv in light.seen if "single plain sentence" in str(conv[0].content)]
+    assert summary_calls  # the summary was written in the tool's own call, which did see the body
+    assert any("4.27 million" in str(conv[-1].content) for conv in summary_calls)
+
+
+def test_paywalled_page_is_skipped_and_logged(make_deps):
+    deps = make_deps()
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    skipped = [e.payload for e in events(deps, run) if e.type == "source_skipped"]
+    assert [s["reason"] for s in skipped] == ["paywalled"]
+
+
+def test_dropped_subtask_is_repaired_once(make_deps):
+    deps = make_deps(planner_model=fakes.planner(research_ids=("s1", "s2"), repair_ids=("s3",)))
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    assert any(e.type == "repair" and e.payload["missing"] == ["s3"] for e in events(deps, run))
+    assert {r.status for r in deps.repos.subtasks.list("alice", run.id)} == {SubTaskStatus.SUCCEEDED}
+
+
+def test_missing_subtask_after_repair_is_listed_as_a_gap(make_deps):
+    deps = make_deps(planner_model=fakes.planner(research_ids=("s1", "s2"), repair_ids=()))
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    report = deps.repos.reports.get_for_run("alice", run.id)
+    assert any("s3" in g for g in report.body["draft"]["gaps"])
+
+
+def test_writer_is_retried_then_succeeds(make_deps):
+    deps = make_deps(writer_model=fakes.writer(bad_first=2))
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    assert len([e for e in events(deps, run) if e.type == "writer_violations"]) == 2
+
+
+def test_writer_exhausting_retries_fails_the_run_with_no_report(make_deps):
+    deps = make_deps(writer_model=fakes.writer(bad_first=99))
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.FAILED
+    assert deps.repos.reports.list_for_owner("alice") == []
+    (failed,) = [e for e in events(deps, run) if e.type == "run_failed"]
+    assert "Writer" in failed.payload["reason"]
+
+
+def test_every_subtask_failing_fails_the_run(make_deps):
+    search = fakes.FixtureSearch()
+    for url, page in search._data["pages"].items():
+        page.clear()
+        page["error"] = True
+    deps = make_deps(search=search, fetcher=search)
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.FAILED
+    assert deps.repos.reports.list_for_owner("alice") == []

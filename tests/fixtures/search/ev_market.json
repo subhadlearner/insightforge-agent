@@ -1,0 +1,37 @@
+{
+  "provider": "tavily",
+  "recorded": "2026-10-09",
+  "queries": {
+    "BYD battery electric vehicle sales 2025": [
+      {"url": "https://www.example-auto-news.com/byd-sales-2025", "title": "BYD sales climb in 2025"},
+      {"url": "https://energy.example.gov/ev-outlook", "title": "Global EV outlook"}
+    ],
+    "BYD Tesla pricing strategy 2025": [
+      {"url": "https://www.example-auto-news.com/pricing-war", "title": "EV pricing war"},
+      {"url": "https://paywalled.example.com/premium-analysis", "title": "Premium analysis"}
+    ],
+    "EV battery technology 2025 LFP solid state": [
+      {"url": "https://www.example-tech.org/battery-chemistry", "title": "Battery chemistry explained"},
+      {"url": "https://energy.example.gov/ev-outlook", "title": "Global EV outlook"}
+    ]
+  },
+  "pages": {
+    "https://www.example-auto-news.com/byd-sales-2025": {
+      "title": "BYD sales climb in 2025",
+      "body": "BYD sold 4.27 million vehicles in 2025, up from 3.02 million in 2024.\n\nPlug-in hybrids made up about half of those sales.\n\nThe company expanded its overseas network to 70 countries."
+    },
+    "https://energy.example.gov/ev-outlook": {
+      "title": "Global EV outlook",
+      "body": "Global electric car sales reached 17 million in 2025.\n\nBattery pack prices fell 20 percent year on year.\n\nLithium iron phosphate cells now account for 45 percent of the market."
+    },
+    "https://www.example-auto-news.com/pricing-war": {
+      "title": "EV pricing war",
+      "body": "Tesla cut the starting price of the Model 3 to 32,000 dollars in China.\n\nBYD responded with discounts of up to 12 percent on its Seal sedan."
+    },
+    "https://paywalled.example.com/premium-analysis": {"paywalled": true},
+    "https://www.example-tech.org/battery-chemistry": {
+      "title": "Battery chemistry explained",
+      "body": "LFP batteries trade energy density for lower cost and longer life.\n\nSolid state cells are not expected in mass production before 2028."
+    }
+  }
+}
