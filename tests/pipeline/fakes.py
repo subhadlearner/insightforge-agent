@@ -81,7 +81,7 @@ def researcher() -> ScriptedChat:
 
 
 def light() -> ScriptedChat:
-    """Summaries and extraction, told apart by the system prompt."""
+    """Summaries, extraction, drafting and entailment, told apart by the system prompt."""
     def reply(messages) -> AIMessage:
         system = str(next(m.content for m in messages if isinstance(m, SystemMessage)))
         user = str(messages[-1].content)
@@ -91,6 +91,16 @@ def light() -> ScriptedChat:
                 for i, text in re.findall(r"\[(\d+)\] (.+)", user)
             ]
             return AIMessage(content=json.dumps({"facts": facts}))
+        if system.startswith("You draft evidence"):
+            items = [
+                {"statement": text.strip(), "passages": [int(i)], "entities": []}
+                for i, text in re.findall(r"\[(\d+)\] (.+)", user)
+            ]
+            return AIMessage(content=json.dumps({"items": items}))
+        if system.startswith("You judge whether"):
+            verdicts = [{"passage": int(i), "verdict": "SUPPORTED"}
+                        for i in re.findall(r"^\[(\d+)\] ", user, re.MULTILINE)]
+            return AIMessage(content=json.dumps({"verdicts": verdicts}))
         return AIMessage(content="A page about electric vehicles.")
     return ScriptedChat(reply=reply)
 

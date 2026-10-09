@@ -58,3 +58,17 @@ def test_fake_provider_needs_no_keys(monkeypatch):
 def test_unknown_search_provider_is_rejected(monkeypatch):
     with pytest.raises(ValidationError):
         make(monkeypatch, LLM_PROVIDER="fake", SEARCH_PROVIDERS="tavilly")
+
+
+def test_evidence_limits_and_bucket_thresholds_are_settings_that_reach_the_pipeline(monkeypatch):
+    from insightforge_agent.pipeline.wiring import build_deps
+    from insightforge_agent.stores.memory import MemoryRepos
+
+    s = make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t", EVIDENCE_BUDGET_TOKENS="4000",
+             PASSAGE_TOKEN_CAP="1500", CREDIBILITY_HIGH="0.8", RECENCY_FRESH_DAYS="90",
+             RUN_TOKEN_CAP="50000")
+    deps = build_deps(s, MemoryRepos(), checkpointer=None)
+    assert (deps.evidence_budget_tokens, deps.passage_token_cap, deps.run_token_cap) == (
+        4000, 1500, 50000)
+    assert (deps.thresholds.credibility_high, deps.thresholds.recency_fresh_days) == (0.8, 90)
+    assert Settings.model_fields["evidence_budget_tokens"].default == 6000

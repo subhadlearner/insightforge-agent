@@ -4,7 +4,7 @@ Nothing here holds a Source body. Passage text is reached only through `SourceSt
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from insightforge_agent.domain.plan import SourceType
 
@@ -37,23 +37,43 @@ class ResearchResults(BaseModel):
 
 
 class PassageRef(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     observation_id: str
     index: int
 
 
 class ExtractedFact(BaseModel):
-    """A statement one Passage makes, with the entities it names."""
+    """A structured fact one Passage states: who (`entity`), what (`predicate`), how much
+    (`value`), for which `scope` and over which `period`. `statement` is the sentence."""
 
+    id: str
     source_id: str
     passage: PassageRef
     statement: str
     entities: list[str] = Field(default_factory=list)
+    entity: str = ""
+    predicate: str = ""
+    scope: str = ""
+    value: str = ""
+    period: str = "UNKNOWN"
+    conflict: bool = False
+
+
+class Conflict(BaseModel):
+    """Facts about the same entity, predicate and scope that give different values for
+    overlapping periods. Found over the structured facts, never over raw text."""
+
+    entity: str
+    predicate: str
+    scope: str
+    fact_ids: list[str]
 
 
 class ExtractionResult(BaseModel):
     entities: list[str] = Field(default_factory=list)
     facts: list[ExtractedFact] = Field(default_factory=list)
-    conflicts: list[str] = Field(default_factory=list)  # conflict detection is a later ticket
+    conflicts: list[Conflict] = Field(default_factory=list)
 
 
 class EvidenceItem(BaseModel):
@@ -64,7 +84,17 @@ class EvidenceItem(BaseModel):
     confidence: Confidence
     supporting: list[PassageRef]
     primary: PassageRef
+    entity: str = ""
+    predicate: str = ""
+    scope: str = ""
+    value: str = ""
     as_of_period: str = "UNKNOWN"
+    derived_from: str | None = None  # "observation_date" when the period was derived
+    temporally_ambiguous: bool = False
+    conflicting: bool = False
+    contradicting: list[PassageRef] = Field(default_factory=list)
+    conflict_fact_ids: list[str] = Field(default_factory=list)
+    relevance: float = 0.0  # cosine similarity between the item and the Brief
 
 
 class EvidenceSection(BaseModel):

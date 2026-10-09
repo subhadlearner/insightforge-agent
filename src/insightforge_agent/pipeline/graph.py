@@ -221,7 +221,8 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
     def synthesizing(state: State) -> State:
         enter(state, RunState.SYNTHESIZING)
         bundle = synthesize(
-            deps, state["owner_id"], state["run_id"], SubTaskPlan.model_validate(state["plan"]),
+            deps, state["owner_id"], state["run_id"], state["brief"],
+            SubTaskPlan.model_validate(state["plan"]),
             ResearchResults.model_validate(state["research"]),
             ExtractionResult.model_validate(state["extraction"]),
         )

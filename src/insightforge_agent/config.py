@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     # Embeddings: local in every environment, independent of the chat provider.
     embedding_model: str = "BAAI/bge-small-en-v1.5"
 
+    # Evidence: budget, per-call Passage cap, bucket thresholds (design.md sections 4, 5, 10).
+    evidence_budget_tokens: int = 6000
+    passage_token_cap: int = 3000
+    run_token_cap: int | None = None  # None: no cap on the model tokens a Run may spend
+    credibility_high: float = 0.65
+    credibility_medium: float = 0.4
+    recency_fresh_days: int = 365
+    recency_recent_days: int = 1095
+
     # Search: ordered; a provider that fails falls through to the next.
     search_providers: Annotated[list[SearchProvider], NoDecode] = ["tavily", "serpapi"]
 

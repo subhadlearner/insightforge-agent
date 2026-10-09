@@ -1,5 +1,6 @@
 """In-memory fakes of every repository. Used by default tests: no keys, no Docker."""
 
+from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.models import (
@@ -173,6 +174,19 @@ class MemoryRunEventRepository:
         return matching[:limit]
 
 
+class MemoryEntityRepository:
+    def __init__(self) -> None:
+        self._facts: dict[tuple[str, str], dict[str, ExtractedFact]] = {}
+
+    def upsert_facts(self, owner_id: str, run_id: str, facts: list[ExtractedFact]) -> None:
+        stored = self._facts.setdefault((owner_id, run_id), {})
+        for f in facts:
+            stored[f.id] = f.model_copy(deep=True)
+
+    def list_for_run(self, owner_id: str, run_id: str) -> list[ExtractedFact]:
+        return [f.model_copy(deep=True) for f in self._facts.get((owner_id, run_id), {}).values()]
+
+
 class MemoryRepos:
     """All repositories, wired the same way as `SqliteRepos`."""
 
@@ -184,3 +198,4 @@ class MemoryRepos:
         self.passages = MemoryPassageRepository()
         self.reports = MemoryReportRepository()
         self.events = MemoryRunEventRepository()
+        self.entities = MemoryEntityRepository()
