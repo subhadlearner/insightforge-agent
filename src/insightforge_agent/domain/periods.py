@@ -60,3 +60,8 @@ def periods_overlap(a: str | None, b: str | None) -> bool:
 def period_end(text: str | None) -> date | None:
     parsed = parse_period(text)
     return parsed[1] if parsed else None
+
+
+def stated_period(text: str | None) -> str:
+    """The period as given when it can be read, else UNKNOWN."""
+    return text.strip() if text and parse_period(text) else UNKNOWN

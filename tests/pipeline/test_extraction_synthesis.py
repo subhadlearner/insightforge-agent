@@ -532,3 +532,21 @@ def test_a_run_over_its_token_cap_fails_with_the_reason(world):
     world.deps.run_token_cap = 5
     with pytest.raises(RunFailed, match="token cap"):
         world.synth(plan, research)
+
+
+def test_a_derived_as_of_period_is_used_for_the_contradiction_check(world):
+    plan, research, extraction = contradiction_world(world)
+    # The item states no period; both Sources are undated present-state assertions, so the
+    # period is derived from the Observation date, and the contradicting fact (dated 2026)
+    # overlaps it.
+    extraction.facts[1].period = "2026"
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": "BYD sold 4.27 million vehicles in 2025.",
+                              "passages": [n for n, _ in ps], "entity": "BYD",
+                              "predicate": "units_sold", "value": "4.27 million",
+                              "scope": "global"}],
+        entail=lambda ps, u: [
+            {"passage": n, "verdict": "SUPPORTED" if "4.27" in t else "CONTRADICTED",
+             "asserts_present_state": True} for n, t in ps])
+    (item,) = world.items(world.synth(plan, research, extraction))
+    assert item.derived_from == "observation_date" and item.conflicting

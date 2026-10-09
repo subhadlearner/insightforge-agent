@@ -44,7 +44,7 @@ from insightforge_agent.domain.extraction import group_key, normalise
 from insightforge_agent.domain.ids import derive_evidence_id
 from insightforge_agent.domain.models import Passage, Source
 from insightforge_agent.domain.passages import batch_passages, named_entities_in, numbers_in
-from insightforge_agent.domain.periods import UNKNOWN, parse_period, periods_overlap
+from insightforge_agent.domain.periods import UNKNOWN, parse_period, periods_overlap, stated_period
 from insightforge_agent.domain.plan import SubTask, SubTaskPlan
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import cosine
@@ -250,7 +250,7 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Pa
             deps.log(owner_id, run_id, "evidence_dropped", reason="draft cites no Passage",
                      statement=statement[:120])
             continue
-        period = d.as_of_period.strip() if parse_period(d.as_of_period) else UNKNOWN
+        period = stated_period(d.as_of_period)
         structured = d.entity.strip() and d.predicate.strip() and d.value.strip()
         identity = (f"{group_key(d.entity, d.predicate, d.scope)}|{period}|{normalise(d.value)}"
                     if structured else normalise(statement))
@@ -335,31 +335,11 @@ def _validate(
         drop("no supported Passage", verdicts={"contradicted": len(judged.contradicted)})
         return None
 
-    # Contradictions: a genuine one needs the same entity, predicate and scope and an
-    # overlapping period. Anything else is a distinct fact and is left out.
-    conflicting, contradicting, linked = False, [], []
-    for ref in judged.contradicted:
-        genuine = [
-            f for f in facts_at.get(_key(ref), [])
-            if c.entity and c.predicate
-            and group_key(f.entity, f.predicate, f.scope) == group_key(c.entity, c.predicate, c.scope)
-            and periods_overlap(c.period, f.period)]
-        if genuine:
-            conflicting = True
-            contradicting.append(ref)
-            linked += [f.id for f in genuine if f.id not in linked]
-        else:
-            deps.log(owner_id, run_id, "contradiction_ignored", evidence_id=c.id,
-                     passage=ref.model_dump(), reason="different entity, predicate, scope or period")
-    if conflicting:
-        for ref in judged.supported:
-            linked += [f.id for f in facts_at.get(_key(ref), [])
-                       if f.entity and group_key(f.entity, f.predicate, f.scope)
-                       == group_key(c.entity, c.predicate, c.scope) and f.id not in linked]
-
+    text_of = {_key(PassageRef(observation_id=p.observation_id, index=p.index)): p.text
+               for p in candidates}
     # Primary Passage: highest Source credibility, then relevance to the item, then lowest id.
     vectors = deps.embedder.embed([c.statement] + [
-        deps.store.get_passages(owner_id, r.observation_id, [r.index])[0].text
+        text_of[_key(r)]
         for r in judged.supported])
     similarity = {_key(r): cosine(vectors[0], v) for r, v in zip(judged.supported, vectors[1:], strict=True)}
     primary = min(judged.supported, key=lambda r: (
@@ -379,6 +359,29 @@ def _validate(
                      derived_from=derived)
         else:
             period, ambiguous = UNKNOWN, True
+
+    # Contradictions: a genuine one needs the same entity, predicate and scope and an
+    # overlapping period. Anything else is a distinct fact and is left out.
+    conflicting, contradicting, linked = False, [], []
+    for ref in judged.contradicted:
+        genuine = [
+            f for f in facts_at.get(_key(ref), [])
+            if c.entity and c.predicate
+            and group_key(f.entity, f.predicate, f.scope) == group_key(c.entity, c.predicate, c.scope)
+            and periods_overlap(period, f.period)]
+        if genuine:
+            conflicting = True
+            contradicting.append(ref)
+            linked += [f.id for f in genuine if f.id not in linked]
+        else:
+            deps.log(owner_id, run_id, "contradiction_ignored", evidence_id=c.id,
+                     passage=ref.model_dump(), reason="different entity, predicate, scope or period")
+    if conflicting:
+        for ref in judged.supported:
+            linked += [f.id for f in facts_at.get(_key(ref), [])
+                       if f.entity and group_key(f.entity, f.predicate, f.scope)
+                       == group_key(c.entity, c.predicate, c.scope) and f.id not in linked]
+
     return EvidenceItem(
         id=c.id, subtask_id=c.subtask.id, aspect_id=c.subtask.aspect_id, statement=c.statement,
         confidence="LOW", supporting=judged.supported, primary=primary, entity=c.entity,

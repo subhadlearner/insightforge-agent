@@ -40,10 +40,6 @@ class Deps:
 
     _spent: dict[tuple[str, str], int] = field(default_factory=dict, repr=False)
 
-    @property
-    def high_credibility(self) -> float:
-        return self.thresholds.credibility_high
-
     def spend(self, owner_id: str, run_id: str, *texts: str) -> None:
         """Count the estimated input tokens of one model call against the Run's token cap."""
         key = (owner_id, run_id)

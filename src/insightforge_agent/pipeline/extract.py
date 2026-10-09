@@ -11,7 +11,7 @@ from insightforge_agent.domain.contracts import ExtractedFact, ExtractionResult,
 from insightforge_agent.domain.extraction import detect_conflicts
 from insightforge_agent.domain.ids import derive_fact_id
 from insightforge_agent.domain.passages import batch_passages
-from insightforge_agent.domain.periods import UNKNOWN, parse_period
+from insightforge_agent.domain.periods import UNKNOWN, stated_period
 from insightforge_agent.pipeline.deps import Deps
 
 MAX_STATEMENT_CHARS = 600  # a statement is one sentence; a pasted page is not
@@ -73,7 +73,7 @@ def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> Ex
                     source_id=sid, passage=PassageRef(observation_id=obs_id, index=f.passage_index),
                     statement=statement, entities=f.entities, entity=f.entity.strip(),
                     predicate=f.predicate.strip(), value=f.value.strip(), scope=f.scope.strip(),
-                    period=f.period.strip() if parse_period(f.period) else UNKNOWN,
+                    period=stated_period(f.period),
                 )
                 from_source.setdefault(fact.id, fact)
         deps.repos.entities.upsert_facts(owner_id, run_id, list(from_source.values()))
