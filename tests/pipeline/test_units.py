@@ -114,3 +114,18 @@ def test_credibility_is_within_zero_to_one():
         for pub in (None, datetime(2026, 1, 1, tzinfo=UTC), datetime(2015, 1, 1, tzinfo=UTC)):
             assert 0 <= credibility_score(url, pub, now) <= 1
     assert credibility_score("https://a.gov/x", None, now) > credibility_score("https://a.com/x", None, now)
+
+
+def test_json_reply_ignores_thinking_blocks():
+    from langchain_core.messages import AIMessage
+    from pydantic import BaseModel
+
+    from insightforge_agent.agents.llm_json import ask_json
+    from tests.scripted import ScriptedChat
+
+    class M(BaseModel):
+        n: int
+
+    reply = AIMessage(content=[{"type": "thinking", "thinking": "hm", "signature": "abc"},
+                               {"type": "text", "text": '```json\n{"n": 3}\n```'}])
+    assert ask_json(ScriptedChat(script=[reply]), "s", "u", M).n == 3

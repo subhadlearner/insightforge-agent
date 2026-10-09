@@ -18,7 +18,7 @@ class BadModelReply(ValueError):
 
 def ask_json(model: BaseChatModel, system: str, user: str, schema: type[T]) -> T:
     reply = model.invoke([SystemMessage(system), HumanMessage(user)])
-    text = _FENCE.sub("", str(reply.content).strip())
+    text = _FENCE.sub("", reply.text.strip())
     try:
         return schema.model_validate_json(text)
     except ValidationError as e:

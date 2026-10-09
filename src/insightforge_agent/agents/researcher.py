@@ -131,7 +131,7 @@ def make_web_search_tool(
                 HumanMessage(f"Query: {query}\nTitle: {page.title}\n\n"
                              f"{lead}"),
             ])
-            line = " ".join(str(reply.content).split())[:SUMMARY_MAX_CHARS]
+            line = " ".join(reply.text.split())[:SUMMARY_MAX_CHARS]
             ref = SourceRef(source_id=obs.source_id, title=page.title, summary=line)
             summaries.put(ref)
             refs.append(ref)
