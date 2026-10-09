@@ -2,13 +2,12 @@
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
-from insightforge_agent.agents.researcher import SummaryBook
 from insightforge_agent.agents.web import PageFetcher, SearchProvider
 from insightforge_agent.domain.models import RunEvent
 from insightforge_agent.stores.source_store import SourceStore
@@ -32,7 +31,6 @@ class Deps:
     high_credibility: float = 0.65
     writer_retries: int = 2
     recursion_limit: int = 60
-    summaries: SummaryBook = field(default_factory=SummaryBook)
 
     def log(self, owner_id: str, run_id: str, type_: str, **payload) -> None:
         self.repos.events.append(RunEvent(

@@ -6,6 +6,7 @@ from insightforge_agent.domain.contracts import Brief
 from insightforge_agent.domain.models import RunState, SubTaskStatus
 from insightforge_agent.pipeline.graph import run_brief
 from tests.pipeline import fakes
+from tests.scripted import ScriptedChat
 
 BRIEF = "Compare BYD and Tesla in electric vehicles: sales, pricing, battery technology."
 
@@ -150,3 +151,66 @@ def test_stored_report_is_the_verified_report(make_deps):
     assert set(body["verified"]) >= {"draft", "verdicts", "summary"}
     assert body["verified"]["draft"] == body["draft"]
     assert body["verified"]["summary"]["implemented"] is False
+
+
+SENTINEL = "SENTINEL-BODY-7731"
+
+
+def _all_checkpointed_bytes(saver) -> bytes:
+    rows = saver.conn.execute("SELECT checkpoint FROM checkpoints").fetchall()
+    rows += saver.conn.execute("SELECT value FROM writes").fetchall()
+    return b"".join(bytes(r[0]) for r in rows if r[0] is not None)
+
+
+def test_no_source_body_in_any_checkpoint_or_intermediate_state(make_deps):
+    big = f"{SENTINEL} " + "A very long paragraph about electric vehicle sales volumes. " * 400
+    search = fakes.FixtureSearch()
+    search._data["pages"]["https://www.example-auto-news.com/byd-sales-2025"]["body"] += "\n\n" + big
+    deps = make_deps(search=search, fetcher=search)
+    snapshots = []
+    run = run_brief(deps, "alice", Brief(text=BRIEF), on_state=snapshots.append)
+    assert run.state == RunState.COMPLETE
+    stored = [p.text for s in deps.repos.sources.list_for_run("alice", run.id)
+              for o in deps.repos.observations.list_for_source("alice", s.id)
+              for p in deps.repos.passages.list("alice", o.id)]
+    assert any(SENTINEL in t for t in stored)  # the body is in the store, so the test can fail
+    assert not any(SENTINEL in json.dumps(s) for s in snapshots)
+    checkpointed = _all_checkpointed_bytes(deps.checkpointer)
+    assert len(checkpointed) > 1000  # both the Planner thread and the outer graph checkpoint
+    assert SENTINEL.encode() not in checkpointed
+
+
+def test_pipeline_continues_from_the_checkpoint_without_in_memory_summaries(make_deps):
+    import uuid
+
+    from insightforge_agent.domain.models import Run
+    from insightforge_agent.pipeline.graph import build_graph, outer_config
+
+    deps = make_deps()
+    run = Run(id="run_x", owner_id="alice", brief=BRIEF, state=RunState.PLANNING,
+              created_at=deps.now())
+    deps.repos.runs.add(run)
+    thread = f"thread-{uuid.uuid4()}"
+    config = outer_config(thread)
+    initial = {"thread_id": thread, "owner_id": "alice", "run_id": run.id, "brief": BRIEF}
+    build_graph(deps, interrupt_after=["collect"]).invoke(initial, config)
+    assert deps.repos.runs.get("alice", run.id).state == RunState.RESEARCHING
+
+    # A fresh Deps, as after a restart: same stores and checkpointer, nothing else carried
+    # over. Its models would fail the test if the Planner or a Researcher were called again.
+    class Forbidden(ScriptedChat):
+        pass
+
+    restarted = make_deps(
+        repos=deps.repos, store=deps.store, checkpointer=deps.checkpointer,
+        planner_model=Forbidden(script=[]), researcher_model=Forbidden(script=[]),
+    )
+    from insightforge_agent.pipeline.graph import summaries_from_log
+
+    assert len(summaries_from_log(restarted, "alice", run.id)) >= 3  # durable, not in memory
+    build_graph(restarted).invoke(None, config)
+    assert restarted.repos.runs.get("alice", run.id).state == RunState.COMPLETE
+    assert len(restarted.repos.reports.list_for_owner("alice")) == 1
+    research = deps.checkpointer.get_tuple(config).checkpoint["channel_values"]["research"]
+    assert all(set(ref) == {"source_id", "title", "summary"}
+               for r in research["results"] for ref in r["source_refs"])

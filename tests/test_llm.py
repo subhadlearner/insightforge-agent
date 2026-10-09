@@ -34,3 +34,10 @@ def test_anthropic_and_groq_build(monkeypatch):
     assert type(build_chat_model("planner", Settings())).__name__ == "ChatAnthropic"
     monkeypatch.setenv("LLM_PROVIDER", "groq")
     assert type(build_chat_model("writer", Settings())).__name__ == "ChatGroq"
+
+
+def test_anthropic_writer_has_room_for_a_whole_report(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "t")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    assert build_chat_model("writer", Settings()).max_tokens >= 16000

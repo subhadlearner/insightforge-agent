@@ -28,6 +28,9 @@ def build_chat_model(role: Role, settings: Settings | None = None) -> BaseChatMo
             # The Planner thread is resumed, and deepagents rewrites earlier messages; signed
             # thinking blocks then fail with "Invalid signature" (design.md section 12).
             extra["thinking"] = {"type": "disabled"}
+        if role == "writer":
+            # The Report is one JSON reply; the 4096 default cuts a long one off mid-string.
+            extra["max_tokens"] = 16000
         return ChatAnthropic(model=name, api_key=s.anthropic_api_key, **extra)
     if provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI

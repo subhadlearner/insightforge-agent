@@ -14,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 
 from insightforge_agent.agents.planner import build_planner, submitted_plan
 from insightforge_agent.agents.researcher import (
+    SUMMARY_EVENT,
     make_web_search_tool,
     researcher_subagent,
     source_ids_in,
@@ -63,8 +64,26 @@ class State(TypedDict, total=False):
     report_id: str
 
 
-def build_graph(deps: Deps):
-    """Compile the outer graph for one Run."""
+def summaries_from_log(deps: Deps, owner_id: str, run_id: str) -> dict[str, SourceRef]:
+    """The one-line summaries the fetch tool recorded, read back from the durable Run log."""
+    found: dict[str, SourceRef] = {}
+    cursor = 0
+    while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
+        for e in batch:
+            if e.type == SUMMARY_EVENT:
+                ref = SourceRef.model_validate(e.payload)
+                found[ref.source_id] = ref
+        cursor = batch[-1].seq
+    return found
+
+
+def outer_config(thread_id: str) -> dict:
+    """The outer graph checkpoints under its own thread, apart from the Planner's."""
+    return {"configurable": {"thread_id": f"graph-{thread_id}"}}
+
+
+def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
+    """Compile the outer graph for one Run, checkpointed so its state survives a restart."""
     # The Researcher tool owns one Run's ids, so the Planner is built per Run, on first use.
     holder: dict = {}
 
@@ -73,7 +92,7 @@ def build_graph(deps: Deps):
             tool = make_web_search_tool(
                 owner_id=state["owner_id"], run_id=state["run_id"], search=deps.search,
                 fetcher=deps.fetcher, store=deps.store, summarizer=deps.light_model,
-                summaries=deps.summaries, events=deps.repos.events, now=deps.now,
+                events=deps.repos.events, now=deps.now,
                 passage_token_cap=deps.passage_token_cap,
             )
             holder["planner"] = build_planner(
@@ -133,12 +152,13 @@ def build_graph(deps: Deps):
     def collect(state: State) -> State:
         owner, run_id = state["owner_id"], state["run_id"]
         known = {s.id for s in deps.repos.sources.list_for_run(owner, run_id)}
+        summaries = summaries_from_log(deps, owner, run_id)
         results = []
         for sid, outcome in outcomes(state).items():
             refs: list[SourceRef] = []
             if outcome.status == "succeeded":
                 for src in source_ids_in(outcome.dispatch.result or ""):
-                    ref = deps.summaries.get(src)
+                    ref = summaries.get(src)
                     if src in known and ref is not None:
                         refs.append(ref)
             ok = bool(refs)
@@ -218,7 +238,7 @@ def build_graph(deps: Deps):
     g.add_edge("writing", "fact_checking")
     g.add_edge("fact_checking", "complete")
     g.add_edge("complete", END)
-    return g.compile()
+    return g.compile(checkpointer=deps.checkpointer, interrupt_after=interrupt_after)
 
 
 def run_brief(
@@ -232,7 +252,8 @@ def run_brief(
     initial: State = {"thread_id": f"thread-{uuid.uuid4()}", "owner_id": owner_id,
                       "run_id": run.id, "brief": brief.text}
     try:
-        for snapshot in build_graph(deps).stream(initial, stream_mode="values"):
+        for snapshot in build_graph(deps).stream(
+                initial, outer_config(initial["thread_id"]), stream_mode="values"):
             if on_state:
                 on_state(snapshot)
     except Exception as e:  # noqa: BLE001 - any failure ends the Run, with its reason logged

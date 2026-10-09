@@ -31,6 +31,7 @@ from insightforge_agent.stores.source_store import SourceStore
 SOURCE_ID = re.compile(r"src_[0-9a-f]{16}")
 RESULTS_PER_SEARCH = 5
 SUMMARY_MAX_CHARS = 300
+SUMMARY_EVENT = "source_summarized"  # durable record of {source_id, title, summary}
 
 RESEARCHER_PROMPT = """You are a Web Search Researcher. Your task description starts with
 "SUBTASK_ID=<id>" followed by your research query. Call `web_search` with that query
@@ -44,23 +45,6 @@ SUMMARY_PROMPT = (
     "Write a single plain sentence (at most 40 words) saying what this web page says that "
     "is relevant to the research query. Reply with the sentence only."
 )
-
-
-class SummaryBook:
-    """One-line summaries by Source ID, so the graph can rebuild a Researcher's refs from the
-    Source IDs it named. Holds one short line per Source, never a body."""
-
-    def __init__(self) -> None:
-        self._lines: dict[str, SourceRef] = {}
-        self._lock = threading.Lock()
-
-    def put(self, ref: SourceRef) -> None:
-        with self._lock:
-            self._lines[ref.source_id] = ref
-
-    def get(self, source_id: str) -> SourceRef | None:
-        with self._lock:
-            return self._lines.get(source_id)
 
 
 def source_ids_in(result_text: str) -> list[str]:
@@ -89,7 +73,6 @@ def make_web_search_tool(
     fetcher: PageFetcher,
     store: SourceStore,
     summarizer: BaseChatModel,
-    summaries: SummaryBook,
     events: RunEventRepository,
     now: Callable[[], datetime],
     passage_token_cap: int,
@@ -133,7 +116,7 @@ def make_web_search_tool(
             ])
             line = " ".join(reply.text.split())[:SUMMARY_MAX_CHARS]
             ref = SourceRef(source_id=obs.source_id, title=page.title, summary=line)
-            summaries.put(ref)
+            log(SUMMARY_EVENT, **ref.model_dump())
             refs.append(ref)
         return json.dumps([r.model_dump() for r in refs])
 
