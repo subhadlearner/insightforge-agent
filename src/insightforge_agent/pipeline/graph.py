@@ -49,6 +49,8 @@ from insightforge_agent.pipeline.write import write_report
 
 # Source types a Run can actually carry out so far; documents and memory arrive in T7 and T8.
 IMPLEMENTED_SOURCE_TYPES = ["web"]
+DESCRIPTION_RULE = ('Each task description must be exactly "SUBTASK_ID=<id> <query>", with the '
+                    "query copied verbatim and nothing added.")
 
 
 class State(TypedDict, total=False):
@@ -104,9 +106,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
                 model=deps.planner_model,
                 subagents=[researcher_subagent([tool], deps.researcher_model)],
                 checkpointer=deps.checkpointer,
-                guard=ApprovedDispatchGuard(lambda: approved, lambda sid, why: deps.log(
+                guard=ApprovedDispatchGuard(lambda: approved, lambda sid, why, text: deps.log(
                     state["owner_id"], state["run_id"], "dispatch_rejected",
-                    subtask_id=sid, reason=why)),
+                    subtask_id=sid, reason=why, description=text)),
             )
         return holder["planner"]
 
@@ -163,7 +165,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
         approved.update({t["id"]: t["query"] for t in state["plan"]["sub_tasks"]})
         listing = "\n".join(f"- {i}: {q}" for i, q in approved.items())
         planner_for(state).invoke({"messages": [HumanMessage(
-            f"RESEARCH: dispatch exactly these approved Sub-tasks now:\n{listing}")]}, cfg(state))
+            f"RESEARCH: dispatch exactly these approved Sub-tasks now:\n{listing}\n{DESCRIPTION_RULE}")]}, cfg(state))
         return {}
 
     def outcomes(state: State):
@@ -182,7 +184,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
         approved.update({i: by_id[i]["query"] for i in state["missing"]})
         deps.log(state["owner_id"], state["run_id"], "repair", missing=state["missing"])
         planner_for(state).invoke({"messages": [HumanMessage(
-            f"REPAIR: dispatch only these missing Sub-tasks:\n{listing}")]}, cfg(state))
+            f"REPAIR: dispatch only these missing Sub-tasks:\n{listing}\n{DESCRIPTION_RULE}")]}, cfg(state))
         return {"repaired": True}
 
     def collect(state: State) -> State:

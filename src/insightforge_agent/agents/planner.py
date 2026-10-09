@@ -28,8 +28,11 @@ time horizon in months and a priority (1 is most important). Use only the allowe
 types. Do NOT call `task` in this phase.
 Phase RESEARCH: the user message starts with RESEARCH. Call `write_todos` with one todo per
 approved Sub-task, then call the `task` tool once per Sub-task with subagent_type
-"researcher". Each task description MUST begin with "SUBTASK_ID=<id>" followed by the
-Sub-task query. Issue all `task` calls in a single turn. Do not change the approved Sub-tasks.
+"researcher". Each task description MUST be exactly "SUBTASK_ID=<id> <query>": the id, one
+space, then the Sub-task query copied verbatim. Add nothing else (no full stop after the id, no
+rephrasing, no extra instructions, no source type or time horizon, no reply format; the
+Researcher already knows them). A description that differs by a single character is refused.
+Issue all `task` calls in a single turn. Do not change the approved Sub-tasks.
 Phase REPAIR: the user message starts with REPAIR and lists missing Sub-tasks. Dispatch
 `task` only for those, with the same description format. Do not replan."""
 
@@ -48,7 +51,7 @@ class ApprovedDispatchGuard(AgentMiddleware):
     reaches a Researcher; the Planner gets a REJECTED reply and `on_reject` logs it."""
 
     def __init__(self, approved: Callable[[], dict[str, str]],
-                 on_reject: Callable[[str, str], None]) -> None:
+                 on_reject: Callable[[str, str, str], None]) -> None:
         super().__init__()
         self._approved = approved
         self._on_reject = on_reject
@@ -70,7 +73,7 @@ class ApprovedDispatchGuard(AgentMiddleware):
             reason = f"{sid} is not dispatched to the {RESEARCHER} agent"
         else:
             return handler(request)
-        self._on_reject(sid or "", reason)
+        self._on_reject(sid or "", reason, description[:500])
         return ToolMessage(
             content=f"REJECTED: {reason}. Dispatch only the approved Sub-tasks, unchanged.",
             tool_call_id=call["id"], status="error")
