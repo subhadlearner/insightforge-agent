@@ -5,6 +5,7 @@ Pure functions, no I/O. The pipeline supplies the facts (Sources, scores, token 
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 from urllib.parse import urlparse
 
 from insightforge_agent.domain.contracts import CONFIDENCE_ORDER, Confidence, EvidenceItem
@@ -44,6 +45,21 @@ def confidence_of(
     if has_independent_pair:
         return "HIGH"
     return "MEDIUM" if best_credibility >= high else "LOW"
+
+
+DecisionRule = Literal["conflicting", "independent_sources", "high_credibility_single_source",
+                       "insufficient_credibility"]
+
+
+def decision_rule(
+    *, has_independent_pair: bool, best_credibility: float, conflicting: bool, high: float,
+) -> DecisionRule:
+    """Which rule of `confidence_of` decided, in the same order it applies them."""
+    if conflicting:
+        return "conflicting"
+    if has_independent_pair:
+        return "independent_sources"
+    return "high_credibility_single_source" if best_credibility >= high else "insufficient_credibility"
 
 
 def section_label(confidences: list[Confidence]) -> Confidence:

@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.tokens import estimate_tokens
 
-_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
-
-
-def numbers_in(text: str) -> set[str]:
-    return {n.replace(",", "").rstrip(".") for n in _NUMBER.findall(text)}
+from insightforge_agent.domain.quantities import (  # noqa: F401 - numbers_in is re-exported
+    numbers_in,
+    parse_value,
+    quantities_in,
+    unit_agrees,
+)
 
 
 def split_paragraphs(body: str) -> list[str]:
@@ -133,7 +134,12 @@ def value_in_text(value: str, text: str) -> bool:
     if not wanted:
         return False
     have = _value_tokens(text)
-    return any(have[i:i + len(wanted)] == wanted for i in range(len(have) - len(wanted) + 1))
+    if any(have[i:i + len(wanted)] == wanted for i in range(len(have) - len(wanted) + 1)):
+        return True
+    quantity = parse_value(value)  # another representation of the same exact quantity
+    return quantity is not None and any(
+        p.value == quantity.value and unit_agrees(quantity.unit, p.unit)
+        for p in quantities_in(text))
 
 
 _SENTENCE_END = (".", "!", "?", ":")

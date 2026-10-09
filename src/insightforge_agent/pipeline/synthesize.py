@@ -35,12 +35,14 @@ from insightforge_agent.domain.evidence import (
     compress_to_budget,
     confidence_of,
     credibility_bucket,
+    decision_rule,
     domain_of,
     rank_key,
     recency_bucket,
     section_label,
 )
-from insightforge_agent.domain.extraction import group_key, normalise
+from insightforge_agent.domain.extraction import group_key, normalise, same_value
+from insightforge_agent.domain.quantities import canonical_value, unsupported_numbers
 from insightforge_agent.domain.ids import derive_evidence_id
 from insightforge_agent.domain.models import Passage, Source
 from insightforge_agent.domain.passages import (
@@ -201,12 +203,22 @@ def synthesize(
             for i, a in enumerate(supporting_sources) for b in supporting_sources[i + 1:])
         best = max((s.credibility_score or 0.0) for s in supporting_sources)
         scores[item.id] = best
+        decision = dict(has_independent_pair=independent, best_credibility=best,
+                        conflicting=item.conflicting, high=deps.thresholds.credibility_high)
         item = item.model_copy(update={
-            "confidence": confidence_of(
-                has_independent_pair=independent, best_credibility=best,
-                conflicting=item.conflicting, high=deps.thresholds.credibility_high),
+            "confidence": confidence_of(**decision),
             "relevance": cosine(deps.embedder.embed([item.statement])[0], brief_vector),
         })
+        # Logged before the budget cut, so an item that is later discarded stays explainable.
+        deps.log(owner_id, run_id, "confidence_decided",
+                 evidence_id=item.id, confidence=item.confidence,
+                 decision_rule=decision_rule(**decision),
+                 supported_passage_count=len(item.supporting),
+                 distinct_supporting_source_count=len(supporting_sources),
+                 independent_pair_found=independent, best_source_credibility=best,
+                 credibility_high_threshold=deps.thresholds.credibility_high,
+                 conflicting=item.conflicting,
+                 source_ids=[s.id for s in supporting_sources])
         items.append(item)
 
     # 5. Rank, then 6. fit to the budget.
@@ -260,7 +272,7 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
             continue
         period = stated_period(d.as_of_period)
         structured = d.entity.strip() and d.predicate.strip() and d.value.strip()
-        identity = (f"{group_key(d.entity, d.predicate, d.scope)}|{period}|{normalise(d.value)}"
+        identity = (f"{group_key(d.entity, d.predicate, d.scope)}|{period}|{canonical_value(d.value) or normalise(d.value)}"
                     if structured else normalise(statement))
         out.append(_Candidate(
             id=derive_evidence_id(run_id, identity), statement=statement, subtask=task,
@@ -273,7 +285,7 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
 def _literal_problem(c: _Candidate, passage: Passage) -> str | None:
     """Every number and named entity of the item must appear in the Passage."""
     text = passage.text.casefold()
-    missing_numbers = numbers_in(c.statement) - numbers_in(passage.text)
+    missing_numbers = unsupported_numbers(c.statement, passage.text)
     if missing_numbers:
         return f"value not in Passage: {sorted(missing_numbers)}"
     names = {*c.entities, *([c.entity] if c.entity else []), *named_entities_in(c.statement)}
@@ -336,7 +348,7 @@ def _validate(
         for f in facts_by_group.get(group_key(c.entity, c.predicate, c.scope), []):
             k = _key(f.passage)
             if (k in text_of or f.passage.observation_id not in source_by_obs
-                    or normalise(f.value) == normalise(value)
+                    or same_value(f.value, value)
                     or (parse_period(period) and parse_period(f.period)
                         and not periods_overlap(period, f.period))):
                 continue
@@ -410,7 +422,7 @@ def _validate(
             f for f in facts_at.get(_key(ref), [])
             if value and c.entity and c.predicate and f.value
             and group_key(f.entity, f.predicate, f.scope) == mine
-            and normalise(f.value) != normalise(value)
+            and not same_value(f.value, value)
             and periods_overlap(period, f.period)]
         if genuine:
             conflicting = True
