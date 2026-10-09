@@ -19,3 +19,8 @@ def derive_source_id(kind: str, locator: str) -> str:
 def derive_observation_id(owner_id: str, source: str, fetched_at: datetime, content: str) -> str:
     """Derived from the fetch itself, so storing the same fetch twice is the same Observation."""
     return f"obs_{_digest(owner_id, source, fetched_at.isoformat(), _digest(content))}"
+
+
+def derive_evidence_id(run_id: str, statement: str) -> str:
+    """The same statement within a Run is the same Evidence item."""
+    return f"ev_{_digest(run_id, ' '.join(statement.lower().split()))}"

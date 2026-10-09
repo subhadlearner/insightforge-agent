@@ -14,3 +14,6 @@ Single-context layout: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/ag
 
 ### Memory
 Do not retrieve information from memory; always refer to durable source like GitHub for any information you might need. 
+
+### Hygiene
+Never ever commit directly to main. ALways create a feature branch and then raise a PR to main.

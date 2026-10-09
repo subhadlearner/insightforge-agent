@@ -1,4 +1,4 @@
-"""Pure checks over a Planner thread's messages (T1 spike, ADR-0003).
+"""Pure checks over a Planner thread's messages: dispatch matching and repair (ADR-0003).
 
 No I/O and no model calls, so every rule here is covered by deterministic tests.
 """

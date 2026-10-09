@@ -10,7 +10,7 @@ import re
 from langchain_core.messages import AIMessage
 
 from tests.live.planner_spike import run_spike
-from tests.live.spike_checks import check_dispatches
+from insightforge_agent.pipeline.dispatch import check_dispatches
 from tests.scripted import ScriptedChat, ai, call
 
 BRIEF_MARKER = "ZEBRA-BRIEF-MARKER compare three carmakers"
