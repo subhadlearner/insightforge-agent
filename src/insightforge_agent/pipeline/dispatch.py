@@ -9,7 +9,7 @@ from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from insightforge_agent.domain.plan import SubTaskPlan
+from insightforge_agent.domain.plan import SUBTASK_ID_PATTERN, SubTaskPlan
 
 RESULT_PREFIX = "RESULT:"
 FAILED_PREFIX = "FAILED:"
@@ -63,6 +63,11 @@ def segments(messages) -> dict[str, list]:
     return out
 
 
+def dispatched_id(description: str) -> str | None:
+    found = re.search(rf"SUBTASK_ID=({SUBTASK_ID_PATTERN})", description)
+    return found.group(1) if found else None
+
+
 def dispatches(messages) -> list[Dispatch]:
     """Every `task` call carrying a SUBTASK_ID, paired with its ToolMessage."""
     replies = {m.tool_call_id: str(m.content) for m in messages if isinstance(m, ToolMessage)}
@@ -74,9 +79,9 @@ def dispatches(messages) -> list[Dispatch]:
             if call["name"] != "task":
                 continue
             description = str(call["args"].get("description", ""))
-            found = re.search(r"SUBTASK_ID=(\w+)", description)
-            if found:
-                out.append(Dispatch(call["id"], found.group(1), description, replies.get(call["id"])))
+            sid = dispatched_id(description)
+            if sid:
+                out.append(Dispatch(call["id"], sid, description, replies.get(call["id"])))
     return out
 
 

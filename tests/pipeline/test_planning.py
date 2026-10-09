@@ -230,7 +230,9 @@ def test_research_is_told_exactly_which_subtasks_were_approved(make_deps):
 
 def test_an_explicitly_failed_subtask_is_not_retried(make_deps):
     dispatch = {**fakes.QUERIES, "s3": "FAIL-ME"}
-    model = planner_script(fakes.PLAN_ARGS, dispatch=dispatch)  # a repair turn would exhaust it
+    plan = copy.deepcopy(fakes.PLAN_ARGS)
+    plan["plan"]["sub_tasks"][2]["query"] = "FAIL-ME"
+    model = planner_script(plan, dispatch=dispatch)  # a repair turn would exhaust it
     deps = make_deps(planner_model=model)
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     assert run.state == RunState.COMPLETE
@@ -259,3 +261,113 @@ def test_web_with_unavailable_documents_still_runs(make_deps):
     deps = make_deps()
     brief = Brief(text=BRIEF, source_toggles={"web": True, "documents": True})
     assert run_brief(deps, "alice", brief).state == RunState.COMPLETE
+
+
+# --- review round: ids, coverage, the dispatch guard, fail-fast -----------------------------
+
+def test_aspect_ids_must_be_unique_so_ids_cannot_merge_distinct_aspects():
+    with pytest.raises(ValueError, match="Aspect ids are not unique"):
+        SubTaskPlan.model_validate({
+            "aspects": [{"id": "a", "name": "Sales"}, {"id": "a", "name": "Pricing"}],
+            "sub_tasks": [{"id": f"s{n}", "aspect_id": "a", "query": "q", "source_type": "web",
+                           "time_horizon_months": 12, "priority": n} for n in (1, 2, 3)]})
+
+
+def test_an_empty_aspect_id_is_rejected():
+    with pytest.raises(ValueError):
+        SubTaskPlan.model_validate({
+            "aspects": [{"id": "", "name": "Sales"}],
+            "sub_tasks": [{"id": "s1", "aspect_id": "", "query": "q", "source_type": "web",
+                           "time_horizon_months": 12, "priority": 1}]})
+
+
+@pytest.mark.parametrize("bad", ["s-1", "s 1", "", "s.1", "é1"])
+def test_a_subtask_id_dispatch_parsing_cannot_read_back_is_rejected(bad):
+    with pytest.raises(ValueError):
+        plan_of([(bad, "a", 1)])
+
+
+@pytest.mark.parametrize("good", ["s1", "S_1", "task_12", "7"])
+def test_every_accepted_subtask_id_is_read_back_whole_from_a_dispatch(good):
+    from insightforge_agent.pipeline.dispatch import dispatched_id
+    plan_of([(good, "a", 1)])
+    assert dispatched_id(f"SUBTASK_ID={good} find things") == good
+
+
+def test_a_planner_that_submits_an_unparseable_id_is_corrected_then_runs(make_deps):
+    bad = copy.deepcopy(fakes.PLAN_ARGS)
+    bad["plan"]["sub_tasks"][0]["id"] = "s-1"
+    deps = make_deps(planner_model=planner_script(bad, fakes.PLAN_ARGS))
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    assert any(e.type == "plan_correction" for e in events(deps, run))
+
+
+def test_duplicate_aspect_ids_in_a_submitted_plan_are_corrected(make_deps):
+    dup = copy.deepcopy(fakes.PLAN_ARGS)
+    dup["plan"]["aspects"][1]["id"] = "a1"
+    deps = make_deps(planner_model=planner_script(dup, dup))
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.FAILED
+    assert "Aspect ids are not unique" in failure_reason(deps, run)
+
+
+def test_a_dispatch_for_a_trimmed_subtask_is_refused_before_it_runs(make_deps):
+    seven = copy.deepcopy(fakes.PLAN_ARGS)
+    seven["plan"]["sub_tasks"] += [
+        {"id": f"x{n}", "aspect_id": "a1", "query": fakes.QUERIES["s1"], "source_type": "web",
+         "time_horizon_months": 12, "priority": 10 + n} for n in range(4)]
+    kept = {**fakes.QUERIES, "x0": fakes.QUERIES["s1"], "x1": fakes.QUERIES["s1"],
+            "x2": fakes.QUERIES["s1"]}
+    rogue = {**kept, "x3": fakes.QUERIES["s1"]}  # x3 was trimmed; the Planner dispatches it anyway
+    researcher = fakes.researcher()
+    deps = make_deps(planner_model=planner_script(seven, seven, dispatch=rogue),
+                     researcher_model=researcher)
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    (refused,) = [e for e in events(deps, run) if e.type == "dispatch_rejected"]
+    assert refused.payload["subtask_id"] == "x3"
+    ran = {str(m.content).split()[0] for conv in researcher.seen for m in conv
+           if m.type == "human" and "SUBTASK_ID=" in str(m.content)}
+    assert ran == {f"SUBTASK_ID={sid}" for sid in kept}  # x3 never reached a Researcher
+
+
+def test_a_dispatch_that_changes_the_approved_scope_is_refused(make_deps):
+    altered = {**fakes.QUERIES, "s3": "something the Planner made up"}
+    deps = make_deps(planner_model=planner_script(
+        fakes.PLAN_ARGS, dispatch=altered), researcher_model=fakes.researcher())
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    reasons = [e.payload["reason"] for e in events(deps, run) if e.type == "dispatch_rejected"]
+    assert reasons == ["s3 does not carry its approved scope"]
+
+
+def test_nothing_can_be_dispatched_while_planning(make_deps):
+    plan_phase_task = call("task", {"description": "SUBTASK_ID=s1 " + fakes.QUERIES["s1"],
+                                    "subagent_type": "researcher"}, "early")
+    script = [ai(plan_phase_task), ai(call("submit_plan", fakes.PLAN_ARGS, "p")),
+              ai(text="ok")]
+    tail = planner_script(fakes.PLAN_ARGS).script[2:]
+    deps = make_deps(planner_model=ScriptedChat(script=script + tail))
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    refused = [e.payload for e in events(deps, run) if e.type == "dispatch_rejected"]
+    assert refused and refused[0]["subtask_id"] == "s1"
+
+
+@pytest.mark.parametrize("toggles, ids", [
+    ({"documents": True}, ["d1"]),
+    ({"memory": True}, []),
+])
+def test_a_brief_whose_only_sources_cannot_run_yet_is_rejected_up_front(make_deps, toggles, ids):
+    deps = make_deps()
+    deps.repos.reports.add(_a_report())
+    with pytest.raises(SubmissionRejected, match="no runnable source type"):
+        run_brief(deps, "alice", Brief(text=BRIEF, source_toggles=toggles, document_ids=ids))
+    assert deps.repos.runs.list_for_owner("alice") == []
+
+
+def _a_report():
+    from datetime import UTC, datetime
+
+    from insightforge_agent.domain.models import Report
+    return Report(id="rep_old", owner_id="alice", run_id="run_old",
+                  created_at=datetime.now(UTC), body={})

@@ -12,7 +12,7 @@ from typing import TypedDict
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 
-from insightforge_agent.agents.planner import build_planner, submitted_plan
+from insightforge_agent.agents.planner import ApprovedDispatchGuard, build_planner, submitted_plan
 from insightforge_agent.agents.researcher import (
     SUMMARY_EVENT,
     make_web_search_tool,
@@ -29,7 +29,7 @@ from insightforge_agent.domain.contracts import (
     SubTaskResult,
     VerifiedReport,
 )
-from insightforge_agent.domain.errors import NotFoundError
+from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
 from insightforge_agent.domain.models import (
     Report,
     Run,
@@ -90,6 +90,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
     """Compile the outer graph for one Run, checkpointed so its state survives a restart."""
     # The Researcher tool owns one Run's ids, so the Planner is built per Run, on first use.
     holder: dict = {}
+    approved: dict[str, str] = {}  # Sub-task id -> query the Planner may dispatch right now
 
     def planner_for(state: State):
         if "planner" not in holder:
@@ -103,6 +104,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
                 model=deps.planner_model,
                 subagents=[researcher_subagent([tool], deps.researcher_model)],
                 checkpointer=deps.checkpointer,
+                guard=ApprovedDispatchGuard(lambda: approved, lambda sid, why: deps.log(
+                    state["owner_id"], state["run_id"], "dispatch_rejected",
+                    subtask_id=sid, reason=why)),
             )
         return holder["planner"]
 
@@ -155,9 +159,11 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
 
     def researching(state: State) -> State:
         enter(state, RunState.RESEARCHING)
-        approved = "\n".join(f"- {t['id']}: {t['query']}" for t in state["plan"]["sub_tasks"])
+        approved.clear()
+        approved.update({t["id"]: t["query"] for t in state["plan"]["sub_tasks"]})
+        listing = "\n".join(f"- {i}: {q}" for i, q in approved.items())
         planner_for(state).invoke({"messages": [HumanMessage(
-            f"RESEARCH: dispatch exactly these approved Sub-tasks now:\n{approved}")]}, cfg(state))
+            f"RESEARCH: dispatch exactly these approved Sub-tasks now:\n{listing}")]}, cfg(state))
         return {}
 
     def outcomes(state: State):
@@ -172,6 +178,8 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
     def repair(state: State) -> State:
         by_id = {t["id"]: t for t in state["plan"]["sub_tasks"]}
         listing = "\n".join(f"- {i}: {by_id[i]['query']}" for i in state["missing"])
+        approved.clear()
+        approved.update({i: by_id[i]["query"] for i in state["missing"]})
         deps.log(state["owner_id"], state["run_id"], "repair", missing=state["missing"])
         planner_for(state).invoke({"messages": [HumanMessage(
             f"REPAIR: dispatch only these missing Sub-tasks:\n{listing}")]}, cfg(state))
@@ -278,8 +286,11 @@ def run_brief(
 ) -> Run:
     """Create a Run for the Brief and carry it to COMPLETE or FAILED. A Brief with no available
     source type raises SubmissionRejected before any Run exists. A Run that fails does not raise; its reason is in the Run log. `on_state` sees every graph state snapshot."""
-    allowed = [t for t in check_submission(
-        brief, bool(deps.repos.reports.list_for_owner(owner_id))) if t in IMPLEMENTED_SOURCE_TYPES]
+    available = check_submission(brief, bool(deps.repos.reports.list_for_owner(owner_id)))
+    allowed = [t for t in available if t in IMPLEMENTED_SOURCE_TYPES]
+    if not allowed:
+        raise SubmissionRejected(
+            f"no runnable source type: {', '.join(available)} cannot be researched yet")
     run = Run(id=f"run_{deps.new_id()}", owner_id=owner_id, brief=brief.text,
               state=RunState.PLANNING, created_at=deps.now())
     deps.repos.runs.add(run)

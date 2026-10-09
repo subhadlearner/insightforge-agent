@@ -7,13 +7,18 @@ from pydantic import BaseModel, Field, model_validator
 SourceType = Literal["web", "documents", "memory"]
 
 
+# The Planner names a Sub-task in its `task` description as SUBTASK_ID=<id>, and dispatch
+# parsing reads it back with this same pattern, so an accepted id always round-trips.
+SUBTASK_ID_PATTERN = r"[A-Za-z0-9_]+"
+
+
 class Aspect(BaseModel):
-    id: str
+    id: str = Field(min_length=1)
     name: str
 
 
 class SubTask(BaseModel):
-    id: str
+    id: str = Field(pattern=f"^{SUBTASK_ID_PATTERN}$")
     aspect_id: str
     query: str
     source_type: SourceType
@@ -28,6 +33,8 @@ class SubTaskPlan(BaseModel):
     @model_validator(mode="after")
     def _references_resolve(self) -> "SubTaskPlan":
         aspect_ids = {a.id for a in self.aspects}
+        if len(aspect_ids) != len(self.aspects):
+            raise ValueError("Aspect ids are not unique")
         unknown = {t.aspect_id for t in self.sub_tasks} - aspect_ids
         if unknown:
             raise ValueError(f"Sub-tasks reference unknown aspects: {sorted(unknown)}")

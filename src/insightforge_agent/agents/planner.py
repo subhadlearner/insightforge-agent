@@ -4,13 +4,16 @@ It plans in PLAN, dispatches Researchers in RESEARCH and fills gaps in REPAIR, a
 checkpointed thread. The plan is read from its `submit_plan` tool call, because
 `response_format` would force a structured-output call on every resume (design.md section 12)."""
 
+import re
+from collections.abc import Callable
+
 from deepagents import create_deep_agent
-from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 
-from insightforge_agent.domain.plan import SubTaskPlan
+from insightforge_agent.domain.plan import SUBTASK_ID_PATTERN, SubTaskPlan
 
 PLANNER_PROMPT = """You are the Planner of a research system.
 Phase PLAN: the user gives a Brief and the source types you may use. Break the Brief into
@@ -33,13 +36,46 @@ def submit_plan(plan: SubTaskPlan) -> str:
     return "Plan recorded."
 
 
-def build_planner(*, model: BaseChatModel, subagents: list[dict], checkpointer):
+class ApprovedDispatchGuard(AgentMiddleware):
+    """Refuses a `task` call that is not for an approved Sub-task with its approved scope.
+
+    `approved` maps Sub-task id to its query and is read at call time, so it is empty outside
+    the RESEARCH and REPAIR phases and nothing can be dispatched then. A refused call never
+    reaches a Researcher; the Planner gets a REJECTED reply and `on_reject` logs it."""
+
+    def __init__(self, approved: Callable[[], dict[str, str]],
+                 on_reject: Callable[[str, str], None]) -> None:
+        super().__init__()
+        self._approved = approved
+        self._on_reject = on_reject
+
+    def wrap_tool_call(self, request, handler):
+        call = request.tool_call
+        if call["name"] != "task":
+            return handler(request)
+        description = str(call["args"].get("description", ""))
+        found = re.search(rf"SUBTASK_ID=({SUBTASK_ID_PATTERN})", description)
+        approved = self._approved()
+        sid = found.group(1) if found else None
+        if sid in approved and approved[sid] in description:
+            return handler(request)
+        reason = ("no SUBTASK_ID" if sid is None else
+                  f"{sid} is not an approved Sub-task" if sid not in approved else
+                  f"{sid} does not carry its approved scope")
+        self._on_reject(sid or "", reason)
+        return ToolMessage(
+            content=f"REJECTED: {reason}. Dispatch only the approved Sub-tasks, unchanged.",
+            tool_call_id=call["id"], status="error")
+
+
+def build_planner(*, model: BaseChatModel, subagents: list[dict], checkpointer,
+                  guard: ApprovedDispatchGuard):
     return create_deep_agent(
         model=model,
         system_prompt=PLANNER_PROMPT,
         subagents=subagents,
         tools=[submit_plan],
-        middleware=[TodoListMiddleware()],
+        middleware=[TodoListMiddleware(), guard],
         checkpointer=checkpointer,
     )
 

@@ -265,6 +265,8 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 
 - **Rules are pure** (`domain/plan.py`: `plan_violations`, `trim_plan`; `domain/submission.py`). The graph's `planning` node applies them: one corrective `PLAN (correction)` re-prompt on any violation, then trim to 6 by priority (never the last Sub-task of an Aspect), then fail with the violations as the reason. Logged as `plan_correction` and `plan_trimmed`.
 - **Submission check:** `run_brief` raises `SubmissionRejected` before a Run exists; the API (T10) maps it to 422. Memory counts as available when the User has any Report, a stand-in until T8 defines eligibility.
-- **Allowed types:** the Planner is offered available types that a Run can carry out today (`web` only), so a memory-only Brief with a Report passes the check but fails planning until T7/T8.
+- **Runnable types:** `run_brief` also rejects (`SubmissionRejected`, no Run) a Brief whose available types a Run cannot carry out yet (only `web` today), so memory-only or documents-only fails fast until T7/T8. Web plus unavailable documents still runs on web.
+- **Ids:** Aspect ids must be unique and non-empty; Sub-task ids match `SUBTASK_ID_PATTERN`, the same pattern dispatch parsing uses, so an accepted id always round-trips.
+- **Dispatch guard:** `ApprovedDispatchGuard` (Planner middleware) refuses at runtime any `task` call that is not an approved Sub-task carrying its approved query: none are approved during PLAN, all during RESEARCH, only the missing ones during REPAIR. Refusals are logged as `dispatch_rejected`. The Planner can still attempt a bad call; it is stopped before a Researcher runs.
 - **Not done:** corrective attempts do not yet count against a Run-wide LLM token cap (no such cap exists yet).
 
