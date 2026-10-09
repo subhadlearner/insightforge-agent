@@ -94,3 +94,12 @@ class ReportDraft(BaseModel):
     summary: str = ""
     sections: list[ReportSection]
     gaps: list[str] = Field(default_factory=list)
+
+
+class VerifiedReport(BaseModel):
+    """The draft plus Claim verdicts and the fact-check summary (design.md section 3).
+    The T3 stage is a pass-through: no verdicts are produced yet."""
+
+    draft: ReportDraft
+    verdicts: list[dict] = Field(default_factory=list)
+    summary: dict = Field(default_factory=dict)

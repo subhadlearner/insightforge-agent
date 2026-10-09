@@ -252,7 +252,8 @@ Criterion 4 (measured, not required): over 5 runs on Haiku 5.5, all `task` calls
 
 Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that later tickets thicken:
 
-- **Not yet done:** `INGESTING`, `FACT_CHECKING`, clarification, the Submission check and 422, Planner bounds (T4), Aspect coverage, memory and documents source types.
+- **Fact-check (T6):** the stage is in the topology and passes the draft through as a `VerifiedReport` whose summary says `implemented: false`. No sampling, re-fetch or verdicts.
+- **Not yet done:** `INGESTING`, clarification, the Submission check and 422, Planner bounds (T4), Aspect coverage, memory and documents source types.
 - **Extraction (T5):** one light-model call per Passage batch, no conflict detection.
 - **Synthesis (T5):** no model call. Each extracted statement is checked against its Passage (existence, every number present), de-duplicated, and given a Confidence (HIGH for two domains, else MEDIUM or LOW by credibility). Domain difference stands in for Independent Sources, and `as_of_period` is always `UNKNOWN`. Evidence over budget is cut and logged, not yet compressed.
 - **Per-call cap:** a single Passage over the cap is a batch of its own, since cutting it would break its identity. The Researcher summary reads the lead Passages that fit the cap, and logs `summary_input_limited` when it does not read the whole page.

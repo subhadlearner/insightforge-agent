@@ -1,9 +1,9 @@
 """The outer LangGraph (ADR-0001): PLANNING -> RESEARCHING -> (repair) -> EXTRACTING ->
-SYNTHESIZING -> WRITING -> COMPLETE.
+SYNTHESIZING -> WRITING -> FACT_CHECKING -> COMPLETE.
 
 Graph state holds IDs and small structured values only. Source bodies and Passage text stay
 in the SourceStore and are read by the stage that needs them, one bounded batch at a time.
-INGESTING is skipped (no uploaded documents yet) and FACT_CHECKING is a later ticket."""
+INGESTING is skipped (no uploaded documents yet); FACT_CHECKING only passes the draft through."""
 
 import uuid
 from collections.abc import Callable
@@ -26,6 +26,7 @@ from insightforge_agent.domain.contracts import (
     ResearchResults,
     SourceRef,
     SubTaskResult,
+    VerifiedReport,
 )
 from insightforge_agent.domain.models import (
     Report,
@@ -39,6 +40,7 @@ from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.dispatch import dispatches, missing_ids, resolve, segments
 from insightforge_agent.pipeline.errors import RunFailed
 from insightforge_agent.pipeline.extract import extract
+from insightforge_agent.pipeline.fact_check import fact_check
 from insightforge_agent.pipeline.synthesize import synthesize
 from insightforge_agent.pipeline.write import write_report
 
@@ -57,6 +59,7 @@ class State(TypedDict, total=False):
     extraction: dict
     bundle: dict
     draft: dict
+    verified: dict
     report_id: str
 
 
@@ -178,12 +181,19 @@ def build_graph(deps: Deps):
         draft = write_report(deps, state["owner_id"], state["run_id"], state["brief"], bundle, gaps)
         return {"draft": draft.model_dump()}
 
+    def fact_checking(state: State) -> State:
+        enter(state, RunState.FACT_CHECKING)
+        verified = fact_check(ReportDraft.model_validate(state["draft"]))
+        return {"verified": verified.model_dump()}
+
     def complete(state: State) -> State:
         owner, run_id = state["owner_id"], state["run_id"]
         draft = ReportDraft.model_validate(state["draft"])
+        verified = VerifiedReport.model_validate(state["verified"])
         report = Report(
             id=f"rep_{deps.new_id()}", owner_id=owner, run_id=run_id, created_at=deps.now(),
-            body={"brief": state["brief"], "draft": draft.model_dump(), "evidence": state["bundle"]},
+            body={"brief": state["brief"], "draft": draft.model_dump(),
+                  "verified": verified.model_dump(), "evidence": state["bundle"]},
         )
         deps.repos.reports.add(report)
         enter(state, RunState.COMPLETE)
@@ -192,7 +202,8 @@ def build_graph(deps: Deps):
     g = StateGraph(State)
     for name, fn in [("planning", planning), ("researching", researching), ("verify", verify),
                      ("repair", repair), ("collect", collect), ("extracting", extracting),
-                     ("synthesizing", synthesizing), ("writing", writing), ("complete", complete)]:
+                     ("synthesizing", synthesizing), ("writing", writing), ("fact_checking", fact_checking),
+                     ("complete", complete)]:
         g.add_node(name, fn)
     g.add_edge(START, "planning")
     g.add_edge("planning", "researching")
@@ -204,7 +215,8 @@ def build_graph(deps: Deps):
     g.add_edge("collect", "extracting")
     g.add_edge("extracting", "synthesizing")
     g.add_edge("synthesizing", "writing")
-    g.add_edge("writing", "complete")
+    g.add_edge("writing", "fact_checking")
+    g.add_edge("fact_checking", "complete")
     g.add_edge("complete", END)
     return g.compile()
 

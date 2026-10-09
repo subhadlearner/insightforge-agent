@@ -19,8 +19,7 @@ def test_brief_reaches_complete_and_stores_a_report(make_deps):
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     assert run.state == RunState.COMPLETE, [e.payload for e in events(deps, run)]
     stages = [e.payload["state"] for e in events(deps, run) if e.type == "stage"]
-    assert stages == ["PLANNING", "RESEARCHING", "EXTRACTING", "SYNTHESIZING", "WRITING",
-                      "COMPLETE"]  # INGESTING skipped
+    assert stages[0] == "PLANNING" and stages[-1] == "COMPLETE"  # INGESTING skipped
     report = deps.repos.reports.get_for_run("alice", run.id)
     claims = [c for s in report.body["draft"]["sections"] for c in s["claims"]]
     assert claims
@@ -123,3 +122,31 @@ def test_every_subtask_failing_fails_the_run(make_deps):
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     assert run.state == RunState.FAILED
     assert deps.repos.reports.list_for_owner("alice") == []
+
+
+def test_run_passes_through_fact_checking_before_complete(make_deps):
+    deps = make_deps()
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    stages = [e.payload["state"] for e in events(deps, run) if e.type == "stage"]
+    assert stages == ["PLANNING", "RESEARCHING", "EXTRACTING", "SYNTHESIZING", "WRITING",
+                      "FACT_CHECKING", "COMPLETE"]
+    assert run.state == RunState.COMPLETE
+    assert len(deps.repos.reports.list_for_owner("alice")) == 1
+
+
+def test_run_state_is_fact_checking_while_that_stage_runs(make_deps):
+    deps = make_deps()
+    seen = []
+    run_brief(deps, "alice", Brief(text=BRIEF),
+              on_state=lambda s: seen.append(deps.repos.runs.get("alice", s["run_id"]).state))
+    assert RunState.FACT_CHECKING in seen
+    assert seen.index(RunState.FACT_CHECKING) > seen.index(RunState.WRITING)
+
+
+def test_stored_report_is_the_verified_report(make_deps):
+    deps = make_deps()
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    body = deps.repos.reports.get_for_run("alice", run.id).body
+    assert set(body["verified"]) >= {"draft", "verdicts", "summary"}
+    assert body["verified"]["draft"] == body["draft"]
+    assert body["verified"]["summary"]["implemented"] is False
