@@ -29,6 +29,7 @@ from insightforge_agent.domain.contracts import (
     SubTaskResult,
     VerifiedReport,
 )
+from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.models import (
     Report,
     Run,
@@ -210,12 +211,16 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
         owner, run_id = state["owner_id"], state["run_id"]
         draft = ReportDraft.model_validate(state["draft"])
         verified = VerifiedReport.model_validate(state["verified"])
-        report = Report(
-            id=f"rep_{deps.new_id()}", owner_id=owner, run_id=run_id, created_at=deps.now(),
-            body={"brief": state["brief"], "draft": draft.model_dump(),
-                  "verified": verified.model_dump(), "evidence": state["bundle"]},
-        )
-        deps.repos.reports.add(report)
+        try:
+            # A retry after a crash between storing the Report and marking COMPLETE reuses it.
+            report = deps.repos.reports.get_for_run(owner, run_id)
+        except NotFoundError:
+            report = Report(
+                id=f"rep_{deps.new_id()}", owner_id=owner, run_id=run_id, created_at=deps.now(),
+                body={"brief": state["brief"], "draft": draft.model_dump(),
+                      "verified": verified.model_dump(), "evidence": state["bundle"]},
+            )
+            deps.repos.reports.add(report)
         enter(state, RunState.COMPLETE)
         return {"report_id": report.id}
 
@@ -258,6 +263,12 @@ def run_brief(
                 on_state(snapshot)
     except Exception as e:  # noqa: BLE001 - any failure ends the Run, with its reason logged
         reason = str(e) if isinstance(e, RunFailed) else f"{type(e).__name__}: {e}"
-        deps.log(owner_id, run.id, "run_failed", reason=reason)
-        return deps.repos.runs.set_state(owner_id, run.id, RunState.FAILED)
+        try:
+            # A Run that already stored its Report is complete, never FAILED with a Report.
+            deps.repos.reports.get_for_run(owner_id, run.id)
+        except NotFoundError:
+            deps.log(owner_id, run.id, "run_failed", reason=reason)
+            return deps.repos.runs.set_state(owner_id, run.id, RunState.FAILED)
+        deps.log(owner_id, run.id, "completion_recovered", detail=reason)
+        return deps.repos.runs.set_state(owner_id, run.id, RunState.COMPLETE)
     return deps.repos.runs.get(owner_id, run.id)

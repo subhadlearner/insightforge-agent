@@ -214,3 +214,66 @@ def test_pipeline_continues_from_the_checkpoint_without_in_memory_summaries(make
     research = deps.checkpointer.get_tuple(config).checkpoint["channel_values"]["research"]
     assert all(set(ref) == {"source_id", "title", "summary"}
                for r in research["results"] for ref in r["source_refs"])
+
+
+class Crash(BaseException):
+    """Stands in for the process dying: nothing in the pipeline catches it."""
+
+
+def _crash_once_on_complete(deps):
+    runs, armed = deps.repos.runs, {"on": True}
+    real = runs.set_state
+
+    def set_state(owner, run_id, state):
+        if state == RunState.COMPLETE and armed["on"]:
+            armed["on"] = False
+            raise Crash
+        return real(owner, run_id, state)
+
+    runs.set_state = set_state
+
+
+def test_completion_retried_after_a_crash_reuses_the_stored_report(make_deps):
+    import uuid
+
+    from insightforge_agent.domain.models import Run
+    from insightforge_agent.pipeline.graph import build_graph, outer_config
+
+    deps = make_deps()
+    run = Run(id="run_y", owner_id="alice", brief=BRIEF, state=RunState.PLANNING,
+              created_at=deps.now())
+    deps.repos.runs.add(run)
+    thread = f"thread-{uuid.uuid4()}"
+    config = outer_config(thread)
+    initial = {"thread_id": thread, "owner_id": "alice", "run_id": run.id, "brief": BRIEF}
+    _crash_once_on_complete(deps)
+    try:
+        build_graph(deps).invoke(initial, config)
+        raise AssertionError("expected the simulated crash")
+    except Crash:
+        pass
+    # Crashed after the insert and before COMPLETE: the Report exists, the Run is not FAILED.
+    (stored,) = deps.repos.reports.list_for_owner("alice")
+    assert deps.repos.runs.get("alice", run.id).state == RunState.FACT_CHECKING
+
+    build_graph(deps).invoke(None, config)  # resume from the checkpoint
+    reports = deps.repos.reports.list_for_owner("alice")
+    assert [r.id for r in reports] == [stored.id]
+    assert deps.repos.runs.get("alice", run.id).state == RunState.COMPLETE
+
+
+def test_in_process_failure_after_the_report_is_stored_is_complete_not_failed(make_deps):
+    deps = make_deps()
+    runs, real = deps.repos.runs, deps.repos.runs.set_state
+
+    def flaky(owner, run_id, state):
+        if state == RunState.COMPLETE and not getattr(flaky, "done", False):
+            flaky.done = True
+            raise RuntimeError("database hiccup")
+        return real(owner, run_id, state)
+
+    runs.set_state = flaky
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    assert len(deps.repos.reports.list_for_owner("alice")) == 1
+    assert not any(e.type == "run_failed" for e in events(deps, run))
