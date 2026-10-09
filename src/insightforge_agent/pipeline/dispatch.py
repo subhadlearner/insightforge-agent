@@ -3,13 +3,12 @@
 No I/O and no model calls, so every rule here is covered by deterministic tests.
 """
 
-import re
 from dataclasses import dataclass
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from insightforge_agent.domain.plan import SUBTASK_ID_PATTERN, SubTaskPlan
+from insightforge_agent.domain.plan import SubTaskPlan, dispatched_id
 
 RESULT_PREFIX = "RESULT:"
 FAILED_PREFIX = "FAILED:"
@@ -61,11 +60,6 @@ def segments(messages) -> dict[str, list]:
         if current is not None:
             current.append(m)
     return out
-
-
-def dispatched_id(description: str) -> str | None:
-    found = re.search(rf"SUBTASK_ID=({SUBTASK_ID_PATTERN})", description)
-    return found.group(1) if found else None
 
 
 def dispatches(messages) -> list[Dispatch]:

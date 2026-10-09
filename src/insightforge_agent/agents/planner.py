@@ -4,7 +4,6 @@ It plans in PLAN, dispatches Researchers in RESEARCH and fills gaps in REPAIR, a
 checkpointed thread. The plan is read from its `submit_plan` tool call, because
 `response_format` would force a structured-output call on every resume (design.md section 12)."""
 
-import re
 from collections.abc import Callable
 
 from deepagents import create_deep_agent
@@ -13,7 +12,12 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 
-from insightforge_agent.domain.plan import SUBTASK_ID_PATTERN, SubTaskPlan
+from insightforge_agent.domain.plan import (
+    RESEARCHER,
+    SubTaskPlan,
+    canonical_description,
+    dispatched_id,
+)
 
 PLANNER_PROMPT = """You are the Planner of a research system.
 Phase PLAN: the user gives a Brief and the source types you may use. Break the Brief into
@@ -54,14 +58,18 @@ class ApprovedDispatchGuard(AgentMiddleware):
         if call["name"] != "task":
             return handler(request)
         description = str(call["args"].get("description", ""))
-        found = re.search(rf"SUBTASK_ID=({SUBTASK_ID_PATTERN})", description)
+        sid = dispatched_id(description)
         approved = self._approved()
-        sid = found.group(1) if found else None
-        if sid in approved and approved[sid] in description:
+        if sid is None:
+            reason = "no SUBTASK_ID"
+        elif sid not in approved:
+            reason = f"{sid} is not an approved Sub-task"
+        elif description.strip() != canonical_description(sid, approved[sid]):
+            reason = f"{sid} does not carry exactly its approved scope"
+        elif call["args"].get("subagent_type") != RESEARCHER:
+            reason = f"{sid} is not dispatched to the {RESEARCHER} agent"
+        else:
             return handler(request)
-        reason = ("no SUBTASK_ID" if sid is None else
-                  f"{sid} is not an approved Sub-task" if sid not in approved else
-                  f"{sid} does not carry its approved scope")
         self._on_reject(sid or "", reason)
         return ToolMessage(
             content=f"REJECTED: {reason}. Dispatch only the approved Sub-tasks, unchanged.",

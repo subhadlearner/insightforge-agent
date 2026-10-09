@@ -1,5 +1,6 @@
 """Sub-task plan models (design.md §3)."""
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -10,6 +11,17 @@ SourceType = Literal["web", "documents", "memory"]
 # The Planner names a Sub-task in its `task` description as SUBTASK_ID=<id>, and dispatch
 # parsing reads it back with this same pattern, so an accepted id always round-trips.
 SUBTASK_ID_PATTERN = r"[A-Za-z0-9_]+"
+RESEARCHER = "researcher"
+
+
+def dispatched_id(description: str) -> str | None:
+    found = re.search(rf"SUBTASK_ID=({SUBTASK_ID_PATTERN})", description)
+    return found.group(1) if found else None
+
+
+def canonical_description(subtask_id: str, query: str) -> str:
+    """The one description a `task` call may carry for an approved Sub-task."""
+    return f"SUBTASK_ID={subtask_id} {query}"
 
 
 class Aspect(BaseModel):
