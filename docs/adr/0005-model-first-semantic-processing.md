@@ -23,7 +23,7 @@ Contracts do not change: `EvidenceItem`, Passage references, provenance and Conf
 
 - **M1:** benchmark and offline harness; no paid calls.
 - **M2:** capped, approved evaluation (initial pilot at most $5).
-- **M3:** an `EvidenceResolver` interface with today's code as the deterministic implementation and a model-backed one in shadow mode, logging disagreements and affecting no output.
+- **M3 (starts only after a successful M2 and a separate design approval):** an `EvidenceResolver` interface with today's code as the deterministic implementation and a model-backed one in shadow mode, logging disagreements and affecting no output.
 - **M4:** staged promotion per category, behind a setting, only where the evaluation gate passed and the design change is approved.
 - **M5:** remove the heuristics a model path replaces; update the ledger so every remaining semantic rule carries its justification.
 
@@ -32,6 +32,6 @@ Existing tests become golden cases that run against both implementations. CI use
 ## Consequences
 
 - T6-T8 are not blocked. T6 ships its approved acceptance criteria (including the 0.85 similarity threshold and numeric check); its Claim-versus-Passage verification joins the evaluation, and any change needs a separate approved design change.
-- T12 designs against a resolver interface rather than accumulating predicate synonym tables.
+- T12 keeps its approved design. It may use an Evidence Resolver to map natural-language predicates into its controlled vocabulary only if the M2 evaluation succeeds and a separate design change is approved. Until then T12 does not depend on a resolver, and no resolver interface is assumed to be authorised.
 - Until a category is promoted, the T5 deterministic behaviour remains in force and is not rewritten because of this ADR.
 - Cost, latency, nondeterminism and provider dependence are accepted trade-offs to be measured, not assumed away.
