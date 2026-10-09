@@ -24,13 +24,28 @@ def passages(*texts):
 def test_batches_split_at_the_cap_and_keep_every_passage_whole():
     ps = passages("a" * 400, "b" * 400, "c" * 400)  # about 100 tokens each
     batches = batch_passages(ps, 250)
-    assert [[p.index for p in b] for b in batches] == [[0, 1], [2]]
-    assert [p for b in batches for p in b] == ps
+    assert [[w.passage.index for w in b] for b in batches] == [[0, 1], [2]]
+    assert [w.passage for b in batches for w in b] == ps
+    assert all(w.parts == 1 and w.text == w.passage.text for b in batches for w in b)
 
 
-def test_a_single_oversized_passage_is_its_own_batch_not_cut():
-    big = passages("x" * 4000)
-    assert batch_passages(big, 100) == [big]
+def test_an_oversized_passage_is_read_in_windows_that_fit_the_cap_and_lose_nothing():
+    words = [f"w{i}" for i in range(400)]
+    big = passages(" ".join(words))
+    batches = batch_passages(big, 100)
+    windows = [w for b in batches for w in b]
+    assert len(windows) > 1 and len(batches) > 1
+    assert all(estimate_tokens(w.text) <= 100 for w in windows)
+    assert all(estimate_tokens("".join(w.text for w in b)) <= 100 for b in batches)
+    assert " ".join(w.text for w in windows).split() == words  # nothing truncated
+    assert {w.passage for w in windows} == set(big)  # identity untouched
+    assert [(w.part, w.parts) for w in windows] == [(n, len(windows)) for n in range(1, len(windows) + 1)]
+
+
+def test_an_unbreakable_oversized_passage_is_still_windowed():
+    windows = [w for b in batch_passages(passages("x" * 4000), 100) for w in b]
+    assert all(estimate_tokens(w.text) <= 100 for w in windows)
+    assert "".join(w.text for w in windows) == "x" * 4000
 
 
 def test_extraction_payloads_respect_the_per_call_cap(make_deps):

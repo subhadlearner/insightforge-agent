@@ -4,7 +4,7 @@ Nothing here holds a Source body. Passage text is reached only through `SourceSt
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from insightforge_agent.domain.plan import SourceType
 
@@ -37,6 +37,8 @@ class ResearchResults(BaseModel):
 
 
 class PassageRef(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     observation_id: str
     index: int
 

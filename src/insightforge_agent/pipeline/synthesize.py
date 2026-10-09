@@ -13,7 +13,7 @@
 4. Confidence counts SUPPORTED Passages only, over distinct Sources.
 5. Rank by the specified tuple, then cut whole lowest-ranked items to fit the budget."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
@@ -43,8 +43,20 @@ from insightforge_agent.domain.evidence import (
 from insightforge_agent.domain.extraction import group_key, normalise
 from insightforge_agent.domain.ids import derive_evidence_id
 from insightforge_agent.domain.models import Passage, Source
-from insightforge_agent.domain.passages import batch_passages, named_entities_in, numbers_in
-from insightforge_agent.domain.periods import UNKNOWN, parse_period, periods_overlap, stated_period
+from insightforge_agent.domain.passages import (
+    Window,
+    batch_passages,
+    named_entities_in,
+    numbers_in,
+    value_in_text,
+)
+from insightforge_agent.domain.periods import (
+    UNKNOWN,
+    parse_period,
+    period_stated_in,
+    periods_overlap,
+    stated_period,
+)
 from insightforge_agent.domain.plan import SubTask, SubTaskPlan
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import cosine
@@ -111,13 +123,6 @@ class _Candidate:
     period: str  # as the Passage states it, or UNKNOWN
 
 
-@dataclass
-class _Judged:
-    supported: list[PassageRef] = field(default_factory=list)
-    contradicted: list[PassageRef] = field(default_factory=list)
-    present_state: set[tuple[str, int]] = field(default_factory=set)
-
-
 def _key(ref: PassageRef) -> tuple[str, int]:
     return ref.observation_id, ref.index
 
@@ -133,16 +138,13 @@ def synthesize(
 ) -> EvidenceBundle:
     by_id: dict[str, SubTask] = {t.id: t for t in plan.sub_tasks}
     sources_of: dict[str, list[str]] = {t.id: [] for t in plan.sub_tasks}
-    claimed: set[str] = set()  # a Source is read for the most important Sub-task that found it
-    for result in sorted(research.results, key=lambda r: by_id[r.subtask_id].priority):
-        if result.status != "succeeded":
-            continue
-        for ref in result.source_refs:
-            if ref.source_id not in claimed:
-                claimed.add(ref.source_id)
-                sources_of[result.subtask_id].append(ref.source_id)
+    for result in research.results:
+        if result.status == "succeeded":
+            # Deduplicated within a Sub-task only: a Source several Sub-tasks found is read for each.
+            sources_of[result.subtask_id] = list(dict.fromkeys(r.source_id for r in result.source_refs))
 
-    contents = {sid: deps.store.read_source(owner_id, sid) for sid in claimed}
+    contents = {sid: deps.store.read_source(owner_id, sid)
+                for sid in dict.fromkeys(s for ids in sources_of.values() for s in ids)}
     source_by_obs: dict[str, Source] = {
         c.observation.id: c.source for c in contents.values() if c.observation is not None}
     fetched_on: dict[str, date] = {
@@ -172,6 +174,10 @@ def synthesize(
     facts_at: dict[tuple[str, int], list[ExtractedFact]] = {}
     for f in extraction.facts:
         facts_at.setdefault(_key(f.passage), []).append(f)
+    facts_by_group: dict[tuple[str, str, str], list[ExtractedFact]] = {}
+    for f in extraction.facts:
+        if f.entity and f.predicate and f.value:
+            facts_by_group.setdefault(group_key(f.entity, f.predicate, f.scope), []).append(f)
     texts_of: dict[str, list[str]] = {}  # source id -> its Passage text, to see who cites whom
 
     def source_texts(source: Source) -> list[str]:
@@ -183,7 +189,8 @@ def synthesize(
     items: list[EvidenceItem] = []
     scores: dict[str, float] = {}
     for c in merged.values():
-        item = _validate(deps, owner_id, run_id, c, source_by_obs, fetched_on, facts_at)
+        item = _validate(deps, owner_id, run_id, c, source_by_obs, fetched_on, facts_at,
+                         facts_by_group)
         if item is None:
             continue
         supporting_sources = list(dict.fromkeys(source_by_obs[r.observation_id] for r in item.supporting))
@@ -231,10 +238,10 @@ def synthesize(
     return build(kept)
 
 
-def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Passage]) -> list[_Candidate]:
-    refs = {n: PassageRef(observation_id=p.observation_id, index=p.index)
-            for n, p in enumerate(batch, start=1)}
-    numbered = "\n\n".join(f"[{n}] {p.text}" for n, p in enumerate(batch, start=1))
+def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Window]) -> list[_Candidate]:
+    refs = {n: PassageRef(observation_id=w.passage.observation_id, index=w.passage.index)
+            for n, w in enumerate(batch, start=1)}
+    numbered = "\n\n".join(f"[{n}] {w.shown}" for n, w in enumerate(batch, start=1))
     user = f"Sub-task: {task.query}\n\n{numbered}"
     deps.spend(owner_id, run_id, DRAFT_SYSTEM, user)
     try:
@@ -245,7 +252,7 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Pa
     out: list[_Candidate] = []
     for d in reply.items:
         statement = d.statement.strip()
-        cited = [refs[n] for n in dict.fromkeys(d.passages) if n in refs]
+        cited = list(dict.fromkeys(refs[n] for n in d.passages if n in refs))
         if not statement or not cited:
             deps.log(owner_id, run_id, "evidence_dropped", reason="draft cites no Passage",
                      statement=statement[:120])
@@ -278,6 +285,7 @@ def _literal_problem(c: _Candidate, passage: Passage) -> str | None:
 def _validate(
     deps: Deps, owner_id: str, run_id: str, c: _Candidate, source_by_obs: dict[str, Source],
     fetched_on: dict[str, date], facts_at: dict[tuple[str, int], list[ExtractedFact]],
+    facts_by_group: dict[tuple[str, str, str], list[ExtractedFact]],
 ) -> EvidenceItem | None:
     def drop(reason: str, **extra) -> None:
         deps.log(owner_id, run_id, "evidence_dropped", reason=reason, evidence_id=c.id,
@@ -307,11 +315,44 @@ def _validate(
     if not can_support:
         drop("no Passage passes the provenance and literal-value checks", rejected=rejected)
         return None
+    text_of = {(p.observation_id, p.index): p.text for p in candidates}
 
-    # One bounded entailment call per item, chunked when the candidates exceed the cap.
-    judged = _Judged()
+    # The structured value and the stated period are model output too: neither may decide a
+    # conflict or a ranking unless a Passage that can support the item actually states it.
+    value = c.value
+    if value and not any(value_in_text(value, text_of[k]) for k in can_support):
+        deps.log(owner_id, run_id, "value_rejected", evidence_id=c.id, value=value)
+        value = ""
+    period = c.period
+    if period != UNKNOWN and not any(period_stated_in(period, text_of[k]) for k in can_support):
+        deps.log(owner_id, run_id, "period_rejected", evidence_id=c.id, period=period)
+        period = UNKNOWN
+
+    # Passages that disagree may sit in another drafting batch. The Extraction facts say where:
+    # same entity, predicate and scope, a different value, and not a clearly different period.
+    # They go to the entailment call like any other candidate, but can never support the item.
+    if c.entity and c.predicate and value:
+        for f in facts_by_group.get(group_key(c.entity, c.predicate, c.scope), []):
+            k = _key(f.passage)
+            if (k in text_of or f.passage.observation_id not in source_by_obs
+                    or normalise(f.value) == normalise(value)
+                    or (parse_period(period) and parse_period(f.period)
+                        and not periods_overlap(period, f.period))):
+                continue
+            try:
+                challenger = deps.store.get_passages(owner_id, f.passage.observation_id,
+                                                     [f.passage.index])[0]
+            except NotFoundError:
+                continue
+            candidates.append(challenger)
+            text_of[k] = challenger.text
+
+    # One bounded entailment call per item, chunked when the candidates exceed the cap. A
+    # Passage over the cap is read in windows; its verdicts are combined per Passage.
+    verdicts: dict[tuple[str, int], set[str]] = {}
+    present_state: set[tuple[str, int]] = set()
     for batch in batch_passages(candidates, deps.passage_token_cap):
-        numbered = "\n\n".join(f"[{n}] {p.text}" for n, p in enumerate(batch, start=1))
+        numbered = "\n\n".join(f"[{n}] {w.shown}" for n, w in enumerate(batch, start=1))
         user = f"Statement: {c.statement}\n\n{numbered}"
         deps.spend(owner_id, run_id, ENTAIL_SYSTEM, user)
         try:
@@ -322,36 +363,34 @@ def _validate(
         for v in reply.verdicts:
             if not 1 <= v.passage <= len(batch):
                 continue
-            p = batch[v.passage - 1]
-            ref = PassageRef(observation_id=p.observation_id, index=p.index)
-            if v.verdict == "SUPPORTED" and _key(ref) in can_support:
-                if ref not in judged.supported:
-                    judged.supported.append(ref)
-                if v.asserts_present_state:
-                    judged.present_state.add(_key(ref))
-            elif v.verdict == "CONTRADICTED" and ref not in judged.contradicted:
-                judged.contradicted.append(ref)
-    if not judged.supported:
-        drop("no supported Passage", verdicts={"contradicted": len(judged.contradicted)})
+            k = (batch[v.passage - 1].passage.observation_id, batch[v.passage - 1].passage.index)
+            verdicts.setdefault(k, set()).add(v.verdict)
+            if v.verdict == "SUPPORTED" and v.asserts_present_state:
+                present_state.add(k)
+    supported = [PassageRef(observation_id=o, index=i) for (o, i), vs in verdicts.items()
+                 if "SUPPORTED" in vs and (o, i) in can_support]
+    contradicted = [PassageRef(observation_id=o, index=i) for (o, i), vs in verdicts.items()
+                    if "CONTRADICTED" in vs and not ("SUPPORTED" in vs and (o, i) in can_support)]
+    if not supported:
+        drop("no supported Passage", verdicts={"contradicted": len(contradicted)})
         return None
+    if period != UNKNOWN and not any(period_stated_in(period, text_of[_key(r)]) for r in supported):
+        deps.log(owner_id, run_id, "period_rejected", evidence_id=c.id, period=period)
+        period = UNKNOWN
 
-    text_of = {_key(PassageRef(observation_id=p.observation_id, index=p.index)): p.text
-               for p in candidates}
     # Primary Passage: highest Source credibility, then relevance to the item, then lowest id.
-    vectors = deps.embedder.embed([c.statement] + [
-        text_of[_key(r)]
-        for r in judged.supported])
-    similarity = {_key(r): cosine(vectors[0], v) for r, v in zip(judged.supported, vectors[1:], strict=True)}
-    primary = min(judged.supported, key=lambda r: (
+    vectors = deps.embedder.embed([c.statement] + [text_of[_key(r)] for r in supported])
+    similarity = {_key(r): cosine(vectors[0], v) for r, v in zip(supported, vectors[1:], strict=True)}
+    primary = min(supported, key=lambda r: (
         -(source_by_obs[r.observation_id].credibility_score or 0.0),
         -round(similarity[_key(r)], 6), r.observation_id, r.index))
 
-    period, derived, ambiguous = c.period, None, False
+    derived, ambiguous = None, False
     if parse_period(period) is None:
         # Nothing stated: derive from the Observation date only for a present-state assertion
         # from a Source with no publication date; otherwise the period is unknown.
-        basis = next((r for r in [primary, *judged.supported]
-                      if _key(r) in judged.present_state
+        basis = next((r for r in [primary, *supported]
+                      if _key(r) in present_state
                       and source_by_obs[r.observation_id].published_at is None), None)
         if basis is not None:
             period, derived = fetched_on[basis.observation_id].isoformat(), "observation_date"
@@ -360,14 +399,17 @@ def _validate(
         else:
             period, ambiguous = UNKNOWN, True
 
-    # Contradictions: a genuine one needs the same entity, predicate and scope and an
-    # overlapping period. Anything else is a distinct fact and is left out.
+    # Contradictions: a genuine one needs the same entity, predicate and scope, a different
+    # structured value and an overlapping period. A CONTRADICTED verdict alone is not enough:
+    # anything else is a distinct fact (or a mistaken verdict) and is left out.
+    mine = group_key(c.entity, c.predicate, c.scope)
     conflicting, contradicting, linked = False, [], []
-    for ref in judged.contradicted:
+    for ref in contradicted:
         genuine = [
             f for f in facts_at.get(_key(ref), [])
-            if c.entity and c.predicate
-            and group_key(f.entity, f.predicate, f.scope) == group_key(c.entity, c.predicate, c.scope)
+            if value and c.entity and c.predicate and f.value
+            and group_key(f.entity, f.predicate, f.scope) == mine
+            and normalise(f.value) != normalise(value)
             and periods_overlap(period, f.period)]
         if genuine:
             conflicting = True
@@ -375,17 +417,17 @@ def _validate(
             linked += [f.id for f in genuine if f.id not in linked]
         else:
             deps.log(owner_id, run_id, "contradiction_ignored", evidence_id=c.id,
-                     passage=ref.model_dump(), reason="different entity, predicate, scope or period")
+                     passage=ref.model_dump(),
+                     reason="same value, or a different entity, predicate, scope or period")
     if conflicting:
-        for ref in judged.supported:
+        for ref in supported:
             linked += [f.id for f in facts_at.get(_key(ref), [])
-                       if f.entity and group_key(f.entity, f.predicate, f.scope)
-                       == group_key(c.entity, c.predicate, c.scope) and f.id not in linked]
-
+                       if f.entity and group_key(f.entity, f.predicate, f.scope) == mine
+                       and f.id not in linked]
     return EvidenceItem(
         id=c.id, subtask_id=c.subtask.id, aspect_id=c.subtask.aspect_id, statement=c.statement,
-        confidence="LOW", supporting=judged.supported, primary=primary, entity=c.entity,
-        predicate=c.predicate, scope=c.scope, value=c.value, as_of_period=period,
+        confidence="LOW", supporting=supported, primary=primary, entity=c.entity,
+        predicate=c.predicate, scope=c.scope, value=value, as_of_period=period,
         derived_from=derived, temporally_ambiguous=ambiguous, conflicting=conflicting,
         contradicting=contradicting, conflict_fact_ids=linked,
     )

@@ -10,8 +10,8 @@ from insightforge_agent.agents.llm_json import BadModelReply, ask_json
 from insightforge_agent.domain.contracts import ExtractedFact, ExtractionResult, PassageRef
 from insightforge_agent.domain.extraction import detect_conflicts
 from insightforge_agent.domain.ids import derive_fact_id
-from insightforge_agent.domain.passages import batch_passages
-from insightforge_agent.domain.periods import UNKNOWN, stated_period
+from insightforge_agent.domain.passages import batch_passages, value_in_text
+from insightforge_agent.domain.periods import UNKNOWN, period_stated_in, stated_period
 from insightforge_agent.pipeline.deps import Deps
 
 MAX_STATEMENT_CHARS = 600  # a statement is one sentence; a pasted page is not
@@ -50,10 +50,11 @@ def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> Ex
         if contents.observation is None:
             continue
         obs_id = contents.observation.id
+        by_index = {p.index: p for p in contents.passages}
         from_source: dict[str, ExtractedFact] = {}
         for batch in batch_passages(contents.passages, deps.passage_token_cap):
-            known = {p.index for p in batch}
-            numbered = "\n\n".join(f"[{p.index}] {p.text}" for p in batch)
+            known = {w.passage.index for w in batch}
+            numbered = "\n\n".join(f"[{w.passage.index}] {w.shown}" for w in batch)
             user = f"Page title: {contents.source.title}\n\n{numbered}"
             deps.spend(owner_id, run_id, SYSTEM, user)
             try:
@@ -68,12 +69,23 @@ def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> Ex
                              passage_index=f.passage_index)
                     continue
                 statement = f.statement.strip()
+                text = by_index[f.passage_index].text
+                predicate, value = f.predicate.strip(), f.value.strip()
+                if value and not value_in_text(value, text):
+                    # A structured value the Passage does not state must not decide a conflict.
+                    deps.log(owner_id, run_id, "extraction_value_rejected", source_id=sid,
+                             passage_index=f.passage_index, value=value)
+                    predicate, value = "", ""
+                period = stated_period(f.period)
+                if period != UNKNOWN and not period_stated_in(period, text):
+                    deps.log(owner_id, run_id, "extraction_period_rejected", source_id=sid,
+                             passage_index=f.passage_index, period=period)
+                    period = UNKNOWN
                 fact = ExtractedFact(
                     id=derive_fact_id(sid, obs_id, f.passage_index, statement),
                     source_id=sid, passage=PassageRef(observation_id=obs_id, index=f.passage_index),
                     statement=statement, entities=f.entities, entity=f.entity.strip(),
-                    predicate=f.predicate.strip(), value=f.value.strip(), scope=f.scope.strip(),
-                    period=stated_period(f.period),
+                    predicate=predicate, value=value, scope=f.scope.strip(), period=period,
                 )
                 from_source.setdefault(fact.id, fact)
         deps.repos.entities.upsert_facts(owner_id, run_id, list(from_source.values()))

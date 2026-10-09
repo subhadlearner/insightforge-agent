@@ -398,8 +398,9 @@ def test_a_different_scope_or_period_is_a_distinct_fact_not_a_contradiction(worl
 
 # =============================== Synthesis: As-of period ====================================
 
-def asof_item(world, *, stated="UNKNOWN", present=False, published=None):
-    plan, research = one_source(world, published=published)
+def asof_item(world, *, stated="UNKNOWN", present=False, published=None,
+              body="BYD sold 4.27 million vehicles in 2025."):
+    plan, research = one_source(world, body=body, published=published)
     return only_item(
         world, plan, research,
         draft=draft_all(as_of_period=stated),
@@ -408,7 +409,8 @@ def asof_item(world, *, stated="UNKNOWN", present=False, published=None):
 
 
 def test_a_stated_period_is_used_as_is(world):
-    item = asof_item(world, stated="2025-Q3", present=True)
+    item = asof_item(world, stated="2025-Q3", present=True,
+                     body="BYD sold 4.27 million vehicles in Q3 2025.")
     assert (item.as_of_period, item.derived_from, item.temporally_ambiguous) == (
         "2025-Q3", None, False)
 
@@ -447,10 +449,10 @@ def ranked_world(world, bodies):
 
 
 BODIES = [
-    ("BYD sold 4.27 million vehicles in 2025.", 0.9, "2025-06"),
+    ("BYD sold 4.27 million vehicles in June 2025.", 0.9, "2025-06"),
     ("Tesla sold 1.80 million vehicles in 2019.", 0.9, "2019"),
-    ("Rivian sold 0.05 million vehicles in 2025.", 0.3, "2025-06"),
-    ("Honda sold 1.10 million vehicles in 2025.", 0.9, "2025-08"),
+    ("Rivian sold 0.05 million vehicles in June 2025.", 0.3, "2025-06"),
+    ("Honda sold 1.10 million vehicles in August 2025.", 0.9, "2025-08"),
 ]
 
 

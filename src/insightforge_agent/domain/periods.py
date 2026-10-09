@@ -65,3 +65,37 @@ def period_end(text: str | None) -> date | None:
 def stated_period(text: str | None) -> str:
     """The period as given when it can be read, else UNKNOWN."""
     return text.strip() if text and parse_period(text) else UNKNOWN
+
+
+_MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august",
+           "september", "october", "november", "december"]
+_QUARTER_WORDS = ["first", "second", "third", "fourth"]
+
+
+def period_stated_in(period: str | None, text: str) -> bool:
+    """Whether the text actually states the period: the year(s) appear in it, and so does any
+    finer part (quarter, half or month). A well-formed period the text does not state is not
+    evidence of anything."""
+    if not period or parse_period(period) is None:
+        return False
+    low = text.casefold()
+    for point in _RANGE_SPLIT.split(period.strip()):
+        m = _POINT.match(point.strip())
+        if m is None:
+            return False
+        year, quarter, half, month, _day = m.groups()
+        if year not in text:
+            return False
+        if quarter:
+            n = int(quarter[1])
+            if not any(t in low for t in (f"q{n}", f"{n}q", f"{_QUARTER_WORDS[n - 1]} quarter")):
+                return False
+        if half:
+            n = int(half[1])
+            if not any(t in low for t in (f"h{n}", f"{n}h", f"{('first', 'second')[n - 1]} half")):
+                return False
+        if month:
+            name = _MONTHS[int(month) - 1]
+            if name not in low and not re.search(rf"\b{name[:3]}\b", low):
+                return False
+    return True
