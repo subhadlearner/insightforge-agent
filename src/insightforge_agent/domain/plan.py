@@ -1,5 +1,6 @@
 """Sub-task plan models (design.md §3)."""
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -7,13 +8,29 @@ from pydantic import BaseModel, Field, model_validator
 SourceType = Literal["web", "documents", "memory"]
 
 
+# The Planner names a Sub-task in its `task` description as SUBTASK_ID=<id>, and dispatch
+# parsing reads it back with this same pattern, so an accepted id always round-trips.
+SUBTASK_ID_PATTERN = r"[A-Za-z0-9_]+"
+RESEARCHER = "researcher"
+
+
+def dispatched_id(description: str) -> str | None:
+    found = re.search(rf"SUBTASK_ID=({SUBTASK_ID_PATTERN})", description)
+    return found.group(1) if found else None
+
+
+def canonical_description(subtask_id: str, query: str) -> str:
+    """The one description a `task` call may carry for an approved Sub-task."""
+    return f"SUBTASK_ID={subtask_id} {query}"
+
+
 class Aspect(BaseModel):
-    id: str
+    id: str = Field(min_length=1)
     name: str
 
 
 class SubTask(BaseModel):
-    id: str
+    id: str = Field(pattern=f"^{SUBTASK_ID_PATTERN}$")
     aspect_id: str
     query: str
     source_type: SourceType
@@ -28,7 +45,58 @@ class SubTaskPlan(BaseModel):
     @model_validator(mode="after")
     def _references_resolve(self) -> "SubTaskPlan":
         aspect_ids = {a.id for a in self.aspects}
+        if len(aspect_ids) != len(self.aspects):
+            raise ValueError("Aspect ids are not unique")
         unknown = {t.aspect_id for t in self.sub_tasks} - aspect_ids
         if unknown:
             raise ValueError(f"Sub-tasks reference unknown aspects: {sorted(unknown)}")
         return self
+
+
+MIN_SUBTASKS = 3
+MAX_SUBTASKS = 6
+MAX_ASPECTS = 6
+
+
+def plan_violations(plan: SubTaskPlan, allowed: list[SourceType]) -> list[str]:
+    """Every way the plan is outside its bounds, as sentences fit to show the Planner."""
+    out: list[str] = []
+    n = len(plan.sub_tasks)
+    if n < MIN_SUBTASKS:
+        out.append(f"the plan has {n} Sub-tasks; it needs at least {MIN_SUBTASKS}")
+    if n > MAX_SUBTASKS:
+        out.append(f"the plan has {n} Sub-tasks; it may have at most {MAX_SUBTASKS}")
+    if len(plan.aspects) > MAX_ASPECTS:
+        out.append(f"the plan has {len(plan.aspects)} Aspects; it may have at most {MAX_ASPECTS}")
+    ids = [t.id for t in plan.sub_tasks]
+    if len(set(ids)) != len(ids):
+        out.append("Sub-task ids are not unique")
+    covered = {t.aspect_id for t in plan.sub_tasks}
+    uncovered = [a.name for a in plan.aspects if a.id not in covered]
+    if uncovered:
+        out.append(f"no Sub-task covers these Aspects: {', '.join(uncovered)}")
+    bad = sorted({t.source_type for t in plan.sub_tasks} - set(allowed))
+    if bad:
+        out.append(f"source types not allowed: {', '.join(bad)} (allowed: {', '.join(allowed)})")
+    return out
+
+
+def trim_plan(plan: SubTaskPlan) -> tuple[SubTaskPlan, list[str]]:
+    """Drop Sub-tasks beyond the maximum, lowest priority first (a larger number is lower),
+    later ones first on a tie, never the last Sub-task of an Aspect. Returns the plan and the
+    dropped ids. A plan that cannot be trimmed this way is returned unchanged."""
+    if len(plan.aspects) > MAX_ASPECTS:
+        return plan, []
+    tasks = list(plan.sub_tasks)
+    dropped: list[str] = []
+    while len(tasks) > MAX_SUBTASKS:
+        per_aspect: dict[str, int] = {}
+        for t in tasks:
+            per_aspect[t.aspect_id] = per_aspect.get(t.aspect_id, 0) + 1
+        removable = [(i, t) for i, t in enumerate(tasks) if per_aspect[t.aspect_id] > 1]
+        if not removable:
+            return plan, []
+        i, victim = max(removable, key=lambda p: (p[1].priority, p[0]))
+        dropped.append(victim.id)
+        del tasks[i]
+    return plan.model_copy(update={"sub_tasks": tasks}), dropped

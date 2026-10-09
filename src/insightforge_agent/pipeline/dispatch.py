@@ -3,13 +3,12 @@
 No I/O and no model calls, so every rule here is covered by deterministic tests.
 """
 
-import re
 from dataclasses import dataclass
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from insightforge_agent.domain.plan import SubTaskPlan
+from insightforge_agent.domain.plan import SubTaskPlan, dispatched_id
 
 RESULT_PREFIX = "RESULT:"
 FAILED_PREFIX = "FAILED:"
@@ -74,9 +73,9 @@ def dispatches(messages) -> list[Dispatch]:
             if call["name"] != "task":
                 continue
             description = str(call["args"].get("description", ""))
-            found = re.search(r"SUBTASK_ID=(\w+)", description)
-            if found:
-                out.append(Dispatch(call["id"], found.group(1), description, replies.get(call["id"])))
+            sid = dispatched_id(description)
+            if sid:
+                out.append(Dispatch(call["id"], sid, description, replies.get(call["id"])))
     return out
 
 
