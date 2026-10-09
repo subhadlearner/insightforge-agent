@@ -115,3 +115,26 @@ def test_equivalent_number_formats_are_not_conflicts_but_different_values_still_
     assert [c.fact_ids for c in conflicts] == [["f1", "f2"]]
     _, conflicts = detect_conflicts([fact("f1", "4.27 million"), fact("f2", "4.01 million")])
     assert len(conflicts) == 1
+
+
+@pytest.mark.parametrize("a,b,same", [  # the examples in the module docstring
+    ("4,270,000", "4.27 million", True),
+    ("$32,000", "32,000 dollars", True),
+    ("20%", "20 percent", True),
+    ("4.27 million", "4.27 billion", False),
+    ("4.27 million dollars", "4.27 million vehicles", False),
+    ("4.27 million", "about 4.27 million", False),
+    ("4.3 million", "4,270,000", False),
+])
+def test_the_documented_examples_hold(a, b, same):
+    assert same_value(a, b) is same
+
+
+def test_each_layer_is_reachable_on_its_own():
+    from insightforge_agent.domain.quantities import stated_by, unit_agrees
+
+    claimed = parse_value("4.27 million vehicles")
+    assert canonical_value("4.27 million vehicles") == "4270000|vehicle"
+    assert stated_by(claimed, parse_value("4,270,000 vehicles"))
+    assert not stated_by(claimed, parse_value("4,270,000 dollars"))
+    assert unit_agrees("", "anything") and not unit_agrees("dollar", "euro")

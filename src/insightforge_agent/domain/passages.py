@@ -9,7 +9,7 @@ from insightforge_agent.domain.quantities import (  # noqa: F401 - numbers_in is
     numbers_in,
     parse_value,
     quantities_in,
-    unit_agrees,
+    stated_by,
 )
 
 
@@ -137,9 +137,7 @@ def value_in_text(value: str, text: str) -> bool:
     if any(have[i:i + len(wanted)] == wanted for i in range(len(have) - len(wanted) + 1)):
         return True
     quantity = parse_value(value)  # another representation of the same exact quantity
-    return quantity is not None and any(
-        p.value == quantity.value and unit_agrees(quantity.unit, p.unit)
-        for p in quantities_in(text))
+    return quantity is not None and any(stated_by(quantity, p) for p in quantities_in(text))
 
 
 _SENTENCE_END = (".", "!", "?", ":")
