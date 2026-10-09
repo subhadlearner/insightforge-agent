@@ -37,7 +37,8 @@ from insightforge_agent.domain.models import (
     SubTaskRecord,
     SubTaskStatus,
 )
-from insightforge_agent.domain.plan import SubTaskPlan
+from insightforge_agent.domain.plan import MAX_ASPECTS, SubTaskPlan, plan_violations, trim_plan
+from insightforge_agent.domain.submission import check_submission
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.dispatch import dispatches, missing_ids, resolve, segments
 from insightforge_agent.pipeline.errors import RunFailed
@@ -46,7 +47,8 @@ from insightforge_agent.pipeline.fact_check import fact_check
 from insightforge_agent.pipeline.synthesize import synthesize
 from insightforge_agent.pipeline.write import write_report
 
-SOURCE_TYPES_ALLOWED = "web"
+# Source types a Run can actually carry out so far; documents and memory arrive in T7 and T8.
+IMPLEMENTED_SOURCE_TYPES = ["web"]
 
 
 class State(TypedDict, total=False):
@@ -54,6 +56,7 @@ class State(TypedDict, total=False):
     owner_id: str
     run_id: str
     brief: str
+    allowed_types: list[str]
     plan: dict
     repaired: bool
     missing: list[str]
@@ -116,21 +119,46 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
 
     def planning(state: State) -> State:
         enter(state, RunState.PLANNING)
-        res = planner_for(state).invoke({"messages": [HumanMessage(
-            f"PLAN. Allowed source types: {SOURCE_TYPES_ALLOWED}. Brief: {state['brief']}")]},
-            cfg(state))
-        try:
-            plan = submitted_plan(res["messages"])
-        except ValueError as e:
-            raise RunFailed(f"planning produced no valid plan: {e}") from e
-        deps.repos.subtasks.save_plan(state["owner_id"], state["run_id"], [
-            SubTaskRecord(run_id=state["run_id"], subtask=t) for t in plan.sub_tasks])
+        owner, run_id = state["owner_id"], state["run_id"]
+        allowed = state.get("allowed_types", IMPLEMENTED_SOURCE_TYPES)
+
+        def attempt(prompt: str) -> tuple[SubTaskPlan | None, list[str]]:
+            res = planner_for(state).invoke({"messages": [HumanMessage(prompt)]}, cfg(state))
+            try:
+                plan = submitted_plan(res["messages"])
+            except ValueError as e:
+                return None, [f"planning produced no valid plan: {e}"]
+            return plan, plan_violations(plan, allowed)
+
+        plan, problems = attempt(
+            f"PLAN. Allowed source types: {', '.join(allowed)}. Brief: {state['brief']}")
+        if problems:
+            deps.log(owner, run_id, "plan_correction", violations=problems)
+            rules = "\n".join(f"- {p}" for p in problems)
+            ask = (f"PLAN (correction). Your plan broke these rules:\n{rules}\n"
+                   "Call submit_plan again with a corrected plan.")
+            if any("Aspects; it may have" in p for p in problems):
+                ask += (" Consolidate genuinely related Aspects. Never drop an Aspect the Brief "
+                        "asked about.")
+            plan, problems = attempt(ask)
+            if plan is not None:
+                covered = {t.aspect_id for t in plan.sub_tasks}
+                if len(covered) <= MAX_ASPECTS:
+                    plan, trimmed = trim_plan(plan)
+                    if trimmed:
+                        deps.log(owner, run_id, "plan_trimmed", dropped=trimmed)
+                problems = plan_violations(plan, allowed)
+        if plan is None or problems:
+            raise RunFailed("; ".join(problems))
+        deps.repos.subtasks.save_plan(owner, run_id, [
+            SubTaskRecord(run_id=run_id, subtask=t) for t in plan.sub_tasks])
         return {"plan": plan.model_dump(), "repaired": False}
 
     def researching(state: State) -> State:
         enter(state, RunState.RESEARCHING)
+        approved = "\n".join(f"- {t['id']}: {t['query']}" for t in state["plan"]["sub_tasks"])
         planner_for(state).invoke({"messages": [HumanMessage(
-            "RESEARCH: dispatch the approved Sub-tasks now.")]}, cfg(state))
+            f"RESEARCH: dispatch exactly these approved Sub-tasks now:\n{approved}")]}, cfg(state))
         return {}
 
     def outcomes(state: State):
@@ -249,13 +277,16 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
 def run_brief(
     deps: Deps, owner_id: str, brief: Brief, on_state: Callable[[dict], None] | None = None,
 ) -> Run:
-    """Create a Run for the Brief and carry it to COMPLETE or FAILED. A Run that fails does
-    not raise; its reason is in the Run log. `on_state` sees every graph state snapshot."""
+    """Create a Run for the Brief and carry it to COMPLETE or FAILED. A Brief with no available
+    source type raises SubmissionRejected before any Run exists. A Run that fails does not raise; its reason is in the Run log. `on_state` sees every graph state snapshot."""
+    allowed = [t for t in check_submission(
+        brief, bool(deps.repos.reports.list_for_owner(owner_id))) if t in IMPLEMENTED_SOURCE_TYPES]
     run = Run(id=f"run_{deps.new_id()}", owner_id=owner_id, brief=brief.text,
               state=RunState.PLANNING, created_at=deps.now())
     deps.repos.runs.add(run)
     initial: State = {"thread_id": f"thread-{uuid.uuid4()}", "owner_id": owner_id,
-                      "run_id": run.id, "brief": brief.text}
+                      "run_id": run.id, "brief": brief.text,
+                      "allowed_types": allowed}
     try:
         for snapshot in build_graph(deps).stream(
                 initial, outer_config(initial["thread_id"]), stream_mode="values"):

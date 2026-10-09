@@ -253,10 +253,18 @@ Criterion 4 (measured, not required): over 5 runs on Haiku 5.5, all `task` calls
 Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that later tickets thicken:
 
 - **Fact-check (T6):** the stage is in the topology and passes the draft through as a `VerifiedReport` whose summary says `implemented: false`. No sampling, re-fetch or verdicts.
-- **Not yet done:** `INGESTING`, clarification, the Submission check and 422, Planner bounds (T4), Aspect coverage, memory and documents source types.
+- **Not yet done:** `INGESTING`, clarification, memory and documents source types.
 - **Extraction (T5):** one light-model call per Passage batch, no conflict detection.
 - **Synthesis (T5):** no model call. Each extracted statement is checked against its Passage (existence, every number present), de-duplicated, and given a Confidence (HIGH for two domains, else MEDIUM or LOW by credibility). Domain difference stands in for Independent Sources, and `as_of_period` is always `UNKNOWN`. Evidence over budget is cut and logged, not yet compressed.
 - **Per-call cap:** a single Passage over the cap is a batch of its own, since cutting it would break its identity. The Researcher summary reads the lead Passages that fit the cap, and logs `summary_input_limited` when it does not read the whole page.
 - **Researcher refs:** the Researcher names Source IDs in its `RESULT:` reply. The fetch tool records `{source_id, title, summary}` as a durable `source_summarized` run event, and the graph rebuilds `ResearchResults` from that log, so a restart mid-Run loses nothing.
 - **Search:** only Tavily is implemented; other listed providers are skipped with a warning.
 - **State:** the outer graph is checkpointed under its own thread, apart from the Planner's, and `complete` reuses an existing Report for the Run so a retry never inserts a second one. State holds the plan, extracted statements, Evidence bundle and draft, which are short sentences and not Source bodies.
+
+### T4 notes: Planner bounds and the Submission check
+
+- **Rules are pure** (`domain/plan.py`: `plan_violations`, `trim_plan`; `domain/submission.py`). The graph's `planning` node applies them: one corrective `PLAN (correction)` re-prompt on any violation, then trim to 6 by priority (never the last Sub-task of an Aspect), then fail with the violations as the reason. Logged as `plan_correction` and `plan_trimmed`.
+- **Submission check:** `run_brief` raises `SubmissionRejected` before a Run exists; the API (T10) maps it to 422. Memory counts as available when the User has any Report, a stand-in until T8 defines eligibility.
+- **Allowed types:** the Planner is offered available types that a Run can carry out today (`web` only), so a memory-only Brief with a Report passes the check but fails planning until T7/T8.
+- **Not done:** corrective attempts do not yet count against a Run-wide LLM token cap (no such cap exists yet).
+

@@ -32,3 +32,50 @@ class SubTaskPlan(BaseModel):
         if unknown:
             raise ValueError(f"Sub-tasks reference unknown aspects: {sorted(unknown)}")
         return self
+
+
+MIN_SUBTASKS = 3
+MAX_SUBTASKS = 6
+MAX_ASPECTS = 6
+
+
+def plan_violations(plan: SubTaskPlan, allowed: list[SourceType]) -> list[str]:
+    """Every way the plan is outside its bounds, as sentences fit to show the Planner."""
+    out: list[str] = []
+    n = len(plan.sub_tasks)
+    if n < MIN_SUBTASKS:
+        out.append(f"the plan has {n} Sub-tasks; it needs at least {MIN_SUBTASKS}")
+    if n > MAX_SUBTASKS:
+        out.append(f"the plan has {n} Sub-tasks; it may have at most {MAX_SUBTASKS}")
+    if len(plan.aspects) > MAX_ASPECTS:
+        out.append(f"the plan has {len(plan.aspects)} Aspects; it may have at most {MAX_ASPECTS}")
+    ids = [t.id for t in plan.sub_tasks]
+    if len(set(ids)) != len(ids):
+        out.append("Sub-task ids are not unique")
+    covered = {t.aspect_id for t in plan.sub_tasks}
+    uncovered = [a.name for a in plan.aspects if a.id not in covered]
+    if uncovered:
+        out.append(f"no Sub-task covers these Aspects: {', '.join(uncovered)}")
+    bad = sorted({t.source_type for t in plan.sub_tasks} - set(allowed))
+    if bad:
+        out.append(f"source types not allowed: {', '.join(bad)} (allowed: {', '.join(allowed)})")
+    return out
+
+
+def trim_plan(plan: SubTaskPlan) -> tuple[SubTaskPlan, list[str]]:
+    """Drop Sub-tasks beyond the maximum, lowest priority first (a larger number is lower),
+    later ones first on a tie, never the last Sub-task of an Aspect. Returns the plan and the
+    dropped ids. A plan that cannot be trimmed this way is returned unchanged."""
+    tasks = list(plan.sub_tasks)
+    dropped: list[str] = []
+    while len(tasks) > MAX_SUBTASKS:
+        per_aspect: dict[str, int] = {}
+        for t in tasks:
+            per_aspect[t.aspect_id] = per_aspect.get(t.aspect_id, 0) + 1
+        removable = [(i, t) for i, t in enumerate(tasks) if per_aspect[t.aspect_id] > 1]
+        if not removable:
+            return plan, []
+        i, victim = max(removable, key=lambda p: (p[1].priority, p[0]))
+        dropped.append(victim.id)
+        del tasks[i]
+    return plan.model_copy(update={"sub_tasks": tasks}), dropped
