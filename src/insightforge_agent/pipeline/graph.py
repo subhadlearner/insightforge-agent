@@ -133,20 +133,19 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
         plan, problems = attempt(
             f"PLAN. Allowed source types: {', '.join(allowed)}. Brief: {state['brief']}")
         if problems:
+            too_many_aspects = plan is not None and len(plan.aspects) > MAX_ASPECTS
             deps.log(owner, run_id, "plan_correction", violations=problems)
             rules = "\n".join(f"- {p}" for p in problems)
             ask = (f"PLAN (correction). Your plan broke these rules:\n{rules}\n"
                    "Call submit_plan again with a corrected plan.")
-            if any("Aspects; it may have" in p for p in problems):
+            if too_many_aspects:
                 ask += (" Consolidate genuinely related Aspects. Never drop an Aspect the Brief "
                         "asked about.")
             plan, problems = attempt(ask)
             if plan is not None:
-                covered = {t.aspect_id for t in plan.sub_tasks}
-                if len(covered) <= MAX_ASPECTS:
-                    plan, trimmed = trim_plan(plan)
-                    if trimmed:
-                        deps.log(owner, run_id, "plan_trimmed", dropped=trimmed)
+                plan, trimmed = trim_plan(plan)
+                if trimmed:
+                    deps.log(owner, run_id, "plan_trimmed", dropped=trimmed)
                 problems = plan_violations(plan, allowed)
         if plan is None or problems:
             raise RunFailed("; ".join(problems))

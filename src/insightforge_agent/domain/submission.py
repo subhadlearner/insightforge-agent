@@ -27,6 +27,5 @@ def check_submission(brief: Brief, has_eligible_reports: bool) -> list[SourceTyp
     enabled = [k for k, v in brief.source_toggles.items() if v]
     if not enabled:
         raise SubmissionRejected("every source type is switched off")
-    reasons = {"documents": "no documents were uploaded", "memory": "no earlier Report is eligible",
-               "web": "web search is unavailable"}
+    reasons = {"documents": "no documents were uploaded", "memory": "no earlier Report is eligible"}
     raise SubmissionRejected("; ".join(reasons[k] for k in enabled))

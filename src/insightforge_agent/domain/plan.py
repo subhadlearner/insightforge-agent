@@ -66,6 +66,8 @@ def trim_plan(plan: SubTaskPlan) -> tuple[SubTaskPlan, list[str]]:
     """Drop Sub-tasks beyond the maximum, lowest priority first (a larger number is lower),
     later ones first on a tie, never the last Sub-task of an Aspect. Returns the plan and the
     dropped ids. A plan that cannot be trimmed this way is returned unchanged."""
+    if len(plan.aspects) > MAX_ASPECTS:
+        return plan, []
     tasks = list(plan.sub_tasks)
     dropped: list[str] = []
     while len(tasks) > MAX_SUBTASKS:
