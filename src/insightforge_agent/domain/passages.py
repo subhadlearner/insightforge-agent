@@ -38,3 +38,22 @@ def batch_passages(passages: list[Passage], token_cap: int) -> list[list[Passage
         batches[-1].append(p)
         used += cost
     return batches
+
+
+_SENTENCE_END = (".", "!", "?", ":")
+
+
+def named_entities_in(text: str) -> set[str]:
+    """Capitalised words that are not the first word of a sentence: a cheap, deterministic
+    stand-in for the named entities of a statement. Possessives and punctuation are removed."""
+    found: set[str] = set()
+    previous = ""
+    for raw in text.split():
+        word = raw.strip("\"'()[],;:.!?")
+        if word.endswith(("'s", "’s")):
+            word = word[:-2]
+        starts_sentence = not previous or previous.endswith(_SENTENCE_END)
+        if not starts_sentence and len(word) > 1 and word[0].isupper():
+            found.add(word)
+        previous = raw
+    return found

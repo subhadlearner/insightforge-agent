@@ -24,3 +24,8 @@ def derive_observation_id(owner_id: str, source: str, fetched_at: datetime, cont
 def derive_evidence_id(run_id: str, statement: str) -> str:
     """The same statement within a Run is the same Evidence item."""
     return f"ev_{_digest(run_id, ' '.join(statement.lower().split()))}"
+
+
+def derive_fact_id(source_id: str, observation_id: str, passage_index: int, statement: str) -> str:
+    """The same statement from the same Passage is the same extracted fact."""
+    return f"fact_{_digest(source_id, observation_id, str(passage_index), ' '.join(statement.lower().split()))}"

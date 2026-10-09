@@ -210,3 +210,27 @@ class TestRunEvents:
 
     def test_there_is_no_way_to_change_or_remove_events(self, repos):
         assert not any(hasattr(repos.events, n) for n in ("update", "delete", "remove", "clear"))
+
+
+class TestEntities:
+    @staticmethod
+    def fact(fid="f1", **kw):
+        from insightforge_agent.domain.contracts import ExtractedFact, PassageRef
+
+        return ExtractedFact(id=fid, source_id="s1", passage=PassageRef(observation_id="o1", index=0),
+                             statement="BYD sold 4.27 million", entity="BYD", **kw)
+
+    def test_facts_round_trip_in_order_per_run(self, repos):
+        repos.entities.upsert_facts("alice", "r1", [self.fact("f1"), self.fact("f2")])
+        repos.entities.upsert_facts("alice", "r2", [self.fact("f3")])
+        assert [f.id for f in repos.entities.list_for_run("alice", "r1")] == ["f1", "f2"]
+
+    def test_storing_a_fact_again_replaces_it_in_place(self, repos):
+        repos.entities.upsert_facts("alice", "r1", [self.fact("f1"), self.fact("f2")])
+        repos.entities.upsert_facts("alice", "r1", [self.fact("f1", conflict=True)])
+        facts = repos.entities.list_for_run("alice", "r1")
+        assert [(f.id, f.conflict) for f in facts] == [("f1", True), ("f2", False)]
+
+    def test_other_user_sees_nothing(self, repos):
+        repos.entities.upsert_facts("alice", "r1", [self.fact("f1")])
+        assert repos.entities.list_for_run("bob", "r1") == []

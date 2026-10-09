@@ -45,10 +45,20 @@ def test_extraction_payloads_respect_the_per_call_cap(make_deps):
         assert estimate_tokens(passage_text) <= 30 + 10
 
 
-def test_evidence_over_budget_is_cut_and_each_cut_logged(make_deps):
-    deps = make_deps(evidence_budget_tokens=25)
+def test_stored_evidence_bundle_fits_the_budget_and_each_cut_is_logged(make_deps):
+    from insightforge_agent.domain.contracts import EvidenceBundle
+    from insightforge_agent.pipeline.synthesize import bundle_tokens
+
+    first = make_deps()
+    full_run = run_brief(first, "alice", Brief(text=BRIEF))
+    full = EvidenceBundle.model_validate(
+        first.repos.reports.get_for_run("alice", full_run.id).body["evidence"])
+    budget = bundle_tokens(full) - 10
+    deps = make_deps(evidence_budget_tokens=budget)
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     assert run.state == RunState.COMPLETE
+    stored = EvidenceBundle.model_validate(deps.repos.reports.get_for_run("alice", run.id).body["evidence"])
+    assert bundle_tokens(stored) <= budget
     cuts = [e for e in deps.repos.events.read_after("alice", run.id) if e.type == "evidence_cut"]
     assert cuts and all({"reason", "confidence", "evidence_id"} <= set(e.payload) for e in cuts)
 
@@ -65,7 +75,8 @@ def test_a_statement_with_a_number_not_in_its_passage_is_dropped(make_deps):
     deps = make_deps(light_model=light)
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     events = deps.repos.events.read_after("alice", run.id)
-    assert any(e.type == "evidence_dropped" and e.payload["values"] == ["9.99"] for e in events)
+    assert any(e.type == "evidence_dropped" and "9.99" in str(e.payload["rejected"])
+               for e in events)
     report = deps.repos.reports.get_for_run("alice", run.id)
     assert "9.99" not in str(report.body)
 

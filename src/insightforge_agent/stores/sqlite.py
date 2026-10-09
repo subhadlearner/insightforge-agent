@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import datetime
 
+from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.models import (
     Observation,
@@ -63,6 +64,10 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE TABLE IF NOT EXISTS run_events (
     seq INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, run_id TEXT NOT NULL,
     type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS entities (
+    owner_id TEXT NOT NULL, run_id TEXT NOT NULL, id TEXT NOT NULL, fact TEXT NOT NULL,
+    PRIMARY KEY (owner_id, run_id, id)
 );
 CREATE INDEX IF NOT EXISTS run_events_cursor ON run_events (owner_id, run_id, seq);
 """
@@ -337,6 +342,23 @@ class SqliteRunEventRepository(_Base):
         ]
 
 
+class SqliteEntityRepository(_Base):
+    def upsert_facts(self, owner_id: str, run_id: str, facts: list[ExtractedFact]) -> None:
+        with self._db:
+            self._db.executemany(
+                "INSERT INTO entities (owner_id, run_id, id, fact) VALUES (?,?,?,?) "
+                "ON CONFLICT (owner_id, run_id, id) DO UPDATE SET fact=excluded.fact",
+                [(owner_id, run_id, f.id, f.model_dump_json()) for f in facts],
+            )
+
+    def list_for_run(self, owner_id: str, run_id: str) -> list[ExtractedFact]:
+        rows = self._db.execute(
+            "SELECT fact FROM entities WHERE owner_id=? AND run_id=? ORDER BY rowid",
+            (owner_id, run_id),
+        ).fetchall()
+        return [ExtractedFact.model_validate_json(r[0]) for r in rows]
+
+
 def sqlite_path(database_url: str) -> str:
     """`sqlite:///rel.db` -> `rel.db`; `sqlite:////abs/x.db` -> `/abs/x.db`; `sqlite://` -> memory."""
     prefix = "sqlite://"
@@ -361,6 +383,7 @@ class SqliteRepos:
         self.passages = SqlitePassageRepository(self._db)
         self.reports = SqliteReportRepository(self._db)
         self.events = SqliteRunEventRepository(self._db)
+        self.entities = SqliteEntityRepository(self._db)
 
     def close(self) -> None:
         self._db.close()

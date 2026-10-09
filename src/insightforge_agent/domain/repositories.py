@@ -4,6 +4,7 @@ A record that does not exist, or belongs to someone else, is a NotFoundError."""
 
 from typing import Protocol, runtime_checkable
 
+from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.models import (
     Observation,
     Passage,
@@ -99,4 +100,18 @@ class RunEventRepository(Protocol):
         self, owner_id: str, run_id: str, after_seq: int = 0, limit: int = 500
     ) -> list[RunEvent]:
         """Events with seq greater than `after_seq`, in order: the SSE cursor."""
+        ...
+
+
+@runtime_checkable
+class EntityRepository(Protocol):
+    """Extracted entities and structured facts, with their Passage references."""
+
+    def upsert_facts(self, owner_id: str, run_id: str, facts: list[ExtractedFact]) -> None:
+        """Idempotent by fact id: a fact stored again replaces the earlier copy in place
+        (conflict detection re-stores facts with `conflict` set)."""
+        ...
+
+    def list_for_run(self, owner_id: str, run_id: str) -> list[ExtractedFact]:
+        """In the order first stored."""
         ...
