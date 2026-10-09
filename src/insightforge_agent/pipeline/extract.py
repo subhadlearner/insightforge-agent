@@ -10,7 +10,7 @@ from insightforge_agent.agents.llm_json import BadModelReply, ask_json
 from insightforge_agent.domain.contracts import ExtractedFact, ExtractionResult, PassageRef
 from insightforge_agent.domain.extraction import detect_conflicts
 from insightforge_agent.domain.ids import derive_fact_id
-from insightforge_agent.domain.passages import batch_passages, value_in_text
+from insightforge_agent.domain.passages import Window, batch_passages, render_batch, value_in_text
 from insightforge_agent.domain.periods import UNKNOWN, period_stated_in, stated_period
 from insightforge_agent.pipeline.deps import Deps
 
@@ -42,6 +42,10 @@ class _Facts(BaseModel):
     facts: list[_Fact] = Field(default_factory=list)
 
 
+def _index_label(position: int, window: Window) -> str:
+    return str(window.passage.index)
+
+
 def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> ExtractionResult:
     facts: list[ExtractedFact] = []
     entities: dict[str, None] = {}
@@ -52,9 +56,9 @@ def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> Ex
         obs_id = contents.observation.id
         by_index = {p.index: p for p in contents.passages}
         from_source: dict[str, ExtractedFact] = {}
-        for batch in batch_passages(contents.passages, deps.passage_token_cap):
+        for batch in batch_passages(contents.passages, deps.passage_token_cap, _index_label):
             known = {w.passage.index for w in batch}
-            numbered = "\n\n".join(f"[{w.passage.index}] {w.shown}" for w in batch)
+            numbered = render_batch(batch, _index_label)
             user = f"Page title: {contents.source.title}\n\n{numbered}"
             deps.spend(owner_id, run_id, SYSTEM, user)
             try:

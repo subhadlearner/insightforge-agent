@@ -48,6 +48,7 @@ from insightforge_agent.domain.passages import (
     batch_passages,
     named_entities_in,
     numbers_in,
+    render_batch,
     value_in_text,
 )
 from insightforge_agent.domain.periods import (
@@ -241,7 +242,7 @@ def synthesize(
 def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Window]) -> list[_Candidate]:
     refs = {n: PassageRef(observation_id=w.passage.observation_id, index=w.passage.index)
             for n, w in enumerate(batch, start=1)}
-    numbered = "\n\n".join(f"[{n}] {w.shown}" for n, w in enumerate(batch, start=1))
+    numbered = render_batch(batch)
     user = f"Sub-task: {task.query}\n\n{numbered}"
     deps.spend(owner_id, run_id, DRAFT_SYSTEM, user)
     try:
@@ -352,7 +353,7 @@ def _validate(
     verdicts: dict[tuple[str, int], set[str]] = {}
     present_state: set[tuple[str, int]] = set()
     for batch in batch_passages(candidates, deps.passage_token_cap):
-        numbered = "\n\n".join(f"[{n}] {w.shown}" for n, w in enumerate(batch, start=1))
+        numbered = render_batch(batch)
         user = f"Statement: {c.statement}\n\n{numbered}"
         deps.spend(owner_id, run_id, ENTAIL_SYSTEM, user)
         try:

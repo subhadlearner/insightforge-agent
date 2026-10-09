@@ -158,7 +158,7 @@ def test_extraction_batches_split_at_the_cap_never_truncating(world):
     assert [i for c in calls for i in re.findall(r"^\[(\d+)\]", c, re.MULTILINE)] == [
         str(i) for i in range(6)]  # every Passage, once, in order
     for c in calls:
-        assert estimate_tokens(c.split("\n\n", 1)[1]) <= 120 + 10
+        assert estimate_tokens(c.split("\n\n", 1)[1]) <= 120
 
 
 def test_conflicts_are_found_over_structured_facts_with_no_extra_model_call(world):
@@ -265,7 +265,7 @@ def test_candidates_over_the_cap_are_chunked_and_each_chunk_is_a_call(world):
     (item,) = world.items(world.synth(plan, research))
     assert len(item.supporting) == 4
     for call in model.calls("You judge whether") + model.calls("You draft evidence"):
-        assert estimate_tokens(call.split("\n\n", 1)[1]) <= 120 + 15
+        assert estimate_tokens(call.split("\n\n", 1)[1]) <= 120
 
 
 # =============================== Synthesis: Confidence ======================================
@@ -524,7 +524,7 @@ def test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_
     assert len(drafts) > 3 and entails  # the small cap forced splitting
     for call in drafts + entails:
         passage_text = call.split("\n\n", 1)[1]
-        assert estimate_tokens(passage_text) <= cap + 15  # per-call cap, passages only
+        assert estimate_tokens(passage_text) <= cap  # per-call cap on the rendered Passage portion
     assert 0 < bundle_tokens(bundle) <= budget  # bundle budget: a separate limit
 
 

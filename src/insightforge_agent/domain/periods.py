@@ -83,7 +83,7 @@ def period_stated_in(period: str | None, text: str) -> bool:
         m = _POINT.match(point.strip())
         if m is None:
             return False
-        year, quarter, half, month, _day = m.groups()
+        year, quarter, half, month, day = m.groups()
         if year not in text:
             return False
         if quarter:
@@ -94,8 +94,21 @@ def period_stated_in(period: str | None, text: str) -> bool:
             n = int(half[1])
             if not any(t in low for t in (f"h{n}", f"{n}h", f"{('first', 'second')[n - 1]} half")):
                 return False
-        if month:
-            name = _MONTHS[int(month) - 1]
-            if name not in low and not re.search(rf"\b{name[:3]}\b", low):
-                return False
+        if month and not _month_stated(low, year, int(month), int(day) if day else None):
+            return False
     return True
+
+
+def _month_stated(low: str, year: str, month: int, day: int | None) -> bool:
+    """The month, and for a full date the day next to it ("September 14", "14th of September",
+    or the ISO date itself). A bare number elsewhere in the text is not a day."""
+    name = _MONTHS[month - 1]
+    abbr = name[:3] + ("t?" if name == "september" else "")
+    mon = rf"(?:{name}|{abbr}\.?)"
+    if day is None:
+        return f"{year}-{month:02d}" in low or re.search(rf"\b{mon}\b", low) is not None
+    if f"{year}-{month:02d}-{day:02d}" in low:
+        return True
+    return re.search(
+        rf"\b{mon}\s+0?{day}(?!\d)|(?<!\d)0?{day}(?:st|nd|rd|th)?\s+(?:of\s+)?{mon}\b", low
+    ) is not None

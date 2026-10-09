@@ -30,7 +30,7 @@ def split_batch_world(world, *, value_b="4.01 million", scope_b="global", period
     world.page("https://b.example/y", text_b or "BYD sold 4.01 million vehicles in 2025.", cred=0.9)
     plan = world.plan(("s1", "a1", 1))
     research = world.research(s1=["https://a.test/x", "https://b.example/y"])
-    world.deps.passage_token_cap = 14  # one page per call
+    world.deps.passage_token_cap = 18  # one page per call
 
     def fact(url, fid, value, scope, period):
         src = world.deps.store.read_source(OWNER, world.sources[url])
@@ -143,8 +143,8 @@ def test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synth
     stored_before = world.deps.repos.passages.list(OWNER, observation.id)
     assert len(stored_before) == 1
 
-    def content_of(call):
-        return "\n\n".join(re.findall(r"^\[\d+\] (?:\(part \d+ of \d+\) )?(.+)$", call, re.MULTILINE))
+    def rendered_passages(call):  # everything after the one-line header, exactly as sent
+        return call.split("\n\n", 1)[1]
 
     statement = "BYD sold 4.27 million vehicles in 2025."
     model = light(
@@ -161,7 +161,7 @@ def test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synth
     assert len(model.calls("You extract facts")) > 1 and len(model.calls("You judge whether")) > 1
     for call in (model.calls("You extract facts") + model.calls("You draft evidence")
                  + model.calls("You judge whether")):
-        assert estimate_tokens(content_of(call)) <= cap
+        assert estimate_tokens(rendered_passages(call)) <= cap
     (item,) = world.items(bundle)
     assert world.deps.repos.passages.list(OWNER, observation.id) == stored_before  # not re-split
     assert item.primary == fact.passage == PassageRef(observation_id=observation.id, index=0)
@@ -216,3 +216,54 @@ def test_extraction_replaces_a_period_the_passage_does_not_state_with_unknown(wo
     (fact,) = extract(world.deps, OWNER, RUN, [sid]).facts
     assert fact.period == "UNKNOWN" and fact.value == "4.27 million"
     assert world.events("extraction_period_rejected")
+
+
+@pytest.mark.parametrize("raw_tokens", [99, 100, 101])  # boundary-sized Passages around the cap
+def test_boundary_sized_passages_in_multi_window_batches_fit_the_rendered_payload(world, raw_tokens):
+    cap = 100
+    paragraph = "BYD sold 4.27 million vehicles in 2025. " + "w" * (4 * raw_tokens - 1 - 40)
+    sid = world.page("https://a.test/x", "\n\n".join([paragraph] * 3 + ["short one."] * 3))
+    world.deps.passage_token_cap = cap
+    model = light(extract_=lambda ps, u: [],
+                  draft=lambda ps, u: [], entail=all_supported)
+    world.deps.light_model = model
+    extract(world.deps, OWNER, RUN, [sid])
+    world.synth(world.plan(("s1", "a1", 1)), world.research(s1=["https://a.test/x"]))
+    calls = model.calls("You extract facts") + model.calls("You draft evidence")
+    assert len(calls) > 2
+    for call in calls:
+        assert estimate_tokens(call.split("\n\n", 1)[1]) <= cap
+    seen = "".join(re.findall(r"w{20,}", "".join(calls)))
+    assert seen.count("w") >= 3 * (4 * raw_tokens - 41)  # every character of the long Passages was sent
+
+
+def test_extraction_clears_a_value_with_the_wrong_magnitude(world):
+    sid = world.page("https://a.test/x", "BYD sold 4.27 million cars in 2025.")
+    world.deps.light_model = light(extract_=lambda ps, u: [
+        {"passage_index": n, "statement": t, "entity": "BYD", "predicate": "units_sold",
+         "value": "4.27 billion", "period": "2025"} for n, t in ps])
+    (fact,) = extract(world.deps, OWNER, RUN, [sid]).facts
+    assert fact.value == "" and fact.predicate == ""
+    assert world.events("extraction_value_rejected")
+
+
+def test_synthesis_clears_a_value_with_the_wrong_magnitude(world):
+    plan, research, extraction = contradiction_world(world)
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": "BYD sold 4.27 million vehicles in 2025.",
+                              "passages": [n for n, _ in ps], "entity": "BYD",
+                              "predicate": "units_sold", "value": "4.27 billion",
+                              "scope": "global", "as_of_period": "2025"}],
+        entail=lambda ps, u: [
+            {"passage": n, "verdict": "SUPPORTED" if "4.27" in t else "CONTRADICTED"}
+            for n, t in ps])
+    (item,) = world.items(world.synth(plan, research, extraction))
+    assert item.value == "" and not item.conflicting
+
+
+def test_a_day_precision_period_the_passage_does_not_state_is_rejected(world):
+    item = asof_item(world, stated="2025-09-14", body="BYD sold 4.27 million vehicles in September 2025.")
+    assert item.as_of_period == "UNKNOWN" and world.events("period_rejected")
+    ok = asof_item(world, stated="2025-09-14",
+                   body="BYD sold 4.27 million vehicles on September 14, 2025.")
+    assert ok.as_of_period == "2025-09-14"

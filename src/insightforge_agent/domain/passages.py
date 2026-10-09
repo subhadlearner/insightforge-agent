@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from insightforge_agent.domain.models import Passage
@@ -41,12 +42,24 @@ class Window:
         return self.text if self.parts == 1 else f"(part {self.part} of {self.parts}) {self.text}"
 
 
-def _pieces(text: str, token_cap: int) -> list[str]:
-    """Cut `text` into pieces of at most `token_cap` estimated tokens, at whitespace where one
-    exists. Nothing is dropped except the whitespace a cut falls on."""
-    limit = max(1, 4 * token_cap - 1)  # estimate_tokens(t) = len(t) // 4 + 1
+Label = Callable[[int, Window], str]
+
+
+def position_label(position: int, window: Window) -> str:
+    return str(position)
+
+
+def render_batch(batch: list[Window], label: Label = position_label) -> str:
+    """The Passage portion of a model payload, exactly as it is sent: numbered labels, part
+    markers and separators included. The per-call cap is measured on this string."""
+    return "\n\n".join(f"[{label(n, w)}] {w.shown}" for n, w in enumerate(batch, start=1))
+
+
+def _pieces(text: str, limit: int) -> list[str]:
+    """Cut `text` into pieces of at most `limit` characters, at whitespace where one exists.
+    Nothing is dropped except the whitespace a cut falls on."""
     pieces, rest = [], text
-    while estimate_tokens(rest) > token_cap:
+    while len(rest) > limit:
         cut = rest.rfind(" ", 0, limit + 1)
         cut = cut if cut > 0 else limit
         pieces.append(rest[:cut].rstrip())
@@ -55,36 +68,72 @@ def _pieces(text: str, token_cap: int) -> list[str]:
     return [p for p in pieces if p]
 
 
-def windows_of(passage: Passage, token_cap: int) -> list[Window]:
-    pieces = _pieces(passage.text, token_cap) or [passage.text]
-    return [Window(passage, t, n, len(pieces)) for n, t in enumerate(pieces, start=1)]
+def _windows_for(passage: Passage, token_cap: int, label: Label) -> list[Window]:
+    """The Passage whole if it fits a batch of its own as rendered, else the fewest bounded
+    windows that each do."""
+    def fits(w: Window) -> bool:
+        return estimate_tokens(render_batch([w], label)) <= token_cap
+
+    whole = Window(passage, passage.text)
+    if fits(whole):
+        return [whole]
+    limit = max(1, 4 * token_cap - 1)
+    while True:
+        pieces = _pieces(passage.text, limit) or [passage.text]
+        windows = [Window(passage, t, n, len(pieces)) for n, t in enumerate(pieces, start=1)]
+        if limit <= 1 or all(fits(w) for w in windows):
+            return windows
+        limit -= 1
 
 
-def batch_passages(passages: list[Passage], token_cap: int) -> list[list[Window]]:
-    """Group Passages, in order, so each group's text fits `token_cap`. A Passage that is over
-    the cap on its own is read in several windows, never truncated and never re-split in the
-    store: each window still names the original Passage."""
+def batch_passages(
+    passages: list[Passage], token_cap: int, label: Label = position_label,
+) -> list[list[Window]]:
+    """Group Passages, in order, so each batch's rendered payload (`render_batch`) fits
+    `token_cap`. A Passage that cannot fit on its own is read in several windows, never
+    truncated and never re-split in the store: each window still names the original Passage."""
     batches: list[list[Window]] = []
-    used = 0
-    for window in (w for p in passages for w in windows_of(p, token_cap)):
-        cost = estimate_tokens(window.text)
-        if not batches or used + cost > token_cap:
-            batches.append([])
-            used = 0
-        batches[-1].append(window)
-        used += cost
+    for passage in passages:
+        for window in _windows_for(passage, token_cap, label):
+            if batches and estimate_tokens(render_batch(batches[-1] + [window], label)) <= token_cap:
+                batches[-1].append(window)
+            else:
+                batches.append([window])
     return batches
 
 
+_SPACE_CURRENCY = re.compile(r"([$€£])\s*(\d[\d,]*(?:\.\d+)?)")
+_CURRENCY = {"$": "dollar", "€": "euro", "£": "pound"}
+_VALUE_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?|[^\W\d_]+|%")
+_ALIASES = {"percentage": "percent", "pct": "percent", "usd": "dollar", "eur": "euro",
+            "gbp": "pound", "per": "per"}
+
+
+def _value_tokens(text: str) -> list[str]:
+    """Numbers (without separators) and words, with a currency or percent sign read as the unit
+    word that follows its number, so "$32,000" and "32,000 dollars" are the same value."""
+    text = _SPACE_CURRENCY.sub(lambda m: f"{m.group(2)} {_CURRENCY[m.group(1)]}", text)
+    text = re.sub(r"per\s+cent", "percent", text, flags=re.IGNORECASE)
+    tokens = []
+    for raw in _VALUE_TOKEN.findall(text):
+        if raw[0].isdigit():
+            tokens.append(raw.replace(",", "").rstrip("."))
+        else:
+            word = "percent" if raw == "%" else raw.casefold()
+            word = _ALIASES.get(word, word)
+            tokens.append(word[:-1] if len(word) > 3 and word.endswith("s") else word)
+    return tokens
+
+
 def value_in_text(value: str, text: str) -> bool:
-    """Whether a structured value is stated in the text: its numbers appear in it, or, for a
-    value with no number, the value itself does."""
-    if not value.strip():
+    """Whether a structured value is stated in the text: its numbers and units (million vs
+    billion, percent, currency) appear in it together, in order, as one run of words. Deliberately
+    conservative: an abbreviation such as "4.27m" is not matched with "4.27 million"."""
+    wanted = _value_tokens(value)
+    if not wanted:
         return False
-    numbers = numbers_in(value)
-    if numbers:
-        return numbers <= numbers_in(text)
-    return value.strip().casefold() in text.casefold()
+    have = _value_tokens(text)
+    return any(have[i:i + len(wanted)] == wanted for i in range(len(have) - len(wanted) + 1))
 
 
 _SENTENCE_END = (".", "!", "?", ":")

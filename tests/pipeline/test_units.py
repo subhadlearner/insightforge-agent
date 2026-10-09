@@ -57,7 +57,7 @@ def test_extraction_payloads_respect_the_per_call_cap(make_deps):
     for conv in extraction_calls:
         passage_text = str(conv[-1].content).split("\n\n", 1)[1]
         # every fixture paragraph is under the cap on its own, so a batch must fit it
-        assert estimate_tokens(passage_text) <= 30 + 10
+        assert estimate_tokens(passage_text) <= 30
 
 
 def test_stored_evidence_bundle_fits_the_budget_and_each_cut_is_logged(make_deps):
