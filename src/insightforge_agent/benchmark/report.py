@@ -9,10 +9,13 @@ from insightforge_agent.benchmark.cases import (
     POSITIVE_LABEL,
     BenchmarkCase,
     CaseType,
+    GroundInputs,
     InputAccess,
     LabelStatus,
+    PairLabel,
+    SupportLabel,
 )
-from insightforge_agent.benchmark.judge import JudgeStatus
+from insightforge_agent.benchmark.judge import DISPOSITION_KEY, REASON_KEY, JudgeStatus
 from insightforge_agent.benchmark.recording import RecordingError, RecordingStore, case_hash
 from insightforge_agent.benchmark.stats import (
     Interval,
@@ -29,6 +32,17 @@ STALE = "STALE"  # recorded, but for a case that has since changed: never used, 
 
 class MixedCandidateVersions(RecordingError):
     """One run holds recordings from different candidate versions, models or configurations."""
+# The label whose wrong prediction is a false contradiction, per case type.
+CONTRADICTION_LABEL = {CaseType.PAIR: PairLabel.CONTRADICTORY,
+                       CaseType.SUPPORT: SupportLabel.CONTRADICTED}
+
+NOT_EVALUATED = [
+    "False-HIGH Confidence is not evaluated: it depends on source credibility and the full "
+    "Confidence rule, which benchmark cases do not carry. INDEPENDENCE cases measure only "
+    "false independence of two Sources.",
+    "Budget-cut Evidence is not evaluated: a case holds one item, not a ranked bundle held to a "
+    "token budget, so no item can be cut.",
+]
 NO_SAFETY_PROOF = "Zero observed failures is not proof of safety; it only bounds the failure rate."
 
 
@@ -65,6 +79,16 @@ class GroupStats:
     judged_negatives: int
     fp_upper_bound: float | None      # one-sided 95% Clopper-Pearson on FP / judged negatives
     note: str | None = None
+    # PAIR and SUPPORT only: a predicted CONTRADICTORY / CONTRADICTED whose expected label differs,
+    # over judged cases not expected to be a contradiction. Separate from false merge and false
+    # support (the positive class), which it never feeds.
+    false_contradiction: Proportion | None = None
+    # Why a prediction is missing, and what the candidate's own Evidence pipeline would do to the
+    # item under test (drafted = every recorded case that reports a disposition). Counts only;
+    # a candidate that reports none leaves these empty.
+    unjudged_reasons: dict[str, int] = field(default_factory=dict)
+    dispositions: dict[str, int] = field(default_factory=dict)
+    disposition_reasons: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -87,6 +111,9 @@ class Report:
     by_expected: dict[str, GroupStats] = field(default_factory=dict)
     f1_interval: dict[str, Interval | None] = field(default_factory=dict)
     notices: list[str] = field(default_factory=list)
+    access: str = InputAccess.SEMANTIC.value  # the input view the predictions must match
+    by_ground_check: dict[str, GroupStats] = field(default_factory=dict)
+    not_evaluated: list[str] = field(default_factory=lambda: list(NOT_EVALUATED))
 
 
 @dataclass(frozen=True)
@@ -94,6 +121,8 @@ class _Row:
     case: BenchmarkCase
     status: str
     predicted: object | None  # the label if JUDGED
+    reason: str | None = None
+    diagnostics: dict | None = None
 
     @property
     def outcome(self) -> Outcome:
@@ -130,7 +159,20 @@ def group_stats(rows: list[_Row]) -> GroupStats:
     fp_upper = clopper_pearson_upper(fp, judged_neg)
     note = NO_SAFETY_PROOF if fp == 0 and judged_neg > 0 else None
     outcomes = [r.outcome for r in rows]
+    contradiction = CONTRADICTION_LABEL.get(rows[0].case.type) if rows else None
+    false_contradiction = None
+    if contradiction is not None:
+        judged_rows = [r for r in rows if r.status == JudgeStatus.JUDGED
+                       and r.case.expected != contradiction]
+        false_contradiction = proportion(
+            sum(r.predicted == contradiction for r in judged_rows), len(judged_rows))
+    unjudged = Counter(f"{r.status}: {r.reason}" for r in rows if r.reason and r.status in (
+        JudgeStatus.ABSTAIN, JudgeStatus.ERROR, JudgeStatus.NOT_APPLICABLE))
+    reported = [r.diagnostics for r in rows if r.diagnostics and DISPOSITION_KEY in r.diagnostics]
     return GroupStats(
+        false_contradiction=false_contradiction, unjudged_reasons=dict(unjudged),
+        dispositions=dict(Counter(d[DISPOSITION_KEY] for d in reported)),
+        disposition_reasons=dict(Counter(d[REASON_KEY] for d in reported if REASON_KEY in d)),
         eligible=eligible, judged=counts[JudgeStatus.JUDGED], abstain=counts[JudgeStatus.ABSTAIN],
         error=counts[JudgeStatus.ERROR], not_applicable=counts[JudgeStatus.NOT_APPLICABLE],
         not_recorded=counts[NOT_RECORDED], stale=counts[STALE],
@@ -148,11 +190,14 @@ def group_stats(rows: list[_Row]) -> GroupStats:
 def build_report(
     cases: list[BenchmarkCase], store: RecordingStore, candidate: str, run: str,
     *, allow_proposed: bool = False, candidate_version: str | None = None,
+    access: InputAccess = InputAccess.SEMANTIC,
 ) -> Report:
     """Join recorded predictions to reviewed labels. Recordings whose case has changed are
     STALE (excluded, counted as missing). A run mixing candidate versions, models or
     configurations is refused unless `candidate_version` selects one version, and even then
-    only one (model, configuration) may remain."""
+    only one (model, configuration) may remain. A recording counts only if it was made for the
+    `access` view of the case (SEMANTIC by default): a BASELINE recording is stale for a SEMANTIC
+    report and the other way round, so the two views are never accepted interchangeably."""
     everything = store.records_for(candidate, run)
     chosen = [r for r in everything if candidate_version in (None, r.candidate_version)]
     identities = {(r.candidate_version, r.model, r.config_hash) for r in chosen}
@@ -176,14 +221,15 @@ def build_report(
             continue
         proposed_in += case.label_status is LabelStatus.PROPOSED
         record = records.get(case.id)
-        fresh = {case_hash(case.prediction_view(a)) for a in InputAccess}
+        fresh = case_hash(case.prediction_view(access))
         if record is None:
             rows.append(_Row(case, NOT_RECORDED, None))
-        elif record.case_hash not in fresh:
+        elif record.case_hash != fresh:
             rows.append(_Row(case, STALE, None))
         else:
             verdict = record.verdict
-            rows.append(_Row(case, verdict.status.value, verdict.label))
+            rows.append(_Row(case, verdict.status.value, verdict.label, verdict.reason,
+                             verdict.diagnostics))
 
     exploratory = allow_proposed
     notices = []
@@ -197,6 +243,7 @@ def build_report(
             notices.append(f"{critical_out} critical case(s) are excluded because their labels "
                            "are only proposed; pass --allow-proposed for an exploratory view.")
     notices.append(NO_SAFETY_PROOF)
+    notices.append(f"Predictions must match the {access.value} input view of each case.")
     stale_total = sum(r.status == STALE for r in rows)
     if stale_total:
         notices.append(f"{stale_total} recording(s) are stale (the case changed since it was "
@@ -209,7 +256,7 @@ def build_report(
         mode="EXPLORATORY" if exploratory else "QUALIFICATION", candidate=candidate,
         candidate_version=next(iter(records.values())).candidate_version if records else None,
         run=run, exclusions=Exclusions(disputed, proposed_out, critical_out, proposed_in),
-        notices=notices,
+        notices=notices, access=access.value,
     )
     for case_type in CaseType:
         of_type = [r for r in rows if r.case.type == case_type]
@@ -220,6 +267,15 @@ def build_report(
         for category in sorted({r.case.primary_category for r in of_type}):
             report.by_category[f"{case_type.value}/{category}"] = group_stats(
                 [r for r in of_type if r.case.primary_category == category])
+        if case_type is CaseType.GROUND:
+            checks = sorted({r.case.inputs.check.value for r in of_type
+                             if isinstance(r.case.inputs, GroundInputs)})
+            for check in checks:
+                report.by_ground_check[f"GROUND/{check}"] = group_stats(
+                    [r for r in of_type if r.case.inputs.check.value == check])
+            if len(checks) > 1:
+                notices.append("GROUND combines two different checks (QUOTED_SPAN and "
+                               "CLAIM_PASSAGE); read them separately, not the combined figure.")
         for expected in sorted({r.case.expected.value for r in of_type}):
             report.by_expected[f"{case_type.value}/{expected}"] = group_stats(
                 [r for r in of_type if r.case.expected.value == expected])
@@ -258,6 +314,15 @@ def _render_group(name: str, g: GroupStats, interval: Interval | None = None) ->
             f"    FP upper bound  {g.false_positives}/{g.judged_negatives} judged negatives; "
             f"one-sided 95% upper bound {g.fp_upper_bound:.3f}"
         )
+    if g.false_contradiction is not None:
+        lines.append(f"    false contradiction {_fmt(g.false_contradiction)}  "
+                     "(predicted contradiction among judged non-contradictions)")
+    for reason, count in sorted(g.unjudged_reasons.items()):
+        lines.append(f"    unjudged: {count} x {reason}")
+    for name, count in sorted(g.dispositions.items()):
+        lines.append(f"    evidence: {count} x {name}")
+    for name, count in sorted(g.disposition_reasons.items()):
+        lines.append(f"      reason: {count} x {name}")
     if g.note:
         lines.append(f"    note: {g.note}")
     return lines
@@ -268,7 +333,8 @@ def render_text(report: Report) -> str:
     ex = report.exclusions
     lines = [
         f"BENCHMARK REPORT [{report.mode}]",
-        f"candidate={report.candidate} version={version} run={report.run}",
+        f"candidate={report.candidate} version={version} run={report.run} "
+        f"input_access={report.access}",
         *[f"! {n}" for n in report.notices],
         f"excluded: disputed={ex.disputed} proposed={ex.proposed_not_allowed} "
         f"(of which critical={ex.proposed_critical_not_allowed}); "
@@ -277,12 +343,17 @@ def render_text(report: Report) -> str:
     ]
     for name, stats in report.overall.items():
         lines += _render_group(name, stats, report.f1_interval.get(name))
+    if report.by_ground_check:
+        lines += ["", "GROUND by check (separate checks; never read together):"]
+        for name, stats in report.by_ground_check.items():
+            lines += _render_group(name, stats)
     lines += ["", "By case type / primary category:"]
     for name, stats in report.by_category.items():
         lines += _render_group(name, stats)
     lines += ["", "By case type / expected judgment:"]
     for name, stats in report.by_expected.items():
         lines += _render_group(name, stats)
+    lines += ["", "Not evaluated:", *[f"  - {n}" for n in report.not_evaluated]]
     return "\n".join(lines)
 
 

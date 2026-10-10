@@ -36,7 +36,14 @@ from insightforge_agent.benchmark.cases import (
     PredictionCase,
     SupportInputs,
 )
-from insightforge_agent.benchmark.judge import JudgeStatus, Scalar, Usage, Verdict
+from insightforge_agent.benchmark.judge import (
+    DISPOSITION_KEY,
+    REASON_KEY,
+    JudgeStatus,
+    Scalar,
+    Usage,
+    Verdict,
+)
 from insightforge_agent.benchmark.recording import RecordingStore, RunIdentity, StaleRecording
 from insightforge_agent.domain.contracts import (
     Claim,
@@ -72,8 +79,6 @@ MERGED = "MERGED"
 NOT_MERGED = "NOT_MERGED"
 DROPPED = "DROPPED_LITERAL_CHECK"            # no Passage passes the literal-value check
 PENDING = "PASSES_LITERAL_CHECK_ENTAILMENT_NOT_RUN"  # a model would decide the rest
-DISPOSITION_KEY = "evidence_disposition"
-REASON_KEY = "evidence_reason"
 
 NO_ENTAILMENT = ("T5 decides support with a model entailment call; the deterministic checks "
                  "are only a necessary condition and cannot establish support")
