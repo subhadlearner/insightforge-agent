@@ -1,6 +1,6 @@
 # Benchmark methodology (PROPOSED)
 
-**Status: PROPOSED.** Nothing here is accepted until the owner approves it at the M1 review gate (#35). Part of the spike [#26](https://github.com/subhadlearner/insightforge-agent/issues/26), implemented by M1.2 ([#30](https://github.com/subhadlearner/insightforge-agent/issues/30)). M1 is entirely offline: no model is called, and `insightforge-agent bench` has no command that runs one.
+**Status: PROPOSED.** Nothing here is accepted until the owner approves it at the M1 review gate (#35). Part of the spike [#26](https://github.com/subhadlearner/insightforge-agent/issues/26), implemented by M1.2 ([#30](https://github.com/subhadlearner/insightforge-agent/issues/30)) and M1.3 ([#31](https://github.com/subhadlearner/insightforge-agent/issues/31)). M1 is entirely offline: no model is called, and `insightforge-agent bench` has no command that runs one (`bench baseline` runs only the production deterministic logic).
 
 Code: `src/insightforge_agent/benchmark/`. Cases: `benchmarks/evidence/cases.jsonl` (written by #32; not part of M1.2). Test fixtures live apart, in `tests/fixtures/benchmark/`.
 
@@ -59,6 +59,47 @@ A zero denominator is reported as **undefined**, never as 0. Intervals are Wilso
 
 Standard library only. Wilson 95% intervals; paired bootstrap F1 intervals (95%, fixed seed, 2,000 resamples; one resample draws case ids once and applies them to every candidate, so pairing is kept; resamples where F1 is undefined are left out and counted); one-sided 95% Clopper-Pearson upper bound on the false-positive rate (`1 - 0.05 ** (1/n)` for zero failures, binomial-tail inversion otherwise); Cohen's kappa.
 
+## Deterministic baseline (M1.3)
+
+`insightforge-agent bench baseline` runs the **real** T5/T6 production functions on each case's BASELINE view, records the Verdicts and prints the report. Nothing is reimplemented; three behaviour-preserving extractions made the needed logic callable, each with golden-value regression tests: `pipeline.synthesize.merge_identity` (the merge key), `pipeline.synthesize.literal_problem` (number and name literal check) and `domain.evidence.sources_independent`. No model, search or fetch can run: those `Deps` slots are tripwires that raise if touched.
+
+Production decides most of these questions with a model (T5 drafts and judges entailment with an LLM). The baseline therefore says **NOT_APPLICABLE** wherever a judgment would need one, rather than guessing, and records what it did compute as diagnostics. Mapping (owner-approved, issue #31):
+
+| Case | Production behaviour used | Label |
+|---|---|---|
+| PAIR, merge keys equal | `merge_identity` (group key, stated period, canonical value) | SAME_FACT |
+| PAIR, keys differ | a nonmerge does not say DIFFERENT_FACT or CONTRADICTORY | NOT_APPLICABLE; the Extraction conflict rule (`detect_conflicts`) is recorded as a diagnostic, never as a label, because production also needs a model CONTRADICTED verdict |
+| PAIR, no structured fields | the merge key cannot be formed | NOT_APPLICABLE |
+| SUPPORT | `literal_problem` is only a necessary condition; support is a model verdict | always NOT_APPLICABLE; literal result and the real T5 drop outcome are recorded |
+| GROUND / CLAIM_PASSAGE | the real `fact_check()` over in-memory fixtures: `HashingEmbedder(256)`, threshold 0.85, numeric check, document path (no fetch) | `verified` -> GROUNDED, `unverified` -> NOT_GROUNDED (failure UNSUPPORTED_CLAIM below the threshold, else UNSUPPORTED_NUMBER); a historical Claim is `unchecked` -> NOT_APPLICABLE |
+| GROUND / QUOTED_SPAN | `literal_problem` of the statement against the quoted span | fail -> NOT_GROUNDED (UNSUPPORTED_NUMBER or UNSUPPORTED_ENTITY); pass -> NOT_APPLICABLE (T5 has no span-support judgment) |
+| INDEPENDENCE | `sources_independent` (different domains, neither text links to the other) | True -> INDEPENDENT, False -> DEPENDENT (never UNDETERMINED) |
+
+`fact_check` verifies by embedding similarity plus a numeric check. It is **production verification, not semantic entailment**, and every CLAIM_PASSAGE Verdict says `semantic_entailment=false`. `INDEPENDENT` means only that production's lexical predicate holds (syndication and common ownership are invisible to it). The baseline reports explicit zero tokens (it made no call) and leaves latency unknown. Scripted model replies may exercise production orchestration in tests but are never recorded as predictions.
+
+### Evidence dispositions
+
+A Verdict may carry `evidence_disposition` (and `evidence_reason`) diagnostics, which reports count: `MERGED` / `NOT_MERGED` (PAIR), `DROPPED_LITERAL_CHECK` (no Passage passes the literal-value check, with the reason: value or name not in Passage) and `PASSES_LITERAL_CHECK_ENTAILMENT_NOT_RUN` (a model would decide the rest). A candidate that reports none leaves them out. **Budget-cut Evidence cannot be shown**: a case holds one item, not a ranked bundle, so the report lists it as not evaluated.
+
+## Reporting additions (M1.3)
+
+- **Input view is strict.** `build_report(..., access=)` and `bench report --input-access` take the view the candidate was meant to see (`SEMANTIC` default, `BASELINE` for the baseline). A recording made on the other view is stale (excluded, counted as missing); the two hashes are never accepted interchangeably.
+- **False contradiction** (PAIR: predicted CONTRADICTORY, SUPPORT: predicted CONTRADICTED, where the expected label differs) is reported on its own, over judged cases not expected to be a contradiction. It is separate from false merge and false support.
+- **GROUND subtypes** `QUOTED_SPAN` and `CLAIM_PASSAGE` have their own groups; the combined GROUND figure carries a notice not to read it as one thing.
+- **Accounting.** Coverage, abstain, error, NOT_APPLICABLE, not-recorded and stale are counted separately, and each unjudged status is counted by its reason.
+- **Not evaluated, stated in every report:** false-HIGH Confidence (it needs source credibility and the full Confidence rule, which cases do not carry; INDEPENDENCE measures false independence only) and budget-cut Evidence.
+
+## CI tiers
+
+| Tier | Marker | What it proves | Network |
+|---|---|---|---|
+| 1 | `baseline` | the real deterministic production logic on cases | blocked |
+| 2 | `replay` | recorded predictions, replay, stale recordings, reports | blocked |
+| 3 | `scripted` | parsing, invalid output, retries and failure handling, using `tests/scripted.py` | blocked |
+| 4 | `live` | a real model or server; on demand only | allowed |
+
+`pytest` excludes `live` through `addopts` (`-m 'not live'`), and CI runs `uv run pytest -m baseline`, `-m replay`, `-m scripted`, then the rest (`.github/workflows/ci.yml`). Tiers 1-3 (every non-`live` test) fail on a connection to a non-loopback address or a DNS lookup of a non-loopback name; the attempt is remembered, so code that swallows the error still fails the test at teardown. **Do not pass `-m live` casually: the live tests use your real environment and `.env`.** A recording can never replace a reviewed label (predictions and cases are stored apart), and a live recording needs review before becoming a fixture.
+
 ## Limitations
 
 - **Zero observed failures is not proof of safety.** With `n` judged negatives and none failed, the rate may still be as high as the one-sided upper bound (about 5% at n = 59). Small benchmarks give wide intervals; the pilot is indicative, not a qualification of any candidate.
@@ -66,6 +107,9 @@ Standard library only. Wilson 95% intervals; paired bootstrap F1 intervals (95%,
 - Synthetic cases may not resemble real Passages. Reviewers are few; kappa measures agreement, not correctness.
 - Bootstrap intervals assume cases are exchangeable; they are not adjusted for correlated cases from one Source.
 - Abstention can raise precision and lower FPR; read them with coverage and the worst-case FPR.
+- The baseline is a floor, not a verdict on semantics: lexical and structural checks only. Its high NOT_APPLICABLE share is the honest result; coverage is never inflated by guessing.
+- A PAIR case's merge-key outcome depends on the structured fields the case supplies, which stand in for T5's drafting model.
+- CLAIM_PASSAGE uses a hashing embedder (bag of words): near-paraphrases score low, and near-copies with one changed word score high.
 - Recorded runs are replayed for reporting. A recording is bound to the exact prediction-facing case by a content hash.
 
 ## Code boundary (import-linter)
