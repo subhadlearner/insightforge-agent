@@ -2,6 +2,7 @@
 
 Nothing here holds a Source body. Passage text is reached only through `SourceStore`."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -126,10 +127,46 @@ class ReportDraft(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+class ClaimVerdict(BaseModel):
+    """The Fact-Checker's verdict on one sampled Claim, named by its position in the draft.
+    `matched` is the new Passage that best matches the Claim; `original` is the Passage the
+    Claim cites, which a check never changes."""
+
+    section: int
+    claim: int
+    evidence_id: str
+    verdict: Literal["verified", "unverified", "unchecked"]
+    check: Literal["web_refetch", "document_passages", "not_checkable"]
+    original: PassageRef
+    similarity: float | None = None
+    matched: PassageRef | None = None
+    reason: str = ""
+
+
 class VerifiedReport(BaseModel):
-    """The draft plus Claim verdicts and the fact-check summary (design.md section 3).
-    The T3 stage is a pass-through: no verdicts are produced yet."""
+    """The draft plus Claim verdicts and the fact-check summary (design.md sections 3 and 7).
+    An `unverified` Claim's text in `draft` ends with `UNVERIFIED_MARK`."""
 
     draft: ReportDraft
-    verdicts: list[dict] = Field(default_factory=list)
+    verdicts: list[ClaimVerdict] = Field(default_factory=list)
     summary: dict = Field(default_factory=dict)
+
+
+class Citation(BaseModel):
+    """What the citation drawer shows for one Claim: its primary Passage and that Passage's
+    Source. Resolved from stored records, so it exists for every Claim, sampled or not."""
+
+    section: int
+    claim: int
+    evidence_id: str
+    source_id: str
+    source_title: str
+    published_at: datetime | None = None
+    credibility_score: float | None = None
+    passage: PassageRef
+    passage_text: str
+    page: int | None = None
+    section_heading: str | None = None
+
+
+UNVERIFIED_MARK = " [UNVERIFIED]"

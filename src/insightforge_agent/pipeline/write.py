@@ -4,9 +4,11 @@ The Writer never sees Passage text. Every Claim must cite an existing Evidence i
 contain only numbers that item contains. Violations are retried with the offending Claims
 listed as a constraint, up to `writer_retries` times."""
 
+import re
+
 from insightforge_agent.agents.llm_json import BadModelReply, ask_json
 from insightforge_agent.domain.contracts import EvidenceBundle, ReportDraft
-from insightforge_agent.domain.passages import numbers_in
+from insightforge_agent.domain.passages import named_entities_in, numbers_in
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.errors import RunFailed
 
@@ -16,6 +18,30 @@ SYSTEM = """You write a cited intelligence report from an Evidence bundle. Reply
 Rules: every claim cites exactly one evidence_id from the bundle and states only what that
 item says; every number and name in a claim must appear in the cited item; use one section
 per bundle section, with its heading. Do not invent evidence ids."""
+
+
+# Words that begin a sentence without naming anything. Kept to articles, determiners and
+# pronouns; any other capitalised opening word must appear in the cited item.
+_OPENERS = {"the", "a", "an", "this", "that", "these", "those", "it", "its", "their", "they"}
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?:])\s+")
+
+
+def _opening_names(text: str) -> set[str]:
+    """Capitalised first words of each sentence, which `named_entities_in` skips."""
+    found = set()
+    for sentence in _SENTENCE_SPLIT.split(text.strip()):
+        words = sentence.split()
+        word = words[0].strip("\"'()[],;:.!?") if words else ""
+        if word.endswith(("'s", "\u2019s")):
+            word = word[:-2]
+        if len(word) > 1 and word[0].isupper() and word.casefold() not in _OPENERS:
+            found.add(word)
+    return found
+
+
+def _words(text: str) -> set[str]:
+    cleaned = text.replace("\u2019s", "").replace("'s", "")
+    return {w.strip("\"'()[],;:.!?").casefold() for w in cleaned.split()}
 
 
 def violations(draft: ReportDraft, bundle: EvidenceBundle) -> list[str]:
@@ -33,6 +59,10 @@ def violations(draft: ReportDraft, bundle: EvidenceBundle) -> list[str]:
         if extra:
             problems.append(
                 f"claim {c.text!r} has values {sorted(extra)} not in evidence {item.id}")
+        known = _words(item.statement) | _words(item.entity)
+        names = sorted(n for n in named_entities_in(c.text) | _opening_names(c.text) if n.casefold() not in known)
+        if names:
+            problems.append(f"claim {c.text!r} has names {names} not in evidence {item.id}")
     return problems
 
 

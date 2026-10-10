@@ -22,6 +22,7 @@ Disposition key: **keep** (belongs in code: invariant, arithmetic, policy), **ca
 | 14 | Controlled predicate vocabulary, cardinality and Finding identity | T12 (design §8) | Finding identity | Structural rules | **owned elsewhere** and authoritative; a model may map predicates into it |
 | 15 | Credibility score from domain type and recency | `agents/web.credibility_score` | Source credibility | First simple score; byline and date extraction deferred | owned by the later credibility work; a policy input, not evaluated here |
 | 16 | Confidence rules, ranking tuple, bucket thresholds, budget compression, windowing, token caps | `domain/evidence.py`, `domain/passages.py` | Policy and limits | Explicit policy and invariants | **keep** |
+| 17 | Writer name check: capitalised words in a Claim (sentence-initial ones too, except articles, determiners and pronouns) must appear in the cited item's statement or entity | `pipeline/write.violations`, `domain/passages.named_entities_in` | Whether a Claim invents a name | Approved T6 criterion ("every number and named entity appears in the item"); reuses row 1's cheap check | **approved criterion**; shares row 1's false-positive risk, in the evaluation |
 
 Notes:
 

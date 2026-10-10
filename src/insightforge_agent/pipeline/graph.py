@@ -3,7 +3,7 @@ SYNTHESIZING -> WRITING -> FACT_CHECKING -> COMPLETE.
 
 Graph state holds IDs and small structured values only. Source bodies and Passage text stay
 in the SourceStore and are read by the stage that needs them, one bounded batch at a time.
-INGESTING is skipped (no uploaded documents yet); FACT_CHECKING only passes the draft through."""
+INGESTING is skipped (no uploaded documents yet)."""
 
 import uuid
 from collections.abc import Callable
@@ -242,7 +242,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
 
     def fact_checking(state: State) -> State:
         enter(state, RunState.FACT_CHECKING)
-        verified = fact_check(ReportDraft.model_validate(state["draft"]))
+        verified = fact_check(
+            deps, state["owner_id"], state["run_id"], ReportDraft.model_validate(state["draft"]),
+            EvidenceBundle.model_validate(state["bundle"]))
         return {"verified": verified.model_dump()}
 
     def complete(state: State) -> State:

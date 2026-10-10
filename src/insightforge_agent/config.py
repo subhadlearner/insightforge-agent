@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     evidence_budget_tokens: int = 6000
     passage_token_cap: int = 3000
     run_token_cap: int | None = None  # None: no cap on the model tokens a Run may spend
+    fact_check_rate: float = 0.2
+    fact_check_minimum: int = 5
+    similarity_threshold: float = 0.85
     credibility_high: float = 0.65
     credibility_medium: float = 0.4
     recency_fresh_days: int = 365
