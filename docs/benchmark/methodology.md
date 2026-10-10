@@ -68,6 +68,14 @@ Standard library only. Wilson 95% intervals; paired bootstrap F1 intervals (95%,
 - Abstention can raise precision and lower FPR; read them with coverage and the worst-case FPR.
 - Recorded runs are replayed for reporting. A recording is bound to the exact prediction-facing case by a content hash.
 
+## Code boundary (import-linter)
+
+- **Production never imports the benchmark** (domain, pipeline, agents, stores, api, scheduler, config, llm, embeddings, demo).
+- **Benchmark to production is allowed for the logic a baseline must run**, so M1.3 adapters call the real T5 and T6 functions rather than reimplementing them: `domain.*` (including `evidence`, read only), `pipeline.synthesize`, `extract`, `fact_check`, `write`, `deps`, `citations`, `stores.source_store`, `stores.memory`, `embeddings`. Models are injected, so offline runs use scripted fakes.
+- **Banned**: `llm` and `pipeline.wiring` / `pipeline.graph` even through import chains (they build real models or run the whole graph); and direct imports of `agents`, `config`, `api`, `scheduler`, `stores.sqlite`, `pipeline.dispatch`, `demo`. `config` cannot be banned through chains because `pipeline.deps` reaches it via `agents.web` (settings only; no model or network call at import); removing that would refactor production code and belongs, if wanted, to M1.3.
+- Evidence Confidence stays out of reach of model scores because a `Verdict` has no confidence field (tested), not because `domain.evidence` is unimportable.
+- Paid or network use also needs a client library; none is a dependency, and a test checks that no benchmark module imports one.
+
 ## Recording and replay
 
 A record is keyed by `(candidate, case_id, run)` and carries the candidate version, model, a safe configuration (an explicit allow-list of fields; anything else is dropped and its name noted), configuration and case hashes. Re-recording identical content is a no-op; any difference (including a different candidate version) fails. A recording is **stale** when its case hash, candidate version, model or configuration hash no longer matches: resume refuses it (use a new run id) and replay refuses it; a report excludes it and counts it as missing. A run holding more than one candidate version, model or configuration is never aggregated: the report errors unless `--candidate-version` selects one. Secrets are redacted before anything is written.

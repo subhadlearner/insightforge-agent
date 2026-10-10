@@ -73,18 +73,35 @@ source_modules = [
 ]
 forbidden_modules = ["insightforge_agent.benchmark"]
 
+# benchmark -> production boundary (M1.3 baseline adapters call the real T5/T6 functions).
+# Allowed: the pure logic modules (domain, pipeline.synthesize / extract / fact_check / write /
+# deps / citations, stores.source_store / memory, embeddings). Banned: everything that builds a
+# real model, opens a network connection, or runs the whole graph. The first contract bans model
+# construction and the graph even through an import chain; the second bans direct imports of the
+# remaining live or service modules. pipeline.deps imports agents.web, which imports config
+# (settings only: no model, no call at import), so config can be banned directly but not through
+# chains without refactoring production code, which M1.2 must not do.
 [[tool.importlinter.contracts]]
-name = "the benchmark is offline and cannot touch production wiring or Confidence"
+name = "the benchmark never reaches model construction or the full pipeline graph"
 type = "forbidden"
 source_modules = ["insightforge_agent.benchmark"]
 forbidden_modules = [
-    "insightforge_agent.pipeline",
+    "insightforge_agent.llm",
+    "insightforge_agent.pipeline.wiring",
+    "insightforge_agent.pipeline.graph",
+]
+
+[[tool.importlinter.contracts]]
+name = "the benchmark imports no live, network or service module directly"
+type = "forbidden"
+source_modules = ["insightforge_agent.benchmark"]
+forbidden_modules = [
     "insightforge_agent.agents",
-    "insightforge_agent.stores",
+    "insightforge_agent.config",
     "insightforge_agent.api",
     "insightforge_agent.scheduler",
-    "insightforge_agent.config",
-    "insightforge_agent.llm",
-    "insightforge_agent.embeddings",
-    "insightforge_agent.domain.evidence",
+    "insightforge_agent.stores.sqlite",
+    "insightforge_agent.pipeline.dispatch",
+    "insightforge_agent.demo",
 ]
+allow_indirect_imports = true

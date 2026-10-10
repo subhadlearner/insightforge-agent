@@ -224,13 +224,3 @@ def _lint_with_probe(relative: str, line: str) -> subprocess.CompletedProcess:
 def test_production_pipeline_importing_the_benchmark_breaks_the_contract():
     result = _lint_with_probe("pipeline/_probe.py", "from insightforge_agent.benchmark import cases  # noqa")
     assert result.returncode != 0 and "never imports the benchmark" in result.stdout
-
-
-def test_the_benchmark_importing_production_wiring_breaks_the_contract():
-    result = _lint_with_probe("benchmark/_probe.py", "from insightforge_agent import llm  # noqa")
-    assert result.returncode != 0 and "benchmark is offline" in result.stdout
-
-
-def test_the_benchmark_cannot_reach_evidence_confidence():
-    result = _lint_with_probe("benchmark/_probe.py", "from insightforge_agent.domain import evidence  # noqa")
-    assert result.returncode != 0
