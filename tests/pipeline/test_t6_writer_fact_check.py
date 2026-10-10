@@ -247,6 +247,22 @@ def test_writer_rejects_a_name_the_evidence_does_not_contain():
     assert ok == [] and len(bad) == 1 and "Tesla" in bad[0]
 
 
+def test_writer_rejects_a_sentence_initial_name_the_evidence_does_not_contain():
+    bundle = bundle_with("BYD sold 4.27 million vehicles in 2025.")
+    bad = violations(draft_of(["Tesla sold 4.27 million vehicles in 2025."], ["ev_1"]), bundle)
+    second = violations(draft_of(["BYD sold 4.27 million vehicles in 2025. Tesla did not."],
+                                 ["ev_1"]), bundle)
+    assert len(bad) == 1 and "Tesla" in bad[0]
+    assert len(second) == 1 and "Tesla" in second[0]
+
+
+def test_writer_allows_an_article_or_an_item_word_to_open_a_claim():
+    bundle = bundle_with("BYD sold 4.27 million vehicles in 2025.")
+    assert violations(draft_of(["The sales were 4.27 million vehicles in 2025."], ["ev_1"]),
+                      bundle) == []
+    assert violations(draft_of(["BYD sold 4.27 million vehicles in 2025."], ["ev_1"]), bundle) == []
+
+
 def test_writer_allows_a_possessive_of_a_name_in_the_evidence():
     bundle = bundle_with("The company expanded to 70 countries.", entity="BYD")
     assert violations(draft_of(["The firm grew. BYD's network spans 70 countries."],

@@ -4,6 +4,8 @@ The Writer never sees Passage text. Every Claim must cite an existing Evidence i
 contain only numbers that item contains. Violations are retried with the offending Claims
 listed as a constraint, up to `writer_retries` times."""
 
+import re
+
 from insightforge_agent.agents.llm_json import BadModelReply, ask_json
 from insightforge_agent.domain.contracts import EvidenceBundle, ReportDraft
 from insightforge_agent.domain.passages import named_entities_in, numbers_in
@@ -18,8 +20,27 @@ item says; every number and name in a claim must appear in the cited item; use o
 per bundle section, with its heading. Do not invent evidence ids."""
 
 
+# Words that begin a sentence without naming anything. Kept to articles, determiners and
+# pronouns; any other capitalised opening word must appear in the cited item.
+_OPENERS = {"the", "a", "an", "this", "that", "these", "those", "it", "its", "their", "they"}
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?:])\s+")
+
+
+def _opening_names(text: str) -> set[str]:
+    """Capitalised first words of each sentence, which `named_entities_in` skips."""
+    found = set()
+    for sentence in _SENTENCE_SPLIT.split(text.strip()):
+        words = sentence.split()
+        word = words[0].strip("\"'()[],;:.!?") if words else ""
+        if word.endswith(("'s", "\u2019s")):
+            word = word[:-2]
+        if len(word) > 1 and word[0].isupper() and word.casefold() not in _OPENERS:
+            found.add(word)
+    return found
+
+
 def _words(text: str) -> set[str]:
-    cleaned = text.replace("’s", "").replace("'s", "")
+    cleaned = text.replace("\u2019s", "").replace("'s", "")
     return {w.strip("\"'()[],;:.!?").casefold() for w in cleaned.split()}
 
 
@@ -39,7 +60,7 @@ def violations(draft: ReportDraft, bundle: EvidenceBundle) -> list[str]:
             problems.append(
                 f"claim {c.text!r} has values {sorted(extra)} not in evidence {item.id}")
         known = _words(item.statement) | _words(item.entity)
-        names = sorted(n for n in named_entities_in(c.text) if n.casefold() not in known)
+        names = sorted(n for n in named_entities_in(c.text) | _opening_names(c.text) if n.casefold() not in known)
         if names:
             problems.append(f"claim {c.text!r} has names {names} not in evidence {item.id}")
     return problems
