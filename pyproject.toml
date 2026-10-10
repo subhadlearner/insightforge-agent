@@ -55,3 +55,36 @@ forbidden_modules = [
     "insightforge_agent.config",
     "insightforge_agent.llm",
 ]
+
+[[tool.importlinter.contracts]]
+name = "production code never imports the benchmark"
+type = "forbidden"
+source_modules = [
+    "insightforge_agent.domain",
+    "insightforge_agent.pipeline",
+    "insightforge_agent.agents",
+    "insightforge_agent.stores",
+    "insightforge_agent.api",
+    "insightforge_agent.scheduler",
+    "insightforge_agent.config",
+    "insightforge_agent.llm",
+    "insightforge_agent.embeddings",
+    "insightforge_agent.demo",
+]
+forbidden_modules = ["insightforge_agent.benchmark"]
+
+[[tool.importlinter.contracts]]
+name = "the benchmark is offline and cannot touch production wiring or Confidence"
+type = "forbidden"
+source_modules = ["insightforge_agent.benchmark"]
+forbidden_modules = [
+    "insightforge_agent.pipeline",
+    "insightforge_agent.agents",
+    "insightforge_agent.stores",
+    "insightforge_agent.api",
+    "insightforge_agent.scheduler",
+    "insightforge_agent.config",
+    "insightforge_agent.llm",
+    "insightforge_agent.embeddings",
+    "insightforge_agent.domain.evidence",
+]
