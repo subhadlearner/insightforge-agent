@@ -186,10 +186,10 @@ def test_the_baseline_command_records_and_reports_the_baseline_view(tmp_path, ca
     # The same recordings reported as a SEMANTIC view are stale, not silently accepted.
     assert bench(["report", "--cases", str(path), "--recordings", str(tmp_path / "rec"),
                   "--candidate", b.CANDIDATE, "--run", "r1", "--input-access", "SEMANTIC"]) == 0
-    assert capsys.readouterr().out.count("stale=1") == 2  # one PAIR, one INDEPENDENCE
+    assert "  PAIR: eligible=1 judged=0 abstain=0 error=0 not_applicable=0 not_recorded=0 stale=1" in capsys.readouterr().out
     assert bench(["report", "--cases", str(path), "--recordings", str(tmp_path / "rec"),
                   "--candidate", b.CANDIDATE, "--run", "r1", "--input-access", "BASELINE"]) == 0
-    assert capsys.readouterr().out.count("stale=0") == 2
+    assert "  PAIR: eligible=1 judged=1 abstain=0 error=0 not_applicable=0 not_recorded=0 stale=0" in capsys.readouterr().out
 
 
 def test_a_changed_case_under_the_same_baseline_run_is_refused(tmp_path, capsys):
