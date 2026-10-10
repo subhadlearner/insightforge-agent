@@ -35,9 +35,10 @@ COMPOSITION = {
     },
     CaseType.INDEPENDENCE: {"syndicated": 2, "genuinely_independent": 2},
 }
-CRITICAL_CATEGORIES = {
-    "false_merge_negative", "contradiction", "irrelevant_quotation", "forecast_vs_historical",
-    "t6_similarity_numeric", "syndicated",
+# Critical: every PAIR negative (false-merge risk, including period/scope and temporal negatives),
+# every SUPPORT negative, and the syndicated INDEPENDENCE cases.
+CRITICAL_SUPPORT_AND_INDEPENDENCE = {
+    "irrelevant_quotation", "forecast_vs_historical", "t6_similarity_numeric", "syndicated",
 }
 LOOK_ALIKES = {
     "million_vs_billion", "dollars_vs_vehicles", "rounded_vs_exact", "same_name_different_entity",
@@ -82,8 +83,18 @@ def test_the_set_is_negative_heavy_with_both_controls_for_every_type(cases):
 
 def test_critical_is_set_exactly_for_the_costly_categories(cases):
     for case in cases:
-        assert case.critical == (case.primary_category in CRITICAL_CATEGORIES), case.id
-    assert sum(c.critical for c in cases) == 22
+        expected = (case.type is CaseType.PAIR and case.expected != POSITIVE_LABEL[case.type])             or case.primary_category in CRITICAL_SUPPORT_AND_INDEPENDENCE
+        assert case.critical == expected, case.id
+    assert {c.id for c in cases if c.critical and c.primary_category in
+            {"period_scope_mismatch", "temporal_ambiguity"}} == {
+        "p-ps-01", "p-ps-02", "p-ps-03", "p-ps-04", "p-ta-02", "p-ta-03"}
+    assert sum(c.critical for c in cases) == 28
+
+
+def test_the_contradictory_single_valued_pair_states_one_exact_date(cases):
+    case = next(c for c in cases if c.id == "p-ct-03")
+    assert case.inputs.statement_a.endswith("as of 1 March 2025.")
+    assert case.inputs.statement_b.endswith("as of 1 March 2025.")
 
 
 def test_critical_cases_are_never_positives_except_by_construction(cases):
