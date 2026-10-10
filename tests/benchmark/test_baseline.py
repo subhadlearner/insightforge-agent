@@ -180,6 +180,36 @@ def test_the_baseline_reports_explicit_zero_usage_and_no_model_scores():
     assert v.model_scores is None
 
 
+def test_a_tripwire_is_not_swallowed_into_an_error_verdict(monkeypatch):
+    def touch_model(self, case, g):
+        raise AssertionError("the deterministic baseline must not use a model (invoke)")
+
+    monkeypatch.setattr(b.DeterministicBaseline, "_claim_passage", touch_model)
+    case = ground_claim()
+    with pytest.raises(AssertionError, match="must not use"):
+        judge(case)
+
+
+def ground_claim():
+    text = "BYD sold 4.27 million vehicles in 2025."
+    return make_case("GROUND", "g", expected="GROUNDED", inputs={
+        "check": "CLAIM_PASSAGE", "claim": text, "passage_text": text,
+        "passage_ref": {"observation_id": "o", "index": 0}})
+
+
+def test_run_baseline_checks_every_case_before_recording_any(tmp_path):
+    store = RecordingStore(tmp_path)
+    one, two = independence("https://a.example/x", "https://b.test/y", case_id="c0"), \
+        independence("https://a.example/x", "https://b.test/y", case_id="c1")
+    b.run_baseline([one, two], store, "r1")
+    changed = two.model_copy(update={"inputs": two.inputs.model_copy(
+        update={"source_b_url": "https://c.test/y"})})
+    fresh = independence("https://d.example/x", "https://e.test/y", case_id="c-new")
+    with pytest.raises(Exception, match="c1"):
+        b.run_baseline([fresh, one, changed], store, "r1")
+    assert store.get(b.CANDIDATE, "c-new", "r1") is None  # nothing was half-written
+
+
 def test_the_model_search_and_fetch_slots_are_tripwires():
     repos = MemoryRepos()
     deps = b._deps(repos, SourceStore(repos.sources, repos.observations, repos.passages))

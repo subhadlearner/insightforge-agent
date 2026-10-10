@@ -32,6 +32,8 @@ STALE = "STALE"  # recorded, but for a case that has since changed: never used, 
 
 class MixedCandidateVersions(RecordingError):
     """One run holds recordings from different candidate versions, models or configurations."""
+
+
 # The label whose wrong prediction is a false contradiction, per case type.
 CONTRADICTION_LABEL = {CaseType.PAIR: PairLabel.CONTRADICTORY,
                        CaseType.SUPPORT: SupportLabel.CONTRADICTED}

@@ -35,8 +35,8 @@ def install(monkeypatch, attempts: list[str]) -> None:
 
     def check(target: object, what: str) -> None:
         host = target[0] if isinstance(target, tuple) and target else target
-        if isinstance(target, str):  # an AF_UNIX path: local by construction
-            return
+        if isinstance(target, str | bytes) and not isinstance(target, tuple):
+            return  # an AF_UNIX path (filesystem or abstract): local by construction
         if not is_loopback(host):
             attempts.append(f"{what} {host!r}")
             raise NetworkBlocked(f"blocked outbound network use: {what} {host!r}")

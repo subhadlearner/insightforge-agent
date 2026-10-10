@@ -101,6 +101,8 @@ class _Tripwire:
         self._what = what
 
     def __getattr__(self, name: str):
+        if name.startswith("__"):  # copy, pickle and introspection probes are not use
+            raise AttributeError(name)
         raise AssertionError(f"the deterministic baseline must not use {self._what} ({name})")
 
 
@@ -149,8 +151,11 @@ class DeterministicBaseline:
                             reason="the deterministic baseline needs BASELINE input access")
         try:
             return self._judge(case)
+        except AssertionError:  # a tripwire: the baseline touched a model, search or fetcher
+            raise
         except Exception as exc:  # noqa: BLE001 - recorded as ERROR, never turned into a label
-            return _verdict(case, JudgeStatus.ERROR, reason=f"{type(exc).__name__}: {exc}"[:300])
+            return _verdict(case, JudgeStatus.ERROR, reason=type(exc).__name__,
+                            diagnostics={"error_detail": str(exc)[:300]})
 
     def _judge(self, case: PredictionCase) -> Verdict:
         inputs = case.inputs
@@ -240,8 +245,9 @@ class DeterministicBaseline:
             "similarity_threshold": SIMILARITY_THRESHOLD, "semantic_entailment": False,
             **({"similarity": v.similarity} if v.similarity is not None else {})}
         if v.verdict == "unchecked":
+            diagnostics["production_reason"] = v.reason
             return _verdict(case, JudgeStatus.NOT_APPLICABLE, diagnostics=diagnostics,
-                            reason=f"T6 does not check this Claim: {v.reason}")
+                            reason="T6 does not check a Historical Claim")
         if v.verdict == "verified":
             return _verdict(case, JudgeStatus.JUDGED, label=GroundLabel.GROUNDED,
                             diagnostics=diagnostics,
@@ -309,12 +315,12 @@ def run_baseline(cases: Sequence, store: RecordingStore, run: str) -> list[Verdi
     baseline version under the same run id is refused (use a new run id)."""
     who = identity().model_copy(update={"run": run})
     judge = DeterministicBaseline()
+    views = [case.prediction_view(InputAccess.BASELINE) for case in cases]
+    stale = [f"{v.id}: {'; '.join(r)}" for v in views if (r := store.stale_reasons(who, v))]
+    if stale:  # checked first, so a stale case never leaves a half-updated run
+        raise StaleRecording(" | ".join(stale) + " (use a new run id)")
     verdicts = []
-    for case in cases:
-        view = case.prediction_view(InputAccess.BASELINE)
-        reasons = store.stale_reasons(who, view)
-        if reasons:
-            raise StaleRecording(f"{case.id}: {'; '.join(reasons)} (use a new run id)")
+    for view in views:
         verdict = judge.judge(view)
         store.record(who, view, verdict)
         verdicts.append(verdict)
