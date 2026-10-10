@@ -15,7 +15,7 @@ Use the right tool for each problem, not deterministic code by default.
 3. **No growth of handwritten semantic heuristics without a written technical justification.** Each existing one is listed in the [rules ledger](../semantic-rules-ledger.md). A rule stays only with a reason that is not "deterministic feels safer".
 4. **Models are evidence to verify, not facts.** A model proposes; code checks what can be checked (that cited Passages and spans exist, that arithmetic holds, that the output matches its schema) and applies policy. Model probabilities and scores are never Evidence Confidence. Passage text is untrusted web content, so a resolver has no tools, a strict output schema, and no ability to change policy.
 5. **T12's controlled predicate vocabulary stays authoritative** for predicate cardinality and Finding identity. A model may resolve a natural-language predicate into that vocabulary; it does not replace the vocabulary's structural rules unless the architecture is explicitly revised.
-6. **Evaluate before adopting.** Which tool wins is decided per problem by a human-reviewed benchmark (current code, Haiku and Jev, whose interface may not offer quoted spans, so span checks are evaluated separately). See the spike #26. Nothing here adopts Jev or any new provider.
+6. **Evaluate before adopting.** Which tool wins is decided per problem by a human-reviewed benchmark (current code, Haiku and Laya, whose interface does not offer quoted spans, so span checks are evaluated separately). See the spike #26. Nothing here adopts Laya, Jev or any other resolver or provider.
 
 ## Migration approach
 
