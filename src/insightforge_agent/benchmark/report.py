@@ -83,6 +83,12 @@ class _Row:
     status: str
     predicted: object | None  # the label if JUDGED
 
+    @property
+    def outcome(self) -> Outcome:
+        positive = POSITIVE_LABEL[self.case.type]
+        judged = self.status == JudgeStatus.JUDGED
+        return Outcome(self.case.expected == positive, (self.predicted == positive) if judged else None)
+
 
 def is_eligible(case: BenchmarkCase, allow_proposed: bool) -> bool:
     if case.label_status is LabelStatus.REVIEWED:
@@ -109,9 +115,7 @@ def group_stats(rows: list[_Row]) -> GroupStats:
     expected_neg = eligible - expected_pos
     fp_upper = clopper_pearson_upper(fp, judged_neg)
     note = NO_SAFETY_PROOF if fp == 0 and judged_neg > 0 else None
-    outcomes = [Outcome(r.case.expected == POSITIVE_LABEL[r.case.type],
-                        None if r.status != JudgeStatus.JUDGED
-                        else r.predicted == POSITIVE_LABEL[r.case.type]) for r in rows]
+    outcomes = [r.outcome for r in rows]
     return GroupStats(
         eligible=eligible, judged=counts[JudgeStatus.JUDGED], abstain=counts[JudgeStatus.ABSTAIN],
         error=counts[JudgeStatus.ERROR], not_applicable=counts[JudgeStatus.NOT_APPLICABLE],
@@ -162,6 +166,9 @@ def build_report(
             notices.append(f"{critical_out} critical case(s) are excluded because their labels "
                            "are only proposed; pass --allow-proposed for an exploratory view.")
     notices.append(NO_SAFETY_PROOF)
+    versions = {r.candidate_version for r in records.values()}
+    if len(versions) > 1:
+        notices.append(f"WARNING: this run mixes candidate versions {sorted(versions)}.")
 
     report = Report(
         mode="EXPLORATORY" if exploratory else "QUALIFICATION", candidate=candidate,
@@ -185,12 +192,7 @@ def build_report(
 
 
 def _f1_interval(rows: list[_Row]) -> Interval | None:
-    aligned = {
-        r.case.id: Outcome(r.case.expected == POSITIVE_LABEL[r.case.type],
-                           None if r.status != JudgeStatus.JUDGED
-                           else r.predicted == POSITIVE_LABEL[r.case.type])
-        for r in rows
-    }
+    aligned = {r.case.id: r.outcome for r in rows}
     return paired_bootstrap_f1({"candidate": aligned}).candidates["candidate"].interval
 
 
@@ -204,7 +206,7 @@ def _fmt(p: Proportion) -> str:
 def _render_group(name: str, g: GroupStats, interval: Interval | None = None) -> list[str]:
     f1 = "undefined" if g.f1 is None else f"{g.f1:.3f}"
     if interval is not None and g.f1 is not None:
-        f1 += f" [{interval.low:.3f}, {interval.high:.3f}] (paired bootstrap)"
+        f1 += f" [{interval.low:.3f}, {interval.high:.3f}] (bootstrap)"
     lines = [
         f"  {name}: eligible={g.eligible} judged={g.judged} abstain={g.abstain} error={g.error} "
         f"not_applicable={g.not_applicable} not_recorded={g.not_recorded}",

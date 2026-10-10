@@ -175,10 +175,12 @@ class RecordingStore:
         if not (verdict.case_id == case.id and verdict.case_type == case.type):
             raise RecordingError("verdict does not belong to the case")
         config, dropped = sanitize_config(identity.config, self._known)
+        clean = {name: redact_text(getattr(identity, name), self._known)
+                 for name in ("candidate", "candidate_version", "model", "run")}
         record = VerdictRecord(
-            candidate=identity.candidate, candidate_version=identity.candidate_version,
-            model=identity.model, config=config, config_dropped=dropped,
-            config_hash=content_hash(config), run=identity.run, case_id=case.id,
+            candidate=clean["candidate"], candidate_version=clean["candidate_version"],
+            model=clean["model"], config=config, config_dropped=dropped,
+            config_hash=content_hash(config), run=clean["run"], case_id=case.id,
             case_hash=content_hash(case.model_dump(mode="json")),
             verdict=_sanitize_verdict(verdict, self._known),
         )

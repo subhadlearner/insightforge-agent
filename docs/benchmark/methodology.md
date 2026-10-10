@@ -71,5 +71,6 @@ A record is keyed by `(candidate, case_id, run)` and carries the candidate versi
 - Money is `Decimal`. Before a job, the conservative high estimate (sum of per-call worst cases) must fit the remaining budget, or nothing runs. A call without provable input and output token ceilings is rejected.
 - The worst case is reserved before each call, sequentially (one open reservation at a time), then reconciled to actual usage when both token counts are known. Unknown usage, a failure or a provider error keeps the worst case as spent.
 - Spend and reservations live in an append-only, hash-chained, fsynced ledger that is cumulative across runs, restarts and execution ids. A corrupt chain or an unsettled reservation (interrupted run) fails closed; recovery is an explicit owner action that keeps the worst case as spent.
-- Partial results are kept; a restarted run skips recorded cases.
+- Partial results are kept; a restarted run skips recorded cases, including a case recorded as `ERROR`. Retrying a failed case needs a new run id and is paid for again.
+- The ledger assumes one process at a time (there is no file lock) and detects tampering inside the chain, not deletion of its tail. The owner reconciles it against provider billing and git history before any live run (#26 M2 plan).
 - **Authorisation is not granted here.** A `--approved-budget` number is necessary but never sufficient: `BudgetGuard` refuses an unverified `Authorization`. M2 must verify the owner's approval of the manifest before constructing a verified one. No paid provider execution exists in M1.
