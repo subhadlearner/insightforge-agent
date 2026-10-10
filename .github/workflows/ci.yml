@@ -1,0 +1,30 @@
+name: CI
+
+# Offline only: tiers 1-3 run here and fail on any outbound network use (tests/conftest.py).
+# Tier 4 (`live`) needs a real model or server, is excluded by pytest's addopts, and is never run
+# in CI. No secrets are configured or needed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: Import boundaries
+        run: uv run lint-imports
+      - name: Tier 1, real deterministic production baseline
+        run: uv run pytest -m baseline
+      - name: Tier 2, recorded replay and stale recordings
+        run: uv run pytest -m replay
+      - name: Tier 3, scripted provider responses
+        run: uv run pytest -m scripted
+      - name: Everything else offline (live tests are excluded by default)
+        run: uv run pytest
