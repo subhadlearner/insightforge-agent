@@ -96,9 +96,9 @@ A Verdict may carry `evidence_disposition` (and `evidence_reason`) diagnostics, 
 | 1 | `baseline` | the real deterministic production logic on cases | blocked |
 | 2 | `replay` | recorded predictions, replay, stale recordings, reports | blocked |
 | 3 | `scripted` | parsing, invalid output, retries and failure handling, using `tests/scripted.py` | blocked |
-| 4 | `live` | a real model or server; on demand only | allowed |
+| 4 | `live` | a real model or server; needs `-m live` and `INSIGHTFORGE_ALLOW_LIVE_TESTS=1` | allowed |
 
-`pytest` excludes `live` through `addopts` (`-m 'not live'`), and CI runs `uv run pytest -m baseline`, `-m replay`, `-m scripted`, then the rest (`.github/workflows/ci.yml`). Tiers 1-3 (every non-`live` test) fail on a connection to a non-loopback address or a DNS lookup of a non-loopback name; the attempt is remembered, so code that swallows the error still fails the test at teardown. **Do not pass `-m live` casually: the live tests use your real environment and `.env`.** A recording can never replace a reviewed label (predictions and cases are stored apart), and a live recording needs review before becoming a fixture.
+`pytest` excludes `live` through `addopts` (`-m 'not live'`), and CI runs `uv run pytest -m baseline`, `-m replay`, `-m scripted`, then the rest (`.github/workflows/ci.yml`). Tiers 1-3 (every non-`live` test) fail on a connection to a non-loopback address or a DNS lookup of a non-loopback name; the attempt is remembered, so code that swallows the error still fails the test at teardown. **Live tests need two opt-ins: `-m live` and `INSIGHTFORGE_ALLOW_LIVE_TESTS=1`.** Without the variable they are skipped before any fixture runs, so no provider is reached; they use your real environment and `.env` and make paid calls. A recording can never replace a reviewed label (predictions and cases are stored apart), and a live recording needs review before becoming a fixture.
 
 ## Limitations
 
