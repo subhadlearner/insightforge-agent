@@ -31,15 +31,14 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.evidence import (
-    cites,
     compress_to_budget,
     confidence_of,
     credibility_bucket,
     decision_rule,
-    domain_of,
     rank_key,
     recency_bucket,
     section_label,
+    sources_independent,
 )
 from insightforge_agent.domain.extraction import group_key, normalise, same_value
 from insightforge_agent.domain.quantities import canonical_value, unsupported_numbers
@@ -211,8 +210,7 @@ def synthesize(
             continue
         supporting_sources = list(dict.fromkeys(source_by_obs[r.observation_id] for r in item.supporting))
         independent = any(
-            domain_of(a.locator) != domain_of(b.locator)
-            and not cites(source_texts(a), b.locator) and not cites(source_texts(b), a.locator)
+            sources_independent(a.locator, source_texts(a), b.locator, source_texts(b))
             for i, a in enumerate(supporting_sources) for b in supporting_sources[i + 1:])
         best = max((s.credibility_score or 0.0) for s in supporting_sources)
         scores[item.id] = best
