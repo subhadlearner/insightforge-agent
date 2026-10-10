@@ -294,13 +294,17 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
     return out
 
 
-def _literal_problem(c: _Candidate, passage: Passage) -> str | None:
-    """Every number and named entity of the item must appear in the Passage."""
-    text = passage.text.casefold()
-    missing_numbers = unsupported_numbers(c.statement, passage.text)
+def literal_problem(
+    *, statement: str, entities: list[str], entity: str, passage_text: str,
+) -> str | None:
+    """Every number and named entity of the item must appear in the Passage. Returns the
+    reason it does not, or None. Lexical only: it says nothing about whether the Passage
+    supports the statement."""
+    text = passage_text.casefold()
+    missing_numbers = unsupported_numbers(statement, passage_text)
     if missing_numbers:
         return f"value not in Passage: {sorted(missing_numbers)}"
-    names = {*c.entities, *([c.entity] if c.entity else []), *named_entities_in(c.statement)}
+    names = {*entities, *([entity] if entity else []), *named_entities_in(statement)}
     missing_names = sorted(n for n in names if n.casefold() not in text)
     if missing_names:
         return f"name not in Passage: {missing_names}"
@@ -332,7 +336,8 @@ def _validate(
             rejected.append("no such Passage")
             continue
         candidates.append(passage)
-        problem = _literal_problem(c, passage)
+        problem = literal_problem(statement=c.statement, entities=c.entities,
+                                  entity=c.entity, passage_text=passage.text)
         if problem:
             rejected.append(problem)
         else:
