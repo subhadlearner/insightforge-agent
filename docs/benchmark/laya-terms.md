@@ -2,6 +2,7 @@
 
 - **Ticket:** #29 (spike #26). **Verified:** 2026-10-10. No inference calls, installs or downloads were made; this is a read of public pages and metadata only.
 - **Substitution.** #29 asked for the same investigation of Jev (TypeSafe AI, hosted). The owner chose **Laya** (Convai Innovations, open source, self-hosted). Jev remains only as the reference API Laya imitates. Where a Jev-shaped question (pricing, account retention) differs for a self-hosted model, the answer is given for Laya.
+- **Phases.** M1 is offline: it defines the truncation, option-order, negation and accuracy tests as benchmark contracts and fixtures, with no Laya inference. Running Laya and measuring anything happens only in M2, after the owner authorises it (dependency, hardware and data decisions below). Every "test" or "measure" in this note is an M1 definition or an M2 run, never an M1 result.
 - **Method.** Pages were read through a summarising fetch tool, not a browser, and quotes below are as returned by it. Pages marked *not read in full* were truncated. Nothing here was run.
 
 ## Sources (all read 2026-10-10)
@@ -21,7 +22,7 @@
 
 ## What it is
 
-A non-autoregressive "System 1" model: given a state (text, email, ticket or JSON) and typed questions, it returns answers with probabilities in one forward pass. "It never generates text, so there is nothing to parse and nothing to hallucinate." [HF] Three checkpoints: `laya` (English), `laya-multilingual`, `laya-typed-decisions`; a `Router` picks per request. [HF][PyPI]
+A non-autoregressive "System 1" model: given a state (text, email, ticket or JSON) and typed questions, it returns answers with probabilities in one forward pass. The model card says "It never generates text, so there is nothing to parse and nothing to hallucinate." [HF] That is a vendor claim about the output format (no free text to parse). It is not a guarantee of semantic accuracy: a decision can be confidently wrong, and the numbers below show it often is zero-shot. Three checkpoints: `laya` (English), `laya-multilingual`, `laya-typed-decisions`; a `Router` picks per request. [HF][PyPI]
 
 ## What the outputs can express
 
@@ -48,21 +49,23 @@ A non-autoregressive "System 1" model: given a state (text, email, ticket or JSO
 - Defaults from the checkpoint's `rl_agent_config.json`: `max_len = 512`, `head_max_len = 192`. [Docs: reference/helpers]
 - The "head" is the question instructions plus one span per option, so **more options leave less room for the state**; each question in a request can have a different budget. [Docs]
 - Default scan window for long inputs: `max(64, max_len - head_max_len - 8)` = **312 state tokens** at the defaults, stride 50% (~156). This is the *upper bound*: the real figure is smaller with more or longer options, and the docs give no fixed number per question (call `state_room`). [Docs]
-- Tokens past the room are **silently cut** (the start is kept). `usage` reports `state_tokens_dropped`, `truncated`, `truncated_questions`; the harness must record these. [Docs]
+- **`predict()` versus `predict_long()`** (upstream `laya/router.py`, `Router.predict_long`): `predict()` scores a single window and "anything past `max_len` is cut off" (for a conversation list the *last* window is kept). `predict_long()` routes the same way, then scans overlapping windows (default window as above, stride half the window, `ValueError` if the stride exceeds it) and aggregates per question. The only mode is `aggregate="auto"`: **`noul` takes the strongest window and `choice`/`score` the most confident one**; it does not average or vote. The upstream excerpt read does not define "strongest", and the `Agent` code that implements it was not read.
+- **Aggregation reliability is a risk for SUPPORT and PAIR in M2.** Taking the single most confident window means one window that looks like a match can win over the windows that contradict it, and confidence is uncalibrated as shipped, so a max over windows can inflate false "supports". It also loses which window decided unless `answer["window"]` is read (that field was not seen in `router.py`, so its location is unconfirmed). M2 should compare `predict()` with truncation, `predict_long()` and a code-side pre-selection of the relevant sentences, and report window-count effects. M1 only defines these arms in the benchmark contract.
+- Tokens past the room are **silently cut** (the start is kept). `usage` reports `state_tokens_dropped`, `truncated`, `truncated_questions`; the benchmark contract (M1) should require recording these and the M2 harness must populate them. [Docs]
 - Other limits: `laya-typed-decisions` 1,024; `laya-multilingual` 1,024 by default, 8,192 with `max_len=8192`; server `LAYA_MAX_TOKEN_BUDGET` default 8,192; `choice` up to 100 options, batch up to 64 states. [HF][GH][Docs]
 - Option count: the docs say accuracy "degrades quickly" past ~20 options (past ~40 with the default budget it "collapses"). Our questions have 2 to 3 options. [Docs]
-- Implication: a Passage plus statement will often exceed ~312 tokens, so truncation is its own M1 failure class. A claim sitting after the cut-off is invisible to the model.
+- Implication: a Passage plus statement will often exceed ~312 tokens, so truncation should be its own failure class in the M1 benchmark definition, measured in M2. A claim sitting after the cut-off is invisible to the model.
 
 ## Label-order and negation risks
 
 - **Option order is positional**: the same labels in a different order are a different question. [Docs] Published order-flip rates: massive_intent.en 0.150 (`laya`) / 0.230 (`laya-multilingual`), emotion 0.040 / 0.090, xnli.en 0.000 / 0.015 (Jev: 0.13, third-party). [BENCH] Not measured on our cases.
 - **Negation is unreliable in forced-choice questions**: a cancellation question can return the cancellation label for a state that says not to cancel, "with high confidence, on both checkpoints" (upstream issue #377). Negation sensitivity is not covered in BENCHMARKS.md. [Docs][BENCH] Relevant to SUPPORT (a Passage that negates the statement) and PAIR (not-the-same).
 - **`noul` can follow its `false:`/`true:` labels over the state**, most strongly on the English checkpoint (upstream #156); `action.act_probability` has no usable signal (#185). [HF][Docs]
-- Mitigations for M1 to test, not assumptions: randomise and swap option order and report the flip rate; include negation and near-miss cases; prefer a described two-option `choice` over `noul`; write option descriptions (bare labels give the model nothing). [Docs]
+- Mitigations to define as M1 fixtures and test in M2, not assumptions: randomise and swap option order and report the flip rate; include negation and near-miss cases; prefer a described two-option `choice` over `noul`; write option descriptions (bare labels give the model nothing). [Docs]
 
 ## Source independence (INDEPENDENCE)
 
-Laya can classify **textual relationships** between two descriptions or texts, such as whether one reads as a syndicated or reprinted copy of the other. It **cannot independently establish source independence**: independence is a provenance fact (publisher, ownership, wire-service origin, original reporting, URL and date lineage), and without that metadata in the state the model sees only wording. Same-wire text under two mastheads and two genuinely independent reports of one fact can look alike or differ for unrelated reasons. M1 should treat Laya's INDEPENDENCE output as a syndication-text signal at most and compare it with a metadata-driven code baseline; the decision rule stays in code.
+Laya can classify **textual relationships** between two descriptions or texts, such as whether one reads as a syndicated or reprinted copy of the other. It **cannot independently establish source independence**: independence is a provenance fact (publisher, ownership, wire-service origin, original reporting, URL and date lineage), and without that metadata in the state the model sees only wording. Same-wire text under two mastheads and two genuinely independent reports of one fact can look alike or differ for unrelated reasons. The benchmark should treat Laya's INDEPENDENCE output as a syndication-text signal at most and compare it with a metadata-driven code baseline (defined in M1, run in M2); the decision rule stays in code.
 
 ## Licence and provenance
 
@@ -109,7 +112,7 @@ To be done by the owner or on request, keeping the M1/M2 boundaries (M1 offline:
 For the owner:
 
 1. May M2 add `laya` (PyTorch) as an optional benchmark-only dependency, or should the harness read recorded decisions? (#29 forbids new dependencies in M1.)
-2. Is fine-tuning on our labelled cases in scope? Zero-shot typed decisions score below the majority baseline.
+2. Is fine-tuning in scope? Zero-shot typed decisions score below the majority baseline. If yes, training data must be separate from the held-out benchmark cases (disjoint cases and, ideally, disjoint Sources), or the reported accuracy is contaminated and the comparison with the baseline, Haiku and the LLM candidates is not fair.
 3. Hardware for M2: CPU (193 to 464 ms per question) or GPU?
 4. Is a network-blocked run acceptable evidence for the "no outbound transmission" claim?
 
