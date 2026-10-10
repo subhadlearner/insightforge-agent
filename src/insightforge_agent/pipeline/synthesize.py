@@ -126,6 +126,19 @@ class _Candidate:
     period: str  # as the Passage states it, or UNKNOWN
 
 
+def merge_identity(
+    *, statement: str, entity: str, predicate: str, value: str, scope: str, period: str,
+) -> str:
+    """What makes two drafted candidates the same Evidence item (step 2, Merge). A candidate with
+    an entity, predicate and value is keyed by its group key, stated period and canonical value;
+    any other is keyed by its normalised statement. `period` is the already-normalised stated
+    period (`stated_period`). The Evidence id is `derive_evidence_id(run_id, identity)`."""
+    structured = entity.strip() and predicate.strip() and value.strip()
+    if structured:
+        return f"{group_key(entity, predicate, scope)}|{period}|{canonical_value(value) or normalise(value)}"
+    return normalise(statement)
+
+
 def _key(ref: PassageRef) -> tuple[str, int]:
     return ref.observation_id, ref.index
 
@@ -271,9 +284,8 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
                      statement=statement[:120])
             continue
         period = stated_period(d.as_of_period)
-        structured = d.entity.strip() and d.predicate.strip() and d.value.strip()
-        identity = (f"{group_key(d.entity, d.predicate, d.scope)}|{period}|{canonical_value(d.value) or normalise(d.value)}"
-                    if structured else normalise(statement))
+        identity = merge_identity(statement=statement, entity=d.entity, predicate=d.predicate,
+                                  value=d.value, scope=d.scope, period=period)
         out.append(_Candidate(
             id=derive_evidence_id(run_id, identity), statement=statement, subtask=task,
             refs=cited, entities=[e.strip() for e in d.entities if e.strip()],
