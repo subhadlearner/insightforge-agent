@@ -9,7 +9,11 @@ from insightforge_agent.benchmark.cases import BenchmarkCase, CaseType
 _INPUTS = {
     "PAIR": {"statement_a": "Acme revenue was $5M in 2024.", "statement_b": "Acme earned $5M in 2024."},
     "SUPPORT": {"statement": "Acme revenue was $5M.", "passage": "Acme reported revenue of $5M."},
-    "GROUND": {"claim": "Acme grew.", "item_statement": "Acme revenue grew 10%."},
+    "GROUND": {
+        "check": "QUOTED_SPAN", "claim": "Acme revenue grew 10%.",
+        "passage_text": "Acme revenue grew 10% in 2024.",
+        "passage_ref": {"observation_id": "obs-1", "index": 0}, "quoted_span": "revenue grew 10%",
+    },
     "INDEPENDENCE": {
         "source_a_url": "https://a.example/x", "source_a_text": "Acme grew.",
         "source_b_url": "https://b.example/y", "source_b_text": "Acme expanded.",

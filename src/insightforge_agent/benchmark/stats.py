@@ -89,6 +89,7 @@ class Outcome:
 
     expected_positive: bool
     predicted_positive: bool | None
+    expected_label: str | None = None  # compared across candidates when paired
 
 
 def f1_score(outcomes: Sequence[Outcome]) -> float | None:
@@ -147,6 +148,14 @@ def paired_bootstrap_f1(
     case_ids = sorted(outcomes[names[0]])
     if any(sorted(outcomes[name]) != case_ids for name in names):
         raise ValueError("candidates are not aligned on the same case ids")
+    for case_id in case_ids:  # the same reviewed truth must sit behind every candidate's row
+        reference = outcomes[names[0]][case_id]
+        for name in names[1:]:
+            other = outcomes[name][case_id]
+            if (other.expected_positive, other.expected_label) != (
+                    reference.expected_positive, reference.expected_label):
+                raise ValueError(f"expected labels differ for case {case_id!r} "
+                                 f"between {names[0]!r} and {name!r}")
     rng = random.Random(seed)
     n = len(case_ids)
     scores: dict[str, list[float | None]] = {name: [] for name in names}

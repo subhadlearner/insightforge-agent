@@ -19,6 +19,11 @@ Every other label of a type is a negative. The positive class is the costly mist
 
 `GROUND` stays binary, but a NOT_GROUNDED case may carry a diagnostic `grounding_failure` (UNSUPPORTED_ENTITY, UNSUPPORTED_NUMBER, UNSUPPORTED_CLAIM, MISSING_CITATION), so the T6 name check and number check can be told apart without widening the label set.
 
+## Inputs by candidate kind
+
+- **PAIR** cases hold two statements and optional Passages, plus optional `structured_a` / `structured_b` (entity, predicate, value, scope, period, entities: the fields T5's merge key is built from). `prediction_view()` defaults to `SEMANTIC` access, which strips the structured fields; only the deterministic baseline asks for `BASELINE` access. A SEMANTIC view cannot be constructed with them.
+- **GROUND** cases hold the statement under test, the whole original Passage text, the Passage identity (observation id and index), an optional attribution context (heading, speaker, neighbouring sentence) and a `check`: `QUOTED_SPAN` (an Evidence statement against the span quoted for it; the span is required, and may be nonexistent in a NOT_GROUNDED case) or `CLAIM_PASSAGE` (the T6 Report Claim against a Passage; no span). The two are separate checks and should be reported separately.
+
 ## Verdict statuses
 
 - `JUDGED`: the only status that carries a label, which must belong to the case's type.
@@ -31,6 +36,7 @@ Usage (input and output tokens, latency, retries, parse failures) is optional an
 - Ground truth lives only in the case file. Predictions are stored apart (`verdicts.jsonl`, `raw.jsonl`) and joined to cases at report time; no write path goes from predictions to cases.
 - Label status: `proposed` (no review data), `reviewed` (reviewer and date; an optional second review must be by a different person and agree), `disputed` (needs a note).
 - **Qualification metrics use `reviewed` labels only.** Disputed labels are always excluded. Proposed labels, critical or not, are excluded unless `--allow-proposed` is passed; such a report is stamped `EXPLORATORY`, says it is not a qualification result, and counts the proposed cases it included. When proposed critical cases are excluded the report says how many.
+- A second review stores the second reviewer's own label (`second_label`), reviewer and date. A reviewed case needs the second label to equal `expected`; a differing one makes the case `disputed` with both labels kept and a note. The review workflow itself (M1.5) is not part of M1.2.
 - Case ids must not contain a label name, so an id cannot leak the answer.
 
 ## Denominators
@@ -64,13 +70,14 @@ Standard library only. Wilson 95% intervals; paired bootstrap F1 intervals (95%,
 
 ## Recording and replay
 
-A record is keyed by `(candidate, case_id, run)` and carries the candidate version, model, a safe configuration (an explicit allow-list of fields; anything else is dropped and its name noted), configuration and case hashes. Re-recording identical content is a no-op; any difference (including a different candidate version) fails. Secrets are redacted before anything is written.
+A record is keyed by `(candidate, case_id, run)` and carries the candidate version, model, a safe configuration (an explicit allow-list of fields; anything else is dropped and its name noted), configuration and case hashes. Re-recording identical content is a no-op; any difference (including a different candidate version) fails. A recording is **stale** when its case hash, candidate version, model or configuration hash no longer matches: resume refuses it (use a new run id) and replay refuses it; a report excludes it and counts it as missing. A run holding more than one candidate version, model or configuration is never aggregated: the report errors unless `--candidate-version` selects one. Secrets are redacted before anything is written.
 
 ## Cost controls (offline primitives)
 
 - Money is `Decimal`. Before a job, the conservative high estimate (sum of per-call worst cases) must fit the remaining budget, or nothing runs. A call without provable input and output token ceilings is rejected.
 - The worst case is reserved before each call, sequentially (one open reservation at a time), then reconciled to actual usage when both token counts are known. Unknown usage, a failure or a provider error keeps the worst case as spent.
 - Spend and reservations live in an append-only, hash-chained, fsynced ledger that is cumulative across runs, restarts and execution ids. A corrupt chain or an unsettled reservation (interrupted run) fails closed; recovery is an explicit owner action that keeps the worst case as spent.
+- A ledger write failure poisons the ledger (every later operation refuses); a failed reservation write means no call is made. If actual cost exceeds the reserved worst case, execution stops even when overall budget remains, since the bound was wrong.
 - Partial results are kept; a restarted run skips recorded cases, including a case recorded as `ERROR`. Retrying a failed case needs a new run id and is paid for again.
 - The ledger assumes one process at a time (there is no file lock) and detects tampering inside the chain, not deletion of its tail. The owner reconciles it against provider billing and git history before any live run (#26 M2 plan).
 - **Authorisation is not granted here.** A `--approved-budget` number is necessary but never sufficient: `BudgetGuard` refuses an unverified `Authorization`. M2 must verify the owner's approval of the manifest before constructing a verified one. No paid provider execution exists in M1.

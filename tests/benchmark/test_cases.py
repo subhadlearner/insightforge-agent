@@ -83,9 +83,9 @@ def test_grounding_failures_are_kept_for_not_grounded_cases():
     {"label_status": "disputed"},                                       # no note
     {**reviewed(), "second_reviewer": "bob"},                           # partial second review
     {**reviewed(), "second_reviewer": "alice", "second_reviewed_at": "2026-10-02",
-     "second_review_agrees": True},                                     # same person twice
+     "second_label": "SAME_FACT"},                                     # same person twice
     {**reviewed(), "second_reviewer": "bob", "second_reviewed_at": "2026-10-02",
-     "second_review_agrees": False},                                    # disagreement yet reviewed
+     "second_label": "DIFFERENT_FACT"},                                    # disagreement yet reviewed
 ])
 def test_inconsistent_review_metadata_is_rejected(overrides):
     with pytest.raises(ValidationError):
@@ -94,7 +94,7 @@ def test_inconsistent_review_metadata_is_rejected(overrides):
 
 def test_consistent_review_metadata_is_accepted():
     ok = make_case(**reviewed(second_reviewer="bob", second_reviewed_at="2026-10-02",
-                              second_review_agrees=True))
+                              second_label="SAME_FACT"))
     assert ok.label_status.value == "reviewed"
     disputed = make_case(label_status="disputed", dispute_note="reviewers differ",
                          reviewer="alice", reviewed_at="2026-10-01")

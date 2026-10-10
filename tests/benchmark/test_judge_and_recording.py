@@ -38,7 +38,7 @@ def identity(**kw):
 def test_a_judge_never_sees_the_expected_label_rationale_or_review_data():
     case = make_case(rationale="SECRET RATIONALE", reviewer=None)
     view = case.prediction_view()
-    assert set(type(view).model_fields) == {"id", "type", "inputs"}
+    assert set(type(view).model_fields) == {"id", "type", "inputs", "access"}
     dumped = json.dumps(view.model_dump(mode="json"))
     assert "SECRET RATIONALE" not in dumped
     assert "expected" not in dumped and "SAME_FACT" not in dumped

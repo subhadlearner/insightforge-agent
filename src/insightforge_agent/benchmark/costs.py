@@ -15,7 +15,12 @@ from pathlib import Path
 
 from insightforge_agent.benchmark.cases import PredictionCase
 from insightforge_agent.benchmark.judge import Judge, JudgeStatus, Usage, Verdict, verdict_matches
-from insightforge_agent.benchmark.recording import RecordingStore, RunIdentity, redact_text
+from insightforge_agent.benchmark.recording import (
+    RecordingStore,
+    RunIdentity,
+    StaleRecording,
+    redact_text,
+)
 
 _MILLION = Decimal(1_000_000)
 _GENESIS = "0" * 64
@@ -126,6 +131,7 @@ class Ledger:
 
     def __init__(self, path: Path, reservations: dict[str, _Reservation], head: str, seq: int):
         self._path, self._res, self._head, self._seq = path, reservations, head, seq
+        self._broken: str | None = None
 
     @classmethod
     def open(cls, path: Path, *, recover_interrupted: bool = False) -> "Ledger":
@@ -168,7 +174,12 @@ class Ledger:
     def open_reservations(self) -> int:
         return sum(1 for r in self._res.values() if r.state == "open")
 
+    def _require_usable(self) -> None:
+        if self._broken:
+            raise LedgerError(f"ledger is unusable after a write failure: {self._broken}")
+
     def reserve(self, reservation_id: str, call: dict[str, str], amount: Decimal) -> None:
+        self._require_usable()
         if self.open_reservations:
             raise CostError("execution is sequential: a reservation is already open")
         self._write({"type": "reserve", "id": reservation_id, "call": call, "amount": str(amount)})
@@ -183,14 +194,25 @@ class Ledger:
         return f"res-{self._seq + 1:06d}"
 
     def _write(self, event: dict) -> None:
+        """Persist one event. If persistence fails the in-memory state may be ahead of the disk,
+        so the ledger is poisoned: every later operation refuses until it is reopened (which
+        re-verifies the file and fails closed on an unsettled reservation)."""
+        self._require_usable()
         _apply(self._res, event)  # validates before anything is written
         entry = {"seq": self._seq + 1, "prev": self._head, "event": event,
                  "hash": _digest(self._head, event)}
+        try:
+            self._append(json.dumps(entry, sort_keys=True) + "\n")
+        except OSError as exc:
+            self._broken = f"{type(exc).__name__}: {exc}"
+            raise LedgerError(f"could not persist ledger entry: {self._broken}") from exc
+        self._head, self._seq = entry["hash"], entry["seq"]
+
+    def _append(self, line: str) -> None:
         with self._path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
+            handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
-        self._head, self._seq = entry["hash"], entry["seq"]
 
 
 def _digest(prev: str, event: dict) -> str:
@@ -288,11 +310,17 @@ def run_sequential(
     halts the run with every earlier result kept; the failed call's worst case stays spent."""
     summary = RunSummary()
     pending = []
+    stale = []
     for case in cases:
-        if store.get(identity.candidate, case.id, identity.run) is not None:
-            summary.skipped_recorded.append(case.id)
-        else:
+        reasons = store.stale_reasons(identity, case)
+        if reasons is None:
             pending.append(case)
+        elif reasons:
+            stale.append(f"{case.id}: {'; '.join(reasons)}")
+        else:
+            summary.skipped_recorded.append(case.id)
+    if stale:  # nothing is overwritten or reused; the caller must choose a new run id
+        raise StaleRecording("stale recordings under this run id: " + " | ".join(stale))
     guard.preflight(bound_for(case) for case in pending)  # raises before any call is made
 
     for case in pending:
@@ -313,7 +341,20 @@ def run_sequential(
                 case_id=case.id, case_type=case.type, status=JudgeStatus.ERROR, reason=reason))
             summary.halted_reason = f"judge failed on {case.id}: {reason}"
             break
-        summary.charged += guard.settle(reservation_id, reserved, verdict.usage).charged
+        try:
+            settlement = guard.settle(reservation_id, reserved, verdict.usage)
+        except LedgerError as exc:  # keep the result we paid for, then stop
+            store.record(identity, case, verdict)
+            summary.completed.append(case.id)
+            summary.halted_reason = f"ledger write failed after {case.id}: {exc}"
+            break
+        summary.charged += settlement.charged
         store.record(identity, case, verdict)
         summary.completed.append(case.id)
+        if settlement.kind == "actual_over_reservation":
+            summary.halted_reason = (
+                f"actual cost {settlement.charged} exceeded the reserved worst case {reserved} "
+                f"on {case.id}; the bound is wrong, so execution stopped"
+            )
+            break
     return summary

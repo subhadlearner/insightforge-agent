@@ -81,11 +81,42 @@ _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ALL_LABELS = [m.value for enum in LABELS_BY_TYPE.values() for m in enum]
 
 
+class InputAccess(StrEnum):
+    """Which inputs a candidate may receive. SEMANTIC candidates (a model reading text) get
+    statements and Passages only; BASELINE (the deterministic T5 logic) also gets the
+    structured fields its merge key is built from."""
+
+    SEMANTIC = "SEMANTIC"
+    BASELINE = "BASELINE"
+
+
+class MergeFields(_Frozen):
+    """The structured fields T5's drafting step produces for one candidate item. They feed the
+    baseline's merge key (group key plus period plus canonical value). `period` is the stated
+    as-of period text; empty means unstated."""
+
+    entity: str = ""
+    predicate: str = ""
+    value: str = ""
+    scope: str = ""
+    period: str = ""
+    entities: list[str] = Field(default_factory=list)
+
+
 class PairInputs(_Frozen):
     statement_a: str
     statement_b: str
     passage_a: str | None = None
     passage_b: str | None = None
+    # Baseline-only: withheld from SEMANTIC candidates. Both or neither.
+    structured_a: MergeFields | None = None
+    structured_b: MergeFields | None = None
+
+    @model_validator(mode="after")
+    def _structured_together(self) -> "PairInputs":
+        if (self.structured_a is None) != (self.structured_b is None):
+            raise ValueError("structured_a and structured_b must be given together")
+        return self
 
 
 class SupportInputs(_Frozen):
@@ -93,10 +124,39 @@ class SupportInputs(_Frozen):
     passage: str
 
 
+class GroundCheck(StrEnum):
+    """What is being grounded. QUOTED_SPAN: an Evidence statement against the Passage span that
+    is quoted for it. CLAIM_PASSAGE: a Report Claim against a Passage (T6 Fact-Checker, which
+    quotes no span). They are separate checks and are reported separately."""
+
+    QUOTED_SPAN = "QUOTED_SPAN"
+    CLAIM_PASSAGE = "CLAIM_PASSAGE"
+
+
+class PassageIdentity(_Frozen):
+    observation_id: str
+    index: int = Field(ge=0)
+
+
 class GroundInputs(_Frozen):
-    claim: str
-    item_statement: str
-    item_entities: list[str] = Field(default_factory=list)
+    check: GroundCheck
+    claim: str  # the statement under test: Evidence statement or Report Claim text
+    passage_text: str  # the original, whole Passage text
+    passage_ref: PassageIdentity
+    quoted_span: str | None = None  # required for QUOTED_SPAN, absent for CLAIM_PASSAGE
+    # Text that says whom or what the Passage is about (heading, speaker, table caption, the
+    # neighbouring sentence): what attribution of entity, measure and period depends on.
+    attribution_context: str | None = None
+    historical: bool = False  # the Claim's own flag (T6); meaningful for CLAIM_PASSAGE
+
+    @model_validator(mode="after")
+    def _span_matches_check(self) -> "GroundInputs":
+        has_span = bool((self.quoted_span or "").strip())
+        if self.check is GroundCheck.QUOTED_SPAN and not has_span:
+            raise ValueError("a QUOTED_SPAN case needs quoted_span")
+        if self.check is GroundCheck.CLAIM_PASSAGE and self.quoted_span is not None:
+            raise ValueError("a CLAIM_PASSAGE case quotes no span")
+        return self
 
 
 class IndependenceInputs(_Frozen):
@@ -145,7 +205,7 @@ class BenchmarkCase(_Frozen):
     dispute_note: str | None = None
     second_reviewer: str | None = None
     second_reviewed_at: date | None = None
-    second_review_agrees: bool | None = None
+    second_label: Label | None = None  # the second reviewer's own judgment, kept even if it differs
 
     @model_validator(mode="before")
     @classmethod
@@ -185,10 +245,12 @@ class BenchmarkCase(_Frozen):
         return self
 
     def _check_review(self) -> None:
-        second = (self.second_reviewer, self.second_reviewed_at, self.second_review_agrees)
+        second = (self.second_reviewer, self.second_reviewed_at, self.second_label)
         has_second = any(v is not None for v in second)
         if has_second and any(v is None for v in second):
-            raise ValueError("second review needs reviewer, date and agreement together")
+            raise ValueError("second review needs reviewer, date and label together")
+        if self.second_label is not None and not label_belongs_to(self.type, self.second_label):
+            raise ValueError(f"second_label {self.second_label} is not a {self.type} label")
         if self.label_status is LabelStatus.PROPOSED:
             if self.reviewer or self.reviewed_at or self.dispute_note or has_second:
                 raise ValueError("a proposed label carries no review or dispute metadata")
@@ -198,16 +260,23 @@ class BenchmarkCase(_Frozen):
                 raise ValueError("a reviewed label needs reviewer and reviewed_at")
             if self.dispute_note:
                 raise ValueError("a reviewed label cannot carry a dispute note")
-            if has_second and self.second_review_agrees is False:
-                raise ValueError("a disagreeing second review makes the label disputed")
+            if has_second and self.second_label != self.expected:
+                raise ValueError("a second review that differs from expected makes the label disputed")
             if has_second and self.second_reviewer == self.reviewer:
                 raise ValueError("second reviewer must differ from the first")
             return
         if not (self.dispute_note or "").strip():
             raise ValueError("a disputed label needs a dispute_note")
 
-    def prediction_view(self) -> "PredictionCase":
-        return PredictionCase(id=self.id, type=self.type, inputs=self.inputs)
+    @property
+    def second_review_agrees(self) -> bool | None:
+        return None if self.second_label is None else self.second_label == self.expected
+
+    def prediction_view(self, access: InputAccess = InputAccess.SEMANTIC) -> "PredictionCase":
+        inputs = self.inputs
+        if isinstance(inputs, PairInputs) and access is InputAccess.SEMANTIC:
+            inputs = inputs.model_copy(update={"structured_a": None, "structured_b": None})
+        return PredictionCase(id=self.id, type=self.type, inputs=inputs, access=access)
 
 
 class PredictionCase(_Frozen):
@@ -216,6 +285,14 @@ class PredictionCase(_Frozen):
     id: str
     type: CaseType
     inputs: Inputs
+    access: InputAccess = InputAccess.SEMANTIC
+
+    @model_validator(mode="after")
+    def _semantic_sees_no_baseline_fields(self) -> "PredictionCase":
+        if (self.access is InputAccess.SEMANTIC and isinstance(self.inputs, PairInputs)
+                and self.inputs.structured_a is not None):
+            raise ValueError("SEMANTIC candidates must not receive baseline structured fields")
+        return self
 
 
 class CaseFileError(Exception):

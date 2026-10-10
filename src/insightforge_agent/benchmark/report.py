@@ -5,9 +5,15 @@ either side. Denominator rules are documented in docs/benchmark/methodology.md."
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 
-from insightforge_agent.benchmark.cases import POSITIVE_LABEL, BenchmarkCase, CaseType, LabelStatus
+from insightforge_agent.benchmark.cases import (
+    POSITIVE_LABEL,
+    BenchmarkCase,
+    CaseType,
+    InputAccess,
+    LabelStatus,
+)
 from insightforge_agent.benchmark.judge import JudgeStatus
-from insightforge_agent.benchmark.recording import RecordingStore
+from insightforge_agent.benchmark.recording import RecordingError, RecordingStore, case_hash
 from insightforge_agent.benchmark.stats import (
     Interval,
     Outcome,
@@ -18,6 +24,11 @@ from insightforge_agent.benchmark.stats import (
 )
 
 NOT_RECORDED = "NOT_RECORDED"
+STALE = "STALE"  # recorded, but for a case that has since changed: never used, counted as missing
+
+
+class MixedCandidateVersions(RecordingError):
+    """One run holds recordings from different candidate versions, models or configurations."""
 NO_SAFETY_PROOF = "Zero observed failures is not proof of safety; it only bounds the failure rate."
 
 
@@ -42,6 +53,7 @@ class GroupStats:
     error: int
     not_applicable: int
     not_recorded: int
+    stale: int
     coverage: Proportion        # judged / eligible
     accuracy: Proportion        # correct / eligible; a missing prediction is wrong
     precision: Proportion       # TP / predicted positives (judged only)
@@ -87,7 +99,9 @@ class _Row:
     def outcome(self) -> Outcome:
         positive = POSITIVE_LABEL[self.case.type]
         judged = self.status == JudgeStatus.JUDGED
-        return Outcome(self.case.expected == positive, (self.predicted == positive) if judged else None)
+        return Outcome(self.case.expected == positive,
+                       (self.predicted == positive) if judged else None,
+                       expected_label=self.case.expected.value)
 
 
 def is_eligible(case: BenchmarkCase, allow_proposed: bool) -> bool:
@@ -119,7 +133,7 @@ def group_stats(rows: list[_Row]) -> GroupStats:
     return GroupStats(
         eligible=eligible, judged=counts[JudgeStatus.JUDGED], abstain=counts[JudgeStatus.ABSTAIN],
         error=counts[JudgeStatus.ERROR], not_applicable=counts[JudgeStatus.NOT_APPLICABLE],
-        not_recorded=counts[NOT_RECORDED],
+        not_recorded=counts[NOT_RECORDED], stale=counts[STALE],
         coverage=proportion(counts[JudgeStatus.JUDGED], eligible),
         accuracy=proportion(correct, eligible),
         precision=proportion(tp, predicted_pos),
@@ -133,9 +147,23 @@ def group_stats(rows: list[_Row]) -> GroupStats:
 
 def build_report(
     cases: list[BenchmarkCase], store: RecordingStore, candidate: str, run: str,
-    *, allow_proposed: bool = False,
+    *, allow_proposed: bool = False, candidate_version: str | None = None,
 ) -> Report:
-    records = {r.case_id: r for r in store.records_for(candidate, run)}
+    """Join recorded predictions to reviewed labels. Recordings whose case has changed are
+    STALE (excluded, counted as missing). A run mixing candidate versions, models or
+    configurations is refused unless `candidate_version` selects one version, and even then
+    only one (model, configuration) may remain."""
+    everything = store.records_for(candidate, run)
+    chosen = [r for r in everything if candidate_version in (None, r.candidate_version)]
+    identities = {(r.candidate_version, r.model, r.config_hash) for r in chosen}
+    if len(identities) > 1:
+        raise MixedCandidateVersions(
+            f"run {run!r} of {candidate!r} mixes {len(identities)} candidate "
+            f"version/model/configuration combinations: {sorted(identities)}; "
+            "pass --candidate-version, or use a new run id per version"
+        )
+    other_version = len(everything) - len(chosen)
+    records = {r.case_id: r for r in chosen}
     rows: list[_Row] = []
     disputed = proposed_out = critical_out = proposed_in = 0
     for case in cases:
@@ -148,8 +176,11 @@ def build_report(
             continue
         proposed_in += case.label_status is LabelStatus.PROPOSED
         record = records.get(case.id)
+        fresh = {case_hash(case.prediction_view(a)) for a in InputAccess}
         if record is None:
             rows.append(_Row(case, NOT_RECORDED, None))
+        elif record.case_hash not in fresh:
+            rows.append(_Row(case, STALE, None))
         else:
             verdict = record.verdict
             rows.append(_Row(case, verdict.status.value, verdict.label))
@@ -166,9 +197,13 @@ def build_report(
             notices.append(f"{critical_out} critical case(s) are excluded because their labels "
                            "are only proposed; pass --allow-proposed for an exploratory view.")
     notices.append(NO_SAFETY_PROOF)
-    versions = {r.candidate_version for r in records.values()}
-    if len(versions) > 1:
-        notices.append(f"WARNING: this run mixes candidate versions {sorted(versions)}.")
+    stale_total = sum(r.status == STALE for r in rows)
+    if stale_total:
+        notices.append(f"{stale_total} recording(s) are stale (the case changed since it was "
+                       "recorded); they are excluded and counted as missing predictions.")
+    if other_version:
+        notices.append(f"{other_version} recording(s) from other candidate versions were "
+                       "excluded by --candidate-version.")
 
     report = Report(
         mode="EXPLORATORY" if exploratory else "QUALIFICATION", candidate=candidate,
@@ -209,7 +244,7 @@ def _render_group(name: str, g: GroupStats, interval: Interval | None = None) ->
         f1 += f" [{interval.low:.3f}, {interval.high:.3f}] (bootstrap)"
     lines = [
         f"  {name}: eligible={g.eligible} judged={g.judged} abstain={g.abstain} error={g.error} "
-        f"not_applicable={g.not_applicable} not_recorded={g.not_recorded}",
+        f"not_applicable={g.not_applicable} not_recorded={g.not_recorded} stale={g.stale}",
         f"    coverage        {_fmt(g.coverage)}",
         f"    accuracy        {_fmt(g.accuracy)}  (missing predictions count as wrong)",
         f"    precision       {_fmt(g.precision)}",

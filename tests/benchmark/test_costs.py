@@ -214,7 +214,7 @@ def test_preflight_counts_charges_retained_by_earlier_executions(tmp_path):
 def test_actual_overrun_mid_run_halts_the_remaining_cases(tmp_path):
     over = Usage(input_tokens=1000, output_tokens=1000)  # actual 0.003 vs reserved 0.002
     summary, guard, store, judge = run(tmp_path, [over, over], 2, ceiling="0.0045")
-    assert summary.completed == ["k0"] and "exceeds remaining" in summary.halted_reason
+    assert summary.completed == ["k0"] and "exceeded the reserved worst case" in summary.halted_reason
     assert judge.calls == 1 and store.get("fake", "k1", "r1") is None
 
 

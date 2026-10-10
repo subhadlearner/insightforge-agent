@@ -35,6 +35,16 @@ _SECRET_PATTERNS = [
     re.compile(r"(?i)\b(api[_-]?key|secret|token|password|passwd|authorization)\b(\s*[=:]\s*)\S+"),
 ]
 
+# Credential fields written as quoted JSON (or Python-dict) keys, possibly escaped inside another
+# string. The key must end with a credential word, so usage counters such as "input_tokens" and
+# "max_tokens" are left alone. The whole value, quoted or bare, is replaced.
+_JSON_CREDENTIAL = re.compile(
+    r"""(?P<key>\\?["'][\w.-]*?(?:api[_-]?key|secret|token|password|passwd|authorization"""
+    r"""|credentials?|private[_-]?key)\\?["']\s*:\s*)"""
+    r"""(?:\\?"(?:[^"\\]|\\.)*?\\?"|\\?'(?:[^'\\]|\\.)*?\\?'|[^\s,}\]]+)""",
+    re.IGNORECASE,
+)
+
 
 class RecordingError(Exception):
     pass
@@ -44,10 +54,15 @@ class ConflictingRecording(RecordingError):
     pass
 
 
+class StaleRecording(RecordingError):
+    """A recording exists but the case, candidate version, model or configuration has changed."""
+
+
 def redact_text(text: str, known_secrets: tuple[str, ...] = ()) -> str:
     for secret in known_secrets:
         if secret:
             text = text.replace(secret, REDACTED)
+    text = _JSON_CREDENTIAL.sub(lambda m: f'{m.group("key")}"{REDACTED}"', text)
     for pattern in _SECRET_PATTERNS:
         if pattern.groups:
             text = pattern.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
@@ -77,6 +92,10 @@ def canonical_json(value: object) -> str:
 
 def content_hash(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def case_hash(case: PredictionCase) -> str:
+    return content_hash(case.model_dump(mode="json"))
 
 
 class RunIdentity(BaseModel):
@@ -163,6 +182,30 @@ class RecordingStore:
             handle.flush()
             os.fsync(handle.fileno())
 
+    def _clean_identity(self, identity: RunIdentity) -> tuple[dict[str, str], dict, list[str]]:
+        config, dropped = sanitize_config(identity.config, self._known)
+        clean = {name: redact_text(getattr(identity, name), self._known)
+                 for name in ("candidate", "candidate_version", "model", "run")}
+        return clean, config, dropped
+
+    def stale_reasons(self, identity: RunIdentity, case: PredictionCase) -> list[str] | None:
+        """None if nothing is recorded under this identity's key; otherwise the reasons the
+        recording no longer matches (empty list means it is current)."""
+        clean, config, _ = self._clean_identity(identity)
+        record = self.get(clean["candidate"], case.id, clean["run"])
+        if record is None:
+            return None
+        reasons = []
+        if record.case_hash != case_hash(case):
+            reasons.append("case changed since it was recorded")
+        if record.candidate_version != clean["candidate_version"]:
+            reasons.append(f"candidate version {record.candidate_version!r} != {clean['candidate_version']!r}")
+        if record.model != clean["model"]:
+            reasons.append(f"model {record.model!r} != {clean['model']!r}")
+        if record.config_hash != content_hash(config):
+            reasons.append("configuration changed")
+        return reasons
+
     def record(
         self,
         identity: RunIdentity,
@@ -174,15 +217,12 @@ class RecordingStore:
         content is a no-op; anything different under the same identity raises."""
         if not (verdict.case_id == case.id and verdict.case_type == case.type):
             raise RecordingError("verdict does not belong to the case")
-        config, dropped = sanitize_config(identity.config, self._known)
-        clean = {name: redact_text(getattr(identity, name), self._known)
-                 for name in ("candidate", "candidate_version", "model", "run")}
+        clean, config, dropped = self._clean_identity(identity)
         record = VerdictRecord(
             candidate=clean["candidate"], candidate_version=clean["candidate_version"],
             model=clean["model"], config=config, config_dropped=dropped,
             config_hash=content_hash(config), run=clean["run"], case_id=case.id,
-            case_hash=content_hash(case.model_dump(mode="json")),
-            verdict=_sanitize_verdict(verdict, self._known),
+            case_hash=case_hash(case), verdict=_sanitize_verdict(verdict, self._known),
         )
         key = (record.candidate, record.case_id, record.run)
         raw = None
@@ -223,13 +263,20 @@ class ReplayMiss(RecordingError):
 class ReplayJudge:
     """Judge that returns recorded Verdicts and never computes anything."""
 
-    def __init__(self, store: RecordingStore, candidate: str, run: str):
-        self._store, self._candidate, self._run = store, candidate, run
+    def __init__(self, store: RecordingStore, candidate: str, run: str,
+                 identity: RunIdentity | None = None):
+        """With `identity`, a recording made by a different candidate version, model or
+        configuration is refused as stale."""
+        self._store, self._candidate, self._run, self._identity = store, candidate, run, identity
 
     def judge(self, case: PredictionCase) -> Verdict:
         record = self._store.get(self._candidate, case.id, self._run)
         if record is None:
             raise ReplayMiss(f"no recording for ({self._candidate}, {case.id}, {self._run})")
-        if record.case_hash != content_hash(case.model_dump(mode="json")):
+        if record.case_hash != case_hash(case):
             raise ReplayMiss(f"case {case.id} changed since it was recorded")
+        if self._identity is not None:
+            reasons = self._store.stale_reasons(self._identity, case)
+            if reasons:
+                raise ReplayMiss(f"stale recording for {case.id}: {'; '.join(reasons)}")
         return record.verdict

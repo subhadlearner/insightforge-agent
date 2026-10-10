@@ -30,6 +30,8 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--recordings", type=Path, required=True)
     report.add_argument("--candidate", required=True)
     report.add_argument("--run", required=True)
+    report.add_argument("--candidate-version",
+                        help="use only recordings of this version (versions are never mixed)")
     report.add_argument("--allow-proposed", action="store_true",
                         help="include proposed labels; the report is stamped EXPLORATORY")
     report.add_argument("--json", action="store_true")
@@ -75,7 +77,8 @@ def _validate(args, cases) -> int:
 
 def _report(args, cases) -> int:
     store = RecordingStore(args.recordings)
-    report = build_report(cases, store, args.candidate, args.run, allow_proposed=args.allow_proposed)
+    report = build_report(cases, store, args.candidate, args.run, allow_proposed=args.allow_proposed,
+                          candidate_version=args.candidate_version)
     if args.json:
         print(json.dumps(to_dict(report), indent=2, default=str))
     else:
