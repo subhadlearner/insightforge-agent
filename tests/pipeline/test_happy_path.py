@@ -149,8 +149,9 @@ def test_stored_report_is_the_verified_report(make_deps):
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     body = deps.repos.reports.get_for_run("alice", run.id).body
     assert set(body["verified"]) >= {"draft", "verdicts", "summary"}
-    assert body["verified"]["draft"] == body["draft"]
-    assert body["verified"]["summary"]["implemented"] is False
+    assert body["verified"]["summary"]["implemented"] is True
+    unverified = body["verified"]["summary"]["unverified"]
+    assert (body["verified"]["draft"] == body["draft"]) == (unverified == 0)
 
 
 SENTINEL = "SENTINEL-BODY-7731"

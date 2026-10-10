@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from insightforge_agent.domain.contracts import Citation, PassageRef
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.ids import derive_observation_id, derive_source_id
 from insightforge_agent.domain.models import Observation, Passage, Source, SourceKind
@@ -125,3 +126,15 @@ class SourceStore:
     def get_passages(self, owner_id: str, observation_id: str, indices: list[int]) -> list[Passage]:
         """A bounded batch of Passages by identity, in the order asked."""
         return [self._passages.get(owner_id, observation_id, i) for i in indices]
+
+    def citation(self, owner_id: str, ref: PassageRef) -> Citation:
+        """Resolve a Passage reference to its text and Source. Claim position and Evidence id
+        are left for the caller to fill. Raises NotFoundError if any record is missing."""
+        passage = self._passages.get(owner_id, ref.observation_id, ref.index)
+        source = self._sources.get(
+            owner_id, self._observations.get(owner_id, ref.observation_id).source_id)
+        return Citation(
+            section=0, claim=0, evidence_id="", source_id=source.id, source_title=source.title,
+            published_at=source.published_at, credibility_score=source.credibility_score,
+            passage=ref, passage_text=passage.text, page=passage.page,
+            section_heading=passage.section_heading)

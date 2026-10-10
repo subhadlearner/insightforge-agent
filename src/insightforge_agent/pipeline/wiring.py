@@ -24,6 +24,9 @@ def build_deps(settings: Settings, repos: Any, checkpointer: Any) -> Deps:
         evidence_budget_tokens=settings.evidence_budget_tokens,
         passage_token_cap=settings.passage_token_cap,
         run_token_cap=settings.run_token_cap,
+        fact_check_rate=settings.fact_check_rate,
+        fact_check_minimum=settings.fact_check_minimum,
+        similarity_threshold=settings.similarity_threshold,
         thresholds=Thresholds(
             credibility_high=settings.credibility_high,
             credibility_medium=settings.credibility_medium,

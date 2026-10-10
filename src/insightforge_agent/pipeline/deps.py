@@ -36,6 +36,9 @@ class Deps:
     embedder: Embedder = field(default_factory=HashingEmbedder)
     run_token_cap: int | None = None  # model tokens one Run may spend on Passage-reading calls
     writer_retries: int = 2
+    fact_check_rate: float = 0.2
+    fact_check_minimum: int = 5
+    similarity_threshold: float = 0.85
     recursion_limit: int = 60
 
     _spent: dict[tuple[str, str], int] = field(default_factory=dict, repr=False)
