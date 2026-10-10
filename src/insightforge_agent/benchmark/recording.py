@@ -23,6 +23,7 @@ REDACTED = "[REDACTED]"
 SAFE_CONFIG_FIELDS = frozenset({
     "provider", "temperature", "top_p", "seed", "max_output_tokens", "max_attempts", "thinking",
     "prompt_hash", "schema_hash", "device", "dtype", "calibration_temperature",
+    "similarity_threshold", "embedder", "embedding_dimensions",
 })
 
 _SECRET_PATTERNS = [

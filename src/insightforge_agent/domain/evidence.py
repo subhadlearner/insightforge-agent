@@ -98,3 +98,12 @@ def cites(passage_texts: list[str], locator: str) -> bool:
     """Whether a Source's text links to another Source, by its address or its domain."""
     domain = domain_of(locator)
     return any(locator.lower() in t.lower() or domain in t.lower() for t in passage_texts)
+
+
+def sources_independent(
+    a_locator: str, a_texts: list[str], b_locator: str, b_texts: list[str],
+) -> bool:
+    """Two Sources are independent when they sit on different domains and neither's text links
+    to the other, by address or domain. This is the predicate behind Confidence HIGH."""
+    return (domain_of(a_locator) != domain_of(b_locator)
+            and not cites(a_texts, b_locator) and not cites(b_texts, a_locator))

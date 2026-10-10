@@ -36,7 +36,12 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-markers = ["live: needs a real model or server; run on demand with -m live"]
+markers = [
+    "baseline: tier 1, the real deterministic T5/T6 production baseline (offline)",
+    "replay: tier 2, recorded predictions, replay and stale-recording checks (offline)",
+    "scripted: tier 3, scripted provider responses: parsing, invalid output, retries (offline)",
+    "live: tier 4, needs a real model or server; run on demand with -m live, never in CI",
+]
 addopts = "-m 'not live'"
 
 [tool.importlinter]

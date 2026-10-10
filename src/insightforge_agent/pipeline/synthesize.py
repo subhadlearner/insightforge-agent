@@ -31,15 +31,14 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.evidence import (
-    cites,
     compress_to_budget,
     confidence_of,
     credibility_bucket,
     decision_rule,
-    domain_of,
     rank_key,
     recency_bucket,
     section_label,
+    sources_independent,
 )
 from insightforge_agent.domain.extraction import group_key, normalise, same_value
 from insightforge_agent.domain.quantities import canonical_value, unsupported_numbers
@@ -126,6 +125,19 @@ class _Candidate:
     period: str  # as the Passage states it, or UNKNOWN
 
 
+def merge_identity(
+    *, statement: str, entity: str, predicate: str, value: str, scope: str, period: str,
+) -> str:
+    """What makes two drafted candidates the same Evidence item (step 2, Merge). A candidate with
+    an entity, predicate and value is keyed by its group key, stated period and canonical value;
+    any other is keyed by its normalised statement. `period` is the already-normalised stated
+    period (`stated_period`). The Evidence id is `derive_evidence_id(run_id, identity)`."""
+    structured = entity.strip() and predicate.strip() and value.strip()
+    if structured:
+        return f"{group_key(entity, predicate, scope)}|{period}|{canonical_value(value) or normalise(value)}"
+    return normalise(statement)
+
+
 def _key(ref: PassageRef) -> tuple[str, int]:
     return ref.observation_id, ref.index
 
@@ -198,8 +210,7 @@ def synthesize(
             continue
         supporting_sources = list(dict.fromkeys(source_by_obs[r.observation_id] for r in item.supporting))
         independent = any(
-            domain_of(a.locator) != domain_of(b.locator)
-            and not cites(source_texts(a), b.locator) and not cites(source_texts(b), a.locator)
+            sources_independent(a.locator, source_texts(a), b.locator, source_texts(b))
             for i, a in enumerate(supporting_sources) for b in supporting_sources[i + 1:])
         best = max((s.credibility_score or 0.0) for s in supporting_sources)
         scores[item.id] = best
@@ -271,9 +282,8 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
                      statement=statement[:120])
             continue
         period = stated_period(d.as_of_period)
-        structured = d.entity.strip() and d.predicate.strip() and d.value.strip()
-        identity = (f"{group_key(d.entity, d.predicate, d.scope)}|{period}|{canonical_value(d.value) or normalise(d.value)}"
-                    if structured else normalise(statement))
+        identity = merge_identity(statement=statement, entity=d.entity, predicate=d.predicate,
+                                  value=d.value, scope=d.scope, period=period)
         out.append(_Candidate(
             id=derive_evidence_id(run_id, identity), statement=statement, subtask=task,
             refs=cited, entities=[e.strip() for e in d.entities if e.strip()],
@@ -282,13 +292,17 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
     return out
 
 
-def _literal_problem(c: _Candidate, passage: Passage) -> str | None:
-    """Every number and named entity of the item must appear in the Passage."""
-    text = passage.text.casefold()
-    missing_numbers = unsupported_numbers(c.statement, passage.text)
+def literal_problem(
+    *, statement: str, entities: list[str], entity: str, passage_text: str,
+) -> str | None:
+    """Every number and named entity of the item must appear in the Passage. Returns the
+    reason it does not, or None. Lexical only: it says nothing about whether the Passage
+    supports the statement."""
+    text = passage_text.casefold()
+    missing_numbers = unsupported_numbers(statement, passage_text)
     if missing_numbers:
         return f"value not in Passage: {sorted(missing_numbers)}"
-    names = {*c.entities, *([c.entity] if c.entity else []), *named_entities_in(c.statement)}
+    names = {*entities, *([entity] if entity else []), *named_entities_in(statement)}
     missing_names = sorted(n for n in names if n.casefold() not in text)
     if missing_names:
         return f"name not in Passage: {missing_names}"
@@ -320,7 +334,8 @@ def _validate(
             rejected.append("no such Passage")
             continue
         candidates.append(passage)
-        problem = _literal_problem(c, passage)
+        problem = literal_problem(statement=c.statement, entities=c.entities,
+                                  entity=c.entity, passage_text=passage.text)
         if problem:
             rejected.append(problem)
         else:

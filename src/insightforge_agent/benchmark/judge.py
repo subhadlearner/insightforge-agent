@@ -20,6 +20,11 @@ from insightforge_agent.benchmark.cases import (
 
 Scalar = str | int | float | bool
 
+# Diagnostic keys a report aggregates. A candidate that can say what its own Evidence pipeline
+# would do to the item under test records it here; others leave them out (never zero-filled).
+DISPOSITION_KEY = "evidence_disposition"
+REASON_KEY = "evidence_reason"
+
 
 class JudgeStatus(StrEnum):
     JUDGED = "JUDGED"
