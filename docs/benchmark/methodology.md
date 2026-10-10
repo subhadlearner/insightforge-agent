@@ -2,7 +2,7 @@
 
 **Status: PROPOSED.** Nothing here is accepted until the owner approves it at the M1 review gate (#35). Part of the spike [#26](https://github.com/subhadlearner/insightforge-agent/issues/26), implemented by M1.2 ([#30](https://github.com/subhadlearner/insightforge-agent/issues/30)) and M1.3 ([#31](https://github.com/subhadlearner/insightforge-agent/issues/31)). M1 is entirely offline: no model is called, and `insightforge-agent bench` has no command that runs one (`bench baseline` runs only the production deterministic logic).
 
-Code: `src/insightforge_agent/benchmark/`. Cases: `benchmarks/evidence/cases.jsonl` (written by #32; not part of M1.2). Test fixtures live apart, in `tests/fixtures/benchmark/`.
+Code: `src/insightforge_agent/benchmark/`. Cases: `benchmarks/evidence/cases.jsonl` (the 48-case pilot, M1.4 / #32) and the separate few-shot set `benchmarks/evidence/fewshot.jsonl`. Test fixtures live apart, in `tests/fixtures/benchmark/`.
 
 ## Judgment types, labels and positive classes
 
@@ -54,6 +54,28 @@ Within a group (case type, type/primary category, or type/expected judgment), ov
 | F1 | 2TP / (2TP + FP + FN) | missing on expected positives are FN |
 
 A zero denominator is reported as **undefined**, never as 0. Intervals are Wilson 95%. Per case type, F1 also has a percentile bootstrap interval. Cohen's kappa (for run-to-run stability and second-review agreement) is undefined, and says why, when there are no pairs or chance agreement is 1.
+
+## Pilot set (M1.4)
+
+48 cases, every label `proposed` and every case `synthetic` (invented companies; nothing is an excerpt, so nothing needs a URL). Nothing here is human-verified until M1.5 reviews it.
+
+| Type | Cases | Categories (count) |
+|---|---|---|
+| PAIR | 24 | false_merge_negative 6, period_scope_mismatch 4, alias_predicate_synonym 4, paraphrase_qualified_value 3, contradiction 4, temporal_ambiguity 3 |
+| SUPPORT | 12 | irrelevant_quotation 3, forecast_vs_historical 3, t6_similarity_numeric 4, positive_control 2 |
+| GROUND | 8 | wrong_interpretation 2, misattribution 2, qualifiers_units_abbreviations 3, nonexistent_span 1 |
+| INDEPENDENCE | 4 | syndicated 2, genuinely_independent 2 |
+
+**Label conventions** (so a reviewer and a candidate read the same question):
+- PAIR `CONTRADICTORY`: same entity, measure, period and scope, but the statements cannot both be true (opposite polarity or direction, different values of a single-valued predicate, a factor of 1,000 apart). `DIFFERENT_FACT`: the statements concern different things (measure, period, scope, entity or relationship), so both can be true. `SAME_FACT`: one fact worded or rounded differently.
+- SUPPORT `INSUFFICIENT_EVIDENCE`: the Passage is silent on, or only forecasts or recalls another period of, the statement. `CONTRADICTED`: the Passage states a conflicting value for the same entity, measure and period.
+- Relative dates ("last quarter", "this year") are resolved against the Passage's own publication date, which the case supplies.
+
+**Critical** is set for the categories where a wrong positive is the costly error: false_merge_negative, contradiction, irrelevant_quotation, forecast_vs_historical, t6_similarity_numeric and syndicated (22 cases). Every critical case is a negative.
+
+**Look-alike negatives** are tagged: `dollars_vs_vehicles`, `same_name_different_entity`, `same_number_different_period`, `same_number_different_scope`, `million_vs_billion` (a contradiction, since the statements cannot both hold), `rounded_vs_exact` (a SAME_FACT paraphrase, and a SUPPORT case where rounding cannot establish an exact figure) and `syndicated_copy`. All PAIR cases carry structured fields so the deterministic baseline can run on them.
+
+**Few-shot examples** (`fewshot.jsonl`, at most 10) are a separate file in the same schema, built from different companies and wording. A test fails if any example shares an id, input text or company name with a benchmark case; candidates may be shown them, and they are never scored.
 
 ## Statistics
 
