@@ -112,7 +112,7 @@ class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.title = ""
-        self.meta: dict[str, str] = {}  # first value per lower-cased property / name / itemprop
+        self.meta: dict[str, str] = {}  # first non-empty value per lower-cased property / name / itemprop
         self.json_ld: list[str] = []
         self._in_title = False
         self._in_json_ld = False
@@ -120,16 +120,18 @@ class _TextExtractor(HTMLParser):
         self._parts: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        a = {k.lower(): (v or "") for k, v in attrs}
         if tag == "meta":
+            a = {k.lower(): (v or "") for k, v in attrs}
             key = (a.get("property") or a.get("name") or a.get("itemprop") or "").strip().lower()
-            if key and key not in self.meta:
-                self.meta[key] = a.get("content", "")
+            content = a.get("content", "").strip()
+            if key and content and key not in self.meta:
+                self.meta[key] = content
         elif tag == "title":
             self._in_title = True
         elif tag in self._SKIP:
             self._skip_depth += 1
-            if tag == "script" and a.get("type", "").strip().lower() == "application/ld+json":
+            kind = next((v or "" for k, v in attrs if k.lower() == "type"), "")
+            if tag == "script" and kind.strip().lower() == "application/ld+json":
                 self._in_json_ld = True
                 self.json_ld.append("")
         elif tag in self._BLOCKS or tag == "br":
@@ -163,13 +165,12 @@ class _TextExtractor(HTMLParser):
 # <time> elements, body text and URL paths are ambiguous and are never used.
 _DATE_META = ("article:published_time", "datepublished")
 _AUTHOR_META = ("author", "article:author")
-_ARTICLE_TYPES = {"article", "newsarticle", "blogposting", "reportagenewsarticle",
-                  "analysisnewsarticle", "report", "scholarlyarticle"}
 _EARLIEST_PLAUSIBLE = datetime(1990, 1, 1, tzinfo=UTC)
 
 
 def _json_ld_objects(blocks: list[str]) -> list[dict]:
-    """Every JSON-LD object on the page, flattening lists and @graph; unreadable blocks skipped."""
+    """Every JSON-LD object on the page, nested ones included (lists, @graph, mainEntity, ...);
+    unreadable blocks are skipped."""
     found: list[dict] = []
 
     def walk(node) -> None:
@@ -178,7 +179,8 @@ def _json_ld_objects(blocks: list[str]) -> list[dict]:
                 walk(n)
         elif isinstance(node, dict):
             found.append(node)
-            walk(node.get("@graph"))
+            for value in node.values():
+                walk(value)
 
     for block in blocks:
         try:
@@ -188,10 +190,27 @@ def _json_ld_objects(blocks: list[str]) -> list[dict]:
     return found
 
 
+def _types(obj: dict) -> list[str]:
+    """Lower-cased schema.org type names, URL forms ("https://schema.org/NewsArticle") reduced."""
+    raw = obj.get("@type")
+    return [re.split(r"[/#:]", t)[-1].lower() for t in (raw if isinstance(raw, list) else [raw])
+            if isinstance(t, str)]
+
+
 def _is_article(obj: dict) -> bool:
-    types = obj.get("@type")
-    types = types if isinstance(types, list) else [types]
-    return any(isinstance(t, str) and t.lower() in _ARTICLE_TYPES for t in types)
+    """Article and its subtypes (NewsArticle, TechArticle, BlogPosting, LiveBlogPosting, ...)."""
+    return any(t.endswith(("article", "blogposting")) or t in ("report", "pressrelease")
+               for t in _types(obj))
+
+
+def _is_page(obj: dict) -> bool:
+    return any(t.endswith("page") for t in _types(obj))
+
+
+def _publication_objects(objects: list[dict]) -> list[dict]:
+    """The objects whose datePublished and author describe the page: articles, then web pages.
+    Anything else (ImageObject, VideoObject, Organization, WebSite, ...) is ignored."""
+    return [o for o in objects if _is_article(o)] + [o for o in objects if _is_page(o) and not _is_article(o)]
 
 
 def _parse_date(value: object, now: datetime) -> datetime | None:
@@ -208,23 +227,24 @@ def _parse_date(value: object, now: datetime) -> datetime | None:
 
 
 def _published_at(parser: _TextExtractor, objects: list[dict], now: datetime) -> datetime | None:
-    """JSON-LD datePublished (article types first), then article meta tags; first valid wins."""
-    ordered = sorted(objects, key=lambda o: not _is_article(o))
-    candidates = [o.get("datePublished") for o in ordered] + [parser.meta.get(k) for k in _DATE_META]
+    """JSON-LD datePublished (articles, then pages), then article meta tags; first valid wins."""
+    candidates = [o.get("datePublished") for o in objects] + [parser.meta.get(k) for k in _DATE_META]
     return next((d for d in (_parse_date(c, now) for c in candidates) if d), None)
 
 
 def _author_name(author: object) -> str | None:
+    """A named author. An Organization is a publisher, not a byline."""
     if isinstance(author, list):
         return next((n for n in map(_author_name, author) if n), None)
     if isinstance(author, dict):
+        if "organization" in _types(author):
+            return None
         author = author.get("name")
     return author.strip() if isinstance(author, str) and author.strip() else None
 
 
 def _byline(parser: _TextExtractor, objects: list[dict]) -> str | None:
-    ordered = sorted(objects, key=lambda o: not _is_article(o))
-    candidates = [o.get("author") for o in ordered] + [parser.meta.get(k) for k in _AUTHOR_META]
+    candidates = [o.get("author") for o in objects] + [parser.meta.get(k) for k in _AUTHOR_META]
     return next((n for n in map(_author_name, candidates) if n), None)
 
 
@@ -233,7 +253,7 @@ def html_to_page(url: str, html: str, now: datetime | None = None) -> Page:
     A date after `now` (default: the current time) is treated as missing."""
     parser = _TextExtractor()
     parser.feed(html)
-    objects = _json_ld_objects(parser.json_ld)
+    objects = _publication_objects(_json_ld_objects(parser.json_ld))
     return Page(url=url, title=re.sub(r"\s+", " ", parser.title).strip() or url, body=parser.text(),
                 published_at=_published_at(parser, objects, now or datetime.now(UTC)),
                 byline=_byline(parser, objects))

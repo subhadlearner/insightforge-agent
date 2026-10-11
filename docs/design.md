@@ -291,10 +291,11 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 
 ### F1 notes: web Source metadata and credibility
 
-- **Publication date** (`agents/web.html_to_page`): JSON-LD `datePublished` (article types before others, `@graph` and lists flattened), then `article:published_time`, then `itemprop="datePublished"`. ISO 8601 only; a date or naive time is read as UTC. A value that is missing, unreadable, before 1990 or after the fetch time gives `None`. Nothing is taken from a bare `date` meta tag, `dateModified`, `<time>` elements, body text or the URL.
-- **Byline:** JSON-LD `author` (a string, `{name}` or a list), then `author` / `article:author` meta. Only its presence is scored; it is not stored.
+- **Publication date** (`agents/web.html_to_page`): JSON-LD `datePublished` from Article types (and subtypes), then from WebPage types, at any nesting (`@graph`, `mainEntity`, lists); other objects such as ImageObject are ignored. Then `article:published_time`, then `itemprop="datePublished"`. ISO 8601 only; a date or naive time is read as UTC. A value that is missing, unreadable, before 1990 or after the fetch time gives `None`. Nothing is taken from a bare `date` meta tag, `dateModified`, `<time>` elements, body text or the URL.
+- **Byline:** JSON-LD `author` (a string, `{name}` or a list; an Organization does not count), then `author` / `article:author` meta. Only its presence is scored; it is not stored. A site that puts its own name in `author` meta still earns it (+0.05, never enough for MEDIUM alone).
 - **Credibility** (`agents/web.credibility_score`), additive and rounded to 2 places: domain .gov/.edu/.int 0.8, major press (`MAJOR_PRESS`, a short allow-list matching the domain and its subdomains) 0.7, any other 0.55; recency +0.1 up to a year, -0.1 over three years, 0 otherwise or when the date is unknown; byline +0.05. An undated unknown domain stays below MEDIUM even with a byline; a dated recent one, or major press, reaches MEDIUM alone. The Confidence policy and thresholds are unchanged; `tests/domain/test_confidence_matrix.py` holds the matrix.
-- **Knock-on:** a Source with a publication date no longer has a present-state As-of derived from the Observation date (section 5 rule, unchanged), and a Fact-Checker re-fetch now stores the page's own date when it has one (`fact_check.py` unchanged).
+- **Knock-on:** a Source with a publication date no longer has a present-state As-of derived from the Observation date (section 5 rule, unchanged).
+- **Limitation:** a Source row is written once (first ingest wins), so a Source stored before F1 keeps its old score and no date, and a later fetch or Fact-Checker re-fetch does not update it. Use a fresh database for evaluation runs. Plausibility is checked against the wall clock at parse time, the score against the Run's clock; they differ only with an injected clock.
 
 ### T6 notes: Writer, Fact-Checker and citations
 

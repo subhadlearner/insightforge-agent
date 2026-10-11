@@ -77,6 +77,23 @@ def test_no_date_is_invented_when_metadata_is_missing_or_invalid(head, body):
     assert page.published_at is None
 
 
+@pytest.mark.parametrize("head", [
+    ld({"@type": "WebPage", "datePublished": "2015-01-01",
+        "mainEntity": {"@type": "NewsArticle", "datePublished": "2026-03-02"}}),
+    ld({"@type": "https://schema.org/TechArticle", "datePublished": "2026-03-02"}),
+    ld({"@graph": [{"@type": "ImageObject", "datePublished": "2018-01-01"},
+                   {"@type": "LiveBlogPosting", "datePublished": "2026-03-02"}]}),
+    '<meta property="article:published_time" content=""><meta property="article:published_time" content="2026-03-02">',
+])
+def test_the_article_date_is_found_wherever_the_page_puts_it(head):
+    assert html_to_page("https://x.test/a", html(head), now=NOW).published_at == datetime(2026, 3, 2, tzinfo=UTC)
+
+
+def test_a_media_object_date_is_not_a_publication_date():
+    head = ld({"@graph": [{"@type": "ImageObject", "datePublished": "2026-03-02"}]})
+    assert html_to_page("https://x.test/a", html(head), now=NOW).published_at is None
+
+
 def test_json_ld_is_not_part_of_the_body_text():
     page = html_to_page("https://x.test/a", html(ld({"@type": "Article", "datePublished": "2026-03-02"})),
                         now=NOW)
@@ -91,6 +108,7 @@ def test_json_ld_is_not_part_of_the_body_text():
     (ld({"@type": "NewsArticle", "author": "Jane Doe"}), "Jane Doe"),
     (ld({"@type": "NewsArticle", "author": {"@type": "Person", "name": "Jane Doe"}}), "Jane Doe"),
     (ld({"@type": "NewsArticle", "author": [{"name": "Jane Doe"}, {"name": "Li Wei"}]}), "Jane Doe"),
+    ('<meta name="author" content=""><meta name="author" content="Jane Doe">', "Jane Doe"),
 ])
 def test_byline_is_read_from_metadata(head, expected):
     assert html_to_page("https://x.test/a", html(head), now=NOW).byline == expected
@@ -98,6 +116,8 @@ def test_byline_is_read_from_metadata(head, expected):
 
 @pytest.mark.parametrize("head", [
     "", '<meta name="author" content="  ">', ld({"@type": "NewsArticle", "author": {"name": ""}}),
+    ld({"@type": "NewsArticle", "author": {"@type": "Organization", "name": "Acme Blog"}}),
+    ld({"@type": "ImageObject", "author": "Photo Desk"}),
 ])
 def test_no_byline_without_author_metadata(head):
     assert html_to_page("https://x.test/a", html(head), now=NOW).byline is None
