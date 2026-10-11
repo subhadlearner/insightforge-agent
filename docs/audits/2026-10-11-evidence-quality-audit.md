@@ -33,6 +33,8 @@
 
 ## F2. The Fact-Checker fails true Claims and can pass false ones (MUST FIX)
 
+> **Status (post-T7):** measured with the production `bge-small` embedder in `2026-10-11-f2-fact-checker.md`. Paraphrases and g-qu-02 now verify; Claims in longer paragraphs still fail, and wrong-measure / wrong-entity Claims (g-ma-02) still pass. Awaiting an owner decision on the verification policy.
+
 - **Problem.**
   - `fact_check` compares a one-sentence Claim with whole re-fetched paragraphs, using the bag-of-words `HashingEmbedder(256)` at 0.85 (`pipeline/fact_check.py:36-110`, `pipeline/deps.py:36`).
   - Cosine between a sentence and a paragraph falls roughly with the square root of the paragraph's length, and any paraphrase by the Writer lowers it further.
