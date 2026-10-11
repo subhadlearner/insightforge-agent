@@ -5,9 +5,14 @@ Each case is two web Sources on different domains (credibility 0.9, so two suppo
 would be HIGH). The light model is scripted: the draft reply carries the case's reviewed
 statements and structured fields, and the entailment reply is the semantically correct verdict
 for each (statement, Passage) pair. What is under test is the production Merge and validation
-mechanics, not a model's judgment. Spies on `_draft` and `_validate` record what Merge produced."""
+mechanics, not a model's judgment. Spies on `_draft` and `_validate` record what Merge produced.
+
+Rule under test (F4): a structured candidate whose stated period is UNKNOWN merges only with
+candidates citing exactly the same Observations. Explicit periods and statement-keyed
+candidates merge as before."""
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -92,43 +97,76 @@ P_FM_02 = Case(
          "Aldine Capital, the London asset manager, closed a $400 million fund in 2024.", "2024"),
     Side("https://b.test/y", "Aldine Capital, the Houston energy lender, closed a $400 million fund in 2024.",
          "Aldine Capital, the Houston energy lender, closed a $400 million fund in 2024.", "2024"))
+# The same Passages, but the drafting model leaves the descriptor out of both statements.
+# Nothing lexical then tells the companies apart, and each Passage does state the statement.
+P_FM_02_BARE = Case(
+    "p-fm-02-bare", "Aldine Capital", "closed fund", "$400 million",
+    Side(P_FM_02.a.url, P_FM_02.a.passage, "Aldine Capital closed a $400 million fund in 2024.", "2024"),
+    Side(P_FM_02.b.url, P_FM_02.b.passage, "Aldine Capital closed a $400 million fund in 2024.", "2024"))
 
 
 @dataclass
 class Outcome:
-    drafted: int
-    merged: list[list[str]]  # per candidate reaching validation: the sides it cites
+    drafted: list  # the candidates `_draft` returned, in order
+    merged: list[list[str]]  # per candidate reaching validation: the Sources (tags) it cites
     items: list[EvidenceItem]
-    side_of: dict[str, str] = field(default_factory=dict)  # observation id -> "a" / "b"
+    tag_of: dict[str, str] = field(default_factory=dict)  # observation id -> page tag
 
-    def sides(self, item: EvidenceItem) -> list[str]:
-        return sorted(self.side_of[r.observation_id] for r in item.supporting)
+    def tags(self, item: EvidenceItem) -> list[str]:
+        return sorted(self.tag_of[r.observation_id] for r in item.supporting)
 
     def statements(self) -> set[str]:
         return {i.statement for i in self.items}
 
+    def summary(self) -> tuple:
+        """(drafted, the tags each merged candidate cites, [(supporting tags, Confidence)])."""
+        return (len(self.drafted), sorted(self.merged),
+                sorted((self.tags(i), i.confidence) for i in self.items))
+
+
+def synth_run(make_deps, monkeypatch, pages: dict[str, tuple[str, str, datetime | None]],
+              draft: Callable, entail: Callable, *, found: dict[str, list[str]] | None = None,
+              facts: Callable | None = None) -> Outcome:
+    """Run the real `synthesize` over web pages `{tag: (url, body, published)}`. `found` maps
+    Sub-task id -> page tags (default: one Sub-task finding every page); `facts(obs_of)` gives
+    the Extraction facts."""
+    deps = make_deps(now=lambda: NOW)
+    obs_of = {tag: deps.store.ingest_web(
+        owner_id=OWNER, run_id=RUN, url=url, title=url, body=body, fetched_at=NOW,
+        credibility_score=0.9, published_at=published)
+        for tag, (url, body, published) in pages.items()}
+    found = found or {"s1": list(pages)}
+    tasks = [SubTask(id=sid, aspect_id="a1", query=f"q {sid}", source_type="web",
+                     time_horizon_months=12, priority=n + 1) for n, sid in enumerate(found)]
+    plan = SubTaskPlan(aspects=[Aspect(id="a1", name="A")], sub_tasks=tasks)
+    research = ResearchResults(results=[SubTaskResult(
+        subtask_id=sid, status="succeeded",
+        source_refs=[SourceRef(source_id=obs_of[t].source_id, title=t, summary="s") for t in tags])
+        for sid, tags in found.items()])
+    extraction = ExtractionResult(facts=facts(obs_of) if facts else [])
+    deps.light_model = light(draft=draft, entail=entail)
+    tag_of = {o.id: t for t, o in obs_of.items()}
+
+    drafted, merged = [], []
+    real_draft, real_validate = synth._draft, synth._validate
+
+    def spy_draft(*a, **k):
+        out = real_draft(*a, **k)
+        drafted.extend(out)
+        return out
+
+    def spy_validate(deps_, owner, run_id, c, *rest):
+        merged.append(sorted(tag_of[r.observation_id] for r in c.refs))
+        return real_validate(deps_, owner, run_id, c, *rest)
+
+    monkeypatch.setattr(synth, "_draft", spy_draft)
+    monkeypatch.setattr(synth, "_validate", spy_validate)
+    bundle = synth.synthesize(deps, OWNER, RUN, "brief", plan, research, extraction)
+    return Outcome(drafted=drafted, merged=merged,
+                   items=[i for s in bundle.sections for i in s.items], tag_of=tag_of)
+
 
 def run(case: Case, make_deps, monkeypatch) -> Outcome:
-    deps = make_deps(now=lambda: NOW)
-    side_of, refs = {}, []
-    for tag, side in (("a", case.a), ("b", case.b)):
-        obs = deps.store.ingest_web(
-            owner_id=OWNER, run_id=RUN, url=side.url, title=side.url, body=side.passage,
-            fetched_at=NOW, credibility_score=0.9, published_at=side.published)
-        side_of[obs.id] = tag
-        refs.append((obs, side))
-    task = SubTask(id="s1", aspect_id="a1", query="q", source_type="web",
-                   time_horizon_months=12, priority=1)
-    plan = SubTaskPlan(aspects=[Aspect(id="a1", name="A")], sub_tasks=[task])
-    research = ResearchResults(results=[SubTaskResult(
-        subtask_id="s1", status="succeeded",
-        source_refs=[SourceRef(source_id=o.source_id, title=s.url, summary="s") for o, s in refs])])
-    # The Extraction facts mirror the drafted fields, as the extraction model would give them.
-    extraction = ExtractionResult(facts=[ExtractedFact(
-        id=f"f{tag}", source_id=o.source_id, passage=PassageRef(observation_id=o.id, index=0),
-        statement=s.statement, entity=case.entity, predicate=case.predicate, scope=case.scope,
-        value=case.value, period=s.period or "UNKNOWN") for tag, (o, s) in zip("ab", refs)])
-
     by_passage = {case.a.passage: case.a, case.b.passage: case.b}
 
     def draft(numbered, user):
@@ -143,66 +181,146 @@ def run(case: Case, make_deps, monkeypatch) -> Outcome:
                  "verdict": "SUPPORTED" if case.supports(statement, t) else "INSUFFICIENT_EVIDENCE",
                  "asserts_present_state": by_passage[t].present} for n, t in numbered]
 
-    deps.light_model = light(draft=draft, entail=entail)
+    def facts(obs_of):
+        # The Extraction facts mirror the drafted fields, as the extraction model would give them.
+        return [ExtractedFact(
+            id=f"f{tag}", source_id=obs_of[tag].source_id,
+            passage=PassageRef(observation_id=obs_of[tag].id, index=0), statement=s.statement,
+            entity=case.entity, predicate=case.predicate, scope=case.scope, value=case.value,
+            period=s.period or "UNKNOWN") for tag, s in (("a", case.a), ("b", case.b))]
 
-    drafted, merged = [], []
-    real_draft, real_validate = synth._draft, synth._validate
-
-    def spy_draft(*a, **k):
-        out = real_draft(*a, **k)
-        drafted.extend(out)
-        return out
-
-    def spy_validate(deps_, owner, run_id, c, *rest):
-        merged.append(sorted(side_of[r.observation_id] for r in c.refs))
-        return real_validate(deps_, owner, run_id, c, *rest)
-
-    monkeypatch.setattr(synth, "_draft", spy_draft)
-    monkeypatch.setattr(synth, "_validate", spy_validate)
-    bundle = synth.synthesize(deps, OWNER, RUN, "brief", plan, research, extraction)
-    items = [i for s in bundle.sections for i in s.items]
-    return Outcome(drafted=len(drafted), merged=merged, items=items, side_of=side_of)
+    pages = {tag: (s.url, s.passage, s.published) for tag, s in (("a", case.a), ("b", case.b))}
+    return synth_run(make_deps, monkeypatch, pages, draft, entail, facts=facts)
 
 
-def summary(o: Outcome) -> tuple:
-    """(drafted, the sides each merged candidate cites, [(supporting sides, Confidence)])."""
-    return o.drafted, o.merged, sorted((o.sides(i), i.confidence) for i in o.items)
-
-
-# ---- Phase 1: production behaviour before the F4 change ------------------------------------
+# ---- the five reviewed cases ----------------------------------------------------------------
 
 @pytest.mark.parametrize("case", [P_TA_02, P_TA_03], ids=lambda c: c.id)
-def test_phase1_temporal_observations_years_apart_become_one_high_item(case, make_deps, monkeypatch):
+def test_temporal_observations_years_apart_stay_two_medium_items(case, make_deps, monkeypatch):
+    # Before F4: one item supported by both Sources, HIGH.
     o = run(case, make_deps, monkeypatch)
-    assert summary(o) == (2, [["a", "b"]], [(["a", "b"], "HIGH")])
-    (item,) = o.items
-    assert item.as_of_period == "UNKNOWN" and item.temporally_ambiguous
+    assert o.summary() == (2, [["a"], ["b"]], [(["a"], "MEDIUM"), (["b"], "MEDIUM")])
+    assert all(i.as_of_period == "UNKNOWN" and i.temporally_ambiguous for i in o.items)
+    assert len({i.id for i in o.items}) == 2
 
 
 @pytest.mark.parametrize("case", [P_PS_01, P_PS_04], ids=lambda c: c.id)
-def test_phase1_noncanonical_periods_merge_and_the_second_fact_is_lost(case, make_deps, monkeypatch):
+def test_noncanonical_periods_no_longer_lose_the_second_fact(case, make_deps, monkeypatch):
+    # Before F4: merged, and the literal check left only side a (side b's fact silently lost).
     o = run(case, make_deps, monkeypatch)
-    # The literal check rejects side b for the kept statement (its year is not in Passage b),
-    # so there is no false corroboration, but side b's own fact is gone and nothing logs it.
-    assert summary(o) == (2, [["a", "b"]], [(["a"], "MEDIUM")])
-    assert o.statements() == {case.a.statement}
+    assert o.summary() == (2, [["a"], ["b"]], [(["a"], "MEDIUM"), (["b"], "MEDIUM")])
+    assert o.statements() == {case.a.statement, case.b.statement}
 
 
-def test_phase1_same_name_entities_merge_and_the_second_fact_is_lost(make_deps, monkeypatch):
-    o = run(P_FM_02, make_deps, monkeypatch)
-    assert summary(o) == (2, [["a", "b"]], [(["a"], "MEDIUM")])
-    assert o.statements() == {P_FM_02.a.statement}  # "London" is not in Passage b
-
-
-# The same Passages, but the drafting model leaves the descriptor out of both statements.
-# Nothing lexical then tells the companies apart, and each Passage does state the statement.
-P_FM_02_BARE = Case(
-    "p-fm-02-bare", "Aldine Capital", "closed fund", "$400 million",
-    Side(P_FM_02.a.url, P_FM_02.a.passage, "Aldine Capital closed a $400 million fund in 2024.", "2024"),
-    Side(P_FM_02.b.url, P_FM_02.b.passage, "Aldine Capital closed a $400 million fund in 2024.", "2024"))
-
-
-def test_phase1_same_name_entities_without_descriptors_are_falsely_corroborated(
+def test_same_name_entities_with_an_explicit_period_still_merge_and_lose_a_fact(
         make_deps, monkeypatch):
+    """Retained limitation (not F4's rule): the period is explicit, so the key is unchanged.
+    The literal check stops false corroboration ("London" is not in Passage b), but side b's
+    fact is lost."""
+    o = run(P_FM_02, make_deps, monkeypatch)
+    assert o.summary() == (2, [["a", "b"]], [(["a"], "MEDIUM")])
+    assert o.statements() == {P_FM_02.a.statement}
+
+
+def test_same_name_entities_without_descriptors_are_still_falsely_corroborated(
+        make_deps, monkeypatch):
+    """Retained limitation: with no descriptor in the statements nothing deterministic tells
+    the two companies apart, and each Passage does state the statement."""
     o = run(P_FM_02_BARE, make_deps, monkeypatch)
-    assert summary(o) == (2, [["a", "b"]], [(["a", "b"], "HIGH")])
+    assert o.summary() == (2, [["a", "b"]], [(["a", "b"], "HIGH")])
+
+
+# ---- controls -------------------------------------------------------------------------------
+
+def structured(statement, passages, period, value="310"):
+    return {"statement": statement, "passages": passages, "entity": "Orrin Bio",
+            "predicate": "employees", "value": value, "scope": "", "entities": ["Orrin Bio"],
+            "as_of_period": period}
+
+
+def supported(numbered, user):
+    return [{"passage": n, "verdict": "SUPPORTED"} for n, _ in numbered]
+
+
+TWO = {"a": ("https://a.example/x", "Orrin Bio has 310 employees in 2024.", None),
+       "b": ("https://b.test/y", "Orrin Bio has 310 employees in 2024.", None)}
+
+
+def test_duplicate_unknown_period_candidates_from_one_observation_still_deduplicate(
+        make_deps, monkeypatch):
+    page = {"a": ("https://a.example/x", "Orrin Bio has 310 employees.\n\n"
+                  "Orrin Bio, which has 310 employees, is hiring.", None)}
+    o = synth_run(make_deps, monkeypatch, page, lambda ps, u: [
+        structured("Orrin Bio has 310 employees.", [1], "UNKNOWN"),
+        structured("Orrin Bio has 310 employees.", [2], "UNKNOWN"),   # another Passage
+        structured("Orrin Bio employs 310 people.", [1], "sometime")],  # unreadable period
+        supported)
+    assert o.summary() == (3, [["a", "a"]], [(["a", "a"], "MEDIUM")])
+    assert len(o.items[0].supporting) == 2
+
+
+def test_one_observation_found_by_two_subtasks_still_deduplicates(make_deps, monkeypatch):
+    page = {"a": ("https://a.example/x", "Orrin Bio has 310 employees.", None)}
+    o = synth_run(make_deps, monkeypatch, page,
+                  lambda ps, u: [structured("Orrin Bio has 310 employees.", [1], "UNKNOWN")],
+                  supported, found={"s1": ["a"], "s2": ["a"]})
+    assert o.summary() == (2, [["a"]], [(["a"], "MEDIUM")])
+    assert o.items[0].subtask_id == "s1"  # the more important Sub-task keeps it
+
+
+def test_the_same_explicit_period_across_independent_observations_still_corroborates(
+        make_deps, monkeypatch):
+    o = synth_run(make_deps, monkeypatch, TWO, lambda ps, u: [
+        structured("Orrin Bio has 310 employees in 2024.", [n], "2024") for n, _ in ps], supported)
+    assert o.summary() == (2, [["a", "b"]], [(["a", "b"], "HIGH")])
+
+
+def test_different_explicit_periods_stay_distinct(make_deps, monkeypatch):
+    pages = {"a": ("https://a.example/x", "Orrin Bio had 310 employees in 2022.", None),
+             "b": ("https://b.test/y", "Orrin Bio had 310 employees in 2024.", None)}
+    o = synth_run(make_deps, monkeypatch, pages, lambda ps, u: [
+        structured(t, [n], re.search(r"20\d\d", t).group(0)) for n, t in ps],
+        lambda ps, u: [{"passage": n, "verdict": "SUPPORTED" if t in u.split("\n")[0]
+                        else "INSUFFICIENT_EVIDENCE"} for n, t in ps])
+    assert o.summary() == (2, [["a"], ["b"]], [(["a"], "MEDIUM"), (["b"], "MEDIUM")])
+    assert sorted(i.as_of_period for i in o.items) == ["2022", "2024"]
+
+
+def test_unstructured_candidates_are_still_keyed_by_statement_alone(make_deps, monkeypatch):
+    """Out of F4's scope and unchanged: a candidate with no entity, predicate or value is keyed
+    by its statement, so identical wording from two Observations still merges."""
+    o = synth_run(make_deps, monkeypatch, TWO, lambda ps, u: [
+        {"statement": "Orrin Bio has 310 employees in 2024.", "passages": [n]} for n, _ in ps],
+        supported)
+    assert o.summary() == (2, [["a", "b"]], [(["a", "b"], "HIGH")])
+
+
+def test_a_candidate_citing_several_observations_merges_only_with_the_same_set(
+        make_deps, monkeypatch):
+    """A candidate's provenance is the set of Observations it cites. The drafting model's own
+    grouping is kept (Merge never splits a candidate), so one candidate citing a and b is
+    judged against both; it merges with another citing exactly {a, b}, not with {a} alone."""
+    three = {**TWO, "c": ("https://c.example/z", "Orrin Bio has 310 employees in 2024.", None)}
+    o = synth_run(make_deps, monkeypatch, three, lambda ps, u: [
+        structured("Orrin Bio has 310 employees.", [1, 2], "UNKNOWN"),
+        structured("Orrin Bio employs 310 people.", [2, 1], "UNKNOWN"),
+        structured("Orrin Bio has 310 employees.", [1], "UNKNOWN"),
+        structured("Orrin Bio has 310 employees.", [3], "UNKNOWN")], supported)
+    assert o.summary() == (4, [["a"], ["a", "b"], ["c"]],
+                           [(["a"], "MEDIUM"), (["a", "b"], "HIGH"), (["c"], "MEDIUM")])
+
+
+def test_candidate_ids_are_deterministic_and_carry_provenance_only_when_unknown(
+        make_deps, monkeypatch):
+    def ids(draft):
+        o = synth_run(make_deps, monkeypatch, TWO, draft, supported)
+        return [c.id for c in o.drafted]
+
+    unknown = lambda ps, u: [structured("Orrin Bio has 310 employees.", [n], "UNKNOWN")  # noqa: E731
+                             for n, _ in ps]
+    first, again = ids(unknown), ids(unknown)
+    assert first == again and first[0] != first[1]
+    explicit = lambda ps, u: [structured("Orrin Bio has 310 employees in 2024.", [n], "2024")  # noqa: E731
+                              for n, _ in ps]
+    a, b = ids(explicit)
+    assert a == b

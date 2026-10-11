@@ -8,6 +8,8 @@ Owner-approved mapping (M1.3, issue #31):
 
   PAIR          keys equal -> SAME_FACT; keys differ -> NOT_APPLICABLE (T5 only decides merge
                 or no merge; the extraction conflict rule is recorded, never used as a label).
+                The two candidates are separate Observations, so since F4 an UNKNOWN period on
+                both sides never merges.
   SUPPORT       always NOT_APPLICABLE (support is an LLM entailment verdict); the lexical
                 check and whether T5 would drop the item are recorded.
   GROUND        CLAIM_PASSAGE: the real `fact_check` gates (`screen`). Since F2, support is an
@@ -69,7 +71,9 @@ from insightforge_agent.stores.memory import MemoryRepos
 from insightforge_agent.stores.source_store import PassageDraft, SourceStore
 
 CANDIDATE = "deterministic-baseline"
-CANDIDATE_VERSION = "m1.3-2"  # 2: CLAIM_PASSAGE follows F2 (span gates, then entailment)
+# 2: CLAIM_PASSAGE follows F2 (span gates, then entailment). 3: F4, an UNKNOWN-period merge key
+# carries the cited Observations, so a PAIR with an UNKNOWN period no longer merges.
+CANDIDATE_VERSION = "m1.3-3"
 MODEL = "none (production deterministic logic)"
 SIMILARITY_THRESHOLD = 0.85  # the production default of Deps.similarity_threshold
 EMBEDDING_DIMENSIONS = 256   # the baseline's fixed HashingEmbedder (production uses bge-small)
@@ -183,7 +187,8 @@ class DeterministicBaseline:
                             reason="the pair has no structured candidate fields, so T5's merge "
                                    "key cannot be formed")
         a, b = p.structured_a, p.structured_b
-        key_a, key_b = _identity_of(p.statement_a, a), _identity_of(p.statement_b, b)
+        # The two candidates of a PAIR come from two separate Passages: separate Observations.
+        key_a, key_b = _identity_of(p.statement_a, a, "a"), _identity_of(p.statement_b, b, "b")
         diagnostics: dict[str, Scalar] = {
             "merge_identity_a": key_a, "merge_identity_b": key_b, "merge_key_equal": key_a == key_b}
         for side, statement, fields, passage in (
@@ -284,9 +289,10 @@ class DeterministicBaseline:
                    + ("holds" if independent else "does not hold") + "; it is lexical only")
 
 
-def _identity_of(statement: str, f: MergeFields) -> str:
+def _identity_of(statement: str, f: MergeFields, observation: str) -> str:
     return merge_identity(statement=statement.strip(), entity=f.entity, predicate=f.predicate,
-                          value=f.value, scope=f.scope, period=stated_period(f.period))
+                          value=f.value, scope=f.scope, period=stated_period(f.period),
+                          observations=[observation])
 
 
 def _passage_diagnostics(side: str, statement: str, f: MergeFields,

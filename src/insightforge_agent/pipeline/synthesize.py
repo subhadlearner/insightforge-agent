@@ -3,7 +3,9 @@
 1. Draft: per Sub-task, over that Sub-task's Passages in bounded batches, a model call drafts
    candidate Evidence items (statement, supporting Passages, entity, predicate, value, scope
    and the As-of period the Passage states).
-2. Merge: candidates that say the same thing (same structured key) become one item.
+2. Merge: candidates that say the same thing (same structured key) become one item. With an
+   UNKNOWN period the key also holds the Observations cited, so only candidates citing the same
+   Observations merge.
 3. Validate: each Passage must pass a deterministic provenance check and a literal-value
    check; then one entailment call per item (chunked at the per-call cap) judges the rest
    SUPPORTED, CONTRADICTED or INSUFFICIENT_EVIDENCE. An item with no SUPPORTED Passage is
@@ -13,6 +15,7 @@
 4. Confidence counts SUPPORTED Passages only, over distinct Sources.
 5. Rank by the specified tuple, then cut whole lowest-ranked items to fit the budget."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 
@@ -107,14 +110,22 @@ class _Candidate:
 
 def merge_identity(
     *, statement: str, entity: str, predicate: str, value: str, scope: str, period: str,
+    observations: Iterable[str],
 ) -> str:
     """What makes two drafted candidates the same Evidence item (step 2, Merge). A candidate with
     an entity, predicate and value is keyed by its group key, stated period and canonical value;
     any other is keyed by its normalised statement. `period` is the already-normalised stated
-    period (`stated_period`). The Evidence id is `derive_evidence_id(run_id, identity)`."""
+    period (`stated_period`). The Evidence id is `derive_evidence_id(run_id, identity)`.
+
+    With an UNKNOWN period nothing says two Observations describe the same moment (F4), so such a
+    structured candidate is also keyed by the exact set of Observations it cites: it merges only
+    with candidates citing the same ones."""
     structured = entity.strip() and predicate.strip() and value.strip()
     if structured:
-        return f"{group_key(entity, predicate, scope)}|{period}|{canonical_value(value) or normalise(value)}"
+        key = f"{group_key(entity, predicate, scope)}|{period}|{canonical_value(value) or normalise(value)}"
+        if period == UNKNOWN:
+            key += "|observations=" + ",".join(sorted(set(observations)))
+        return key
     return normalise(statement)
 
 
@@ -279,7 +290,8 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
             continue
         period = stated_period(d.as_of_period)
         identity = merge_identity(statement=statement, entity=d.entity, predicate=d.predicate,
-                                  value=d.value, scope=d.scope, period=period)
+                                  value=d.value, scope=d.scope, period=period,
+                                  observations=[r.observation_id for r in cited])
         out.append(_Candidate(
             id=derive_evidence_id(run_id, identity), statement=statement, subtask=task,
             refs=cited, entities=[e.strip() for e in d.entities if e.strip()],

@@ -18,10 +18,11 @@ from insightforge_agent.pipeline.synthesize import merge_identity
     (dict(statement="x", entity="  byd ", predicate="Units_Sold", value="4,270,000",
           scope=" Global", asof="2025"),
      "('byd', 'units_sold', 'global')|2025|4270000|", "ev_89883eaf52f1b8c2"),
-    # A different stated period is a different item.
+    # A different stated period is a different item; an UNKNOWN one also carries the cited
+    # Observations (F4: changed on purpose, the only identity here that is new).
     (dict(statement="x", entity="BYD", predicate="units_sold", value="4.27 million",
           scope="global", asof="UNKNOWN"),
-     "('byd', 'units_sold', 'global')|UNKNOWN|4270000|", "ev_22ef0462dba39e4d"),
+     "('byd', 'units_sold', 'global')|UNKNOWN|4270000||observations=obs_1", "ev_5bb7c1326a54a11f"),
     # No structure: keyed by the normalised statement.
     (dict(statement="  Some   Statement, 5%. ", entity="", predicate="", value="", scope="",
           asof="2025"),
@@ -33,9 +34,28 @@ from insightforge_agent.pipeline.synthesize import merge_identity
 ])
 def test_merge_identity_is_unchanged(fields, identity, evidence_id):
     asof = fields.pop("asof")
-    got = merge_identity(**fields, period=stated_period(asof))
+    got = merge_identity(**fields, period=stated_period(asof), observations=["obs_1"])
     assert got == identity
     assert derive_evidence_id("run1", got) == evidence_id
+
+
+STRUCTURED = dict(statement="x", entity="BYD", predicate="units_sold", value="4.27 million",
+                  scope="global")
+
+
+def test_an_unknown_period_keys_by_the_set_of_observations_cited():
+    def key(period, observations):
+        return merge_identity(**STRUCTURED, period=period, observations=observations)
+
+    # The set: order and repeats do not matter, and a different set is a different item.
+    assert key("UNKNOWN", ["obs_2", "obs_1", "obs_2"]) == key("UNKNOWN", ["obs_1", "obs_2"])
+    assert key("UNKNOWN", ["obs_1"]) != key("UNKNOWN", ["obs_2"])
+    assert key("UNKNOWN", ["obs_1"]) != key("UNKNOWN", ["obs_1", "obs_2"])
+    # An explicit period, or no structure, ignores provenance as before.
+    assert key("2025", ["obs_1"]) == key("2025", ["obs_2"])
+    bare = dict(statement="BYD sold 4.27 million.", entity="", predicate="", value="", scope="")
+    assert merge_identity(**bare, period="UNKNOWN", observations=["obs_1"]) == \
+        merge_identity(**bare, period="UNKNOWN", observations=["obs_2"])
 
 
 # ---------------------------------- literal validation ---------------------------------------

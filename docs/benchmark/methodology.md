@@ -91,7 +91,7 @@ Production decides most of these questions with a model (T5 drafts and judges en
 
 | Case | Production behaviour used | Label |
 |---|---|---|
-| PAIR, merge keys equal | `merge_identity` (group key, stated period, canonical value) | SAME_FACT |
+| PAIR, merge keys equal | `merge_identity` (group key, stated period, canonical value; with an UNKNOWN period also the cited Observations, and the two sides count as separate Observations, so since F4 (baseline `m1.3-3`) an UNKNOWN period on both sides never merges) | SAME_FACT |
 | PAIR, keys differ | a nonmerge does not say DIFFERENT_FACT or CONTRADICTORY | NOT_APPLICABLE; the Extraction conflict rule (`detect_conflicts`) is recorded as a diagnostic, never as a label, because production also needs a model CONTRADICTED verdict |
 | PAIR, no structured fields | the merge key cannot be formed | NOT_APPLICABLE |
 | SUPPORT | `literal_problem` is only a necessary condition; support is a model verdict | always NOT_APPLICABLE; literal result and the real T5 drop outcome are recorded |
@@ -133,6 +133,7 @@ A Verdict may carry `evidence_disposition` (and `evidence_reason`) diagnostics, 
 - Abstention can raise precision and lower FPR; read them with coverage and the worst-case FPR.
 - The baseline is a floor, not a verdict on semantics: lexical and structural checks only. Its high NOT_APPLICABLE share is the honest result; coverage is never inflated by guessing.
 - A PAIR case's merge-key outcome depends on the structured fields the case supplies, which stand in for T5's drafting model.
+- Since F4 (`m1.3-3`) the baseline judges 2 of 24 PAIR cases instead of 7. The four undated DIFFERENT_FACT pairs (p-ta-02, p-ta-03, p-ps-01, p-ps-04) are no longer false merges, and the one undated SAME_FACT pair it got right by accident (p-ta-01, "last quarter" vs "Q4 2024", both unreadable) is now NOT_APPLICABLE. A run id recorded at `m1.3-2` cannot be re-run, so use a new one, and compare runs only at the same version (#26).
 - CLAIM_PASSAGE uses a hashing embedder (bag of words), not production's bge-small: near-paraphrases score low, and near-copies with one changed word score high, so the gates it reports differ from production's.
 - Recorded runs are replayed for reporting. A recording is bound to the exact prediction-facing case by a content hash.
 
