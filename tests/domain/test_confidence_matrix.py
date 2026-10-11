@@ -1,8 +1,8 @@
 """The current Source-score and Confidence matrix, documented as tests.
 
 These pin today's behaviour (design.md section 7); they are not a statement that the scores are
-well calibrated. Calibration (publication dates, byline, domain classes) belongs to the later
-credibility work."""
+well calibrated. The rubric (domain type, recency, byline) is `agents.web.credibility_score`;
+the Confidence policy and its thresholds are unchanged by it."""
 
 from datetime import UTC, datetime
 from itertools import product
@@ -18,11 +18,13 @@ AGES = {"undated": None, "fresh": datetime(2026, 5, 1, tzinfo=UTC),
         "two_years": datetime(2024, 10, 1, tzinfo=UTC), "old": datetime(2019, 1, 1, tzinfo=UTC)}
 
 #           domain                       undated  fresh   2 years   old     (score, single-Source Confidence)
+# No byline. An unknown domain keeps the Confidence it had before the rubric (only the score moved
+# from 0.6 to 0.55 base); major press now starts at 0.7.
 MATRIX = {
-    "https://example.com/a":        dict(undated=(0.6, "LOW"), fresh=(0.7, "MEDIUM"),
-                                         two_years=(0.6, "LOW"), old=(0.5, "LOW")),
-    "https://www.reuters.com/a":    dict(undated=(0.6, "LOW"), fresh=(0.7, "MEDIUM"),
-                                         two_years=(0.6, "LOW"), old=(0.5, "LOW")),
+    "https://example.com/a":        dict(undated=(0.55, "LOW"), fresh=(0.65, "MEDIUM"),
+                                         two_years=(0.55, "LOW"), old=(0.45, "LOW")),
+    "https://www.reuters.com/a":    dict(undated=(0.7, "MEDIUM"), fresh=(0.8, "MEDIUM"),
+                                         two_years=(0.7, "MEDIUM"), old=(0.6, "LOW")),
     "https://energy.example.gov/a": dict(undated=(0.8, "MEDIUM"), fresh=(0.9, "MEDIUM"),
                                          two_years=(0.8, "MEDIUM"), old=(0.7, "MEDIUM")),
     "https://uni.example.edu/a":    dict(undated=(0.8, "MEDIUM"), fresh=(0.9, "MEDIUM"),
@@ -40,10 +42,27 @@ def test_single_source_score_and_confidence(url, age):
                          high=HIGH) == confidence
 
 
-def test_an_undated_ordinary_domain_cannot_reach_medium_with_the_current_wiring():
-    """Publication dates are not extracted yet, so only trusted-suffix Sources reach MEDIUM on
-    their own. Deliberately conservative: it yields under-confidence, never false confidence."""
-    assert credibility_score("https://example.com/a", None, NOW) < HIGH
+#           domain                       undated  fresh   2 years   old     (with a byline)
+BYLINE = {
+    "https://example.com/a":        dict(undated=(0.6, "LOW"), fresh=(0.7, "MEDIUM"),
+                                         two_years=(0.6, "LOW"), old=(0.5, "LOW")),
+    "https://www.reuters.com/a":    dict(undated=(0.75, "MEDIUM"), fresh=(0.85, "MEDIUM"),
+                                         two_years=(0.75, "MEDIUM"), old=(0.65, "MEDIUM")),
+}
+
+
+@pytest.mark.parametrize("url,age", list(product(BYLINE, AGES)))
+def test_single_source_score_and_confidence_with_a_byline(url, age):
+    score, confidence = BYLINE[url][age]
+    assert credibility_score(url, AGES[age], NOW, has_byline=True) == pytest.approx(score)
+    assert confidence_of(has_independent_pair=False, best_credibility=score, conflicting=False,
+                         high=HIGH) == confidence
+
+
+def test_an_undated_unknown_domain_cannot_reach_medium_even_with_a_byline():
+    """Without a publication date, an unknown domain stays below MEDIUM: under-confidence,
+    never false confidence."""
+    assert credibility_score("https://example.com/a", None, NOW, has_byline=True) < HIGH
 
 
 @pytest.mark.parametrize("pair,best,conflicting,expected,rule", [
