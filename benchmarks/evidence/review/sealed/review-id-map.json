@@ -1,0 +1,343 @@
+{
+  "format": 1,
+  "note": "Neutral review id -> case id. Reviewer-hidden: case ids hint at categories. Open only after the blind review is finalized.",
+  "order_salt": "insightforge-m1.5-owner-review-v1:",
+  "items": [
+    {
+      "review_id": "R001",
+      "case_id": "p-ps-02",
+      "type": "PAIR",
+      "content_sha256": "1ed7d79419f8394a6b0dfb353fba22c5ac3916a4e7e7d794fd6bdddcebb174b3",
+      "proposal_sha256": "7a59f46220482509faf6e1f848c450b5272f67b4f6c30ad1c1d879c1ed72ca0a"
+    },
+    {
+      "review_id": "R002",
+      "case_id": "p-al-02",
+      "type": "PAIR",
+      "content_sha256": "31e7cccfd030acd7e20bec294e91d861bf23288a6a7cbc4742a365532765b92b",
+      "proposal_sha256": "fec13d8d184cb10dcd2918b231402bb051223fd4ce64a9535b728bd9c92e7000"
+    },
+    {
+      "review_id": "R003",
+      "case_id": "p-al-03",
+      "type": "PAIR",
+      "content_sha256": "9ff0ff72461df439a8172db81eed2e6c9cbad24eb5f91da361d4a93e4f0c0d21",
+      "proposal_sha256": "568ede9ce6a31a6a6b351838eacd1dca1010e8cef896faba178e7bd71c604520"
+    },
+    {
+      "review_id": "R004",
+      "case_id": "s-fh-01",
+      "type": "SUPPORT",
+      "content_sha256": "70642fea2878d089a6f57122e7030956c9ed17a06f777f6fa7174f4ad7d2e316",
+      "proposal_sha256": "fe6c5a27685ade36873319fce792e3bf1906fe1b91c9cb34d7d7f1a64f3dd386"
+    },
+    {
+      "review_id": "R005",
+      "case_id": "g-wi-02",
+      "type": "GROUND",
+      "content_sha256": "15a0c9885dc3da211fc73c687f090ed941adb061a895b7386ce41f485629d36f",
+      "proposal_sha256": "a97dd009d673cac0a721ac7ae0e344ba15fc4f09e9106b0a98b462a7b8a840f7"
+    },
+    {
+      "review_id": "R006",
+      "case_id": "s-t6-01",
+      "type": "SUPPORT",
+      "content_sha256": "28e52c4313351d5e9578cdc2995eb65db3217c824cf20d12604631763d1fcd6c",
+      "proposal_sha256": "f9db2ad64f95a5ff341030b0ceae8fc13e7c16762d4c3c2338363bc8cde00167"
+    },
+    {
+      "review_id": "R007",
+      "case_id": "s-ir-03",
+      "type": "SUPPORT",
+      "content_sha256": "e4955b6bb9a5e4884f3d6d9796334e714e2b7aaeb9ec5af13be9cbab672701fb",
+      "proposal_sha256": "ad966a3dfee9d0eadc986a57d528ab5c42532ba3563c57d9dc92b0ca621d43de"
+    },
+    {
+      "review_id": "R008",
+      "case_id": "i-sy-02",
+      "type": "INDEPENDENCE",
+      "content_sha256": "f3653dea42bac7208e8e3d682311a695ba1acec9adfec683bbe3c4fc25791b2a",
+      "proposal_sha256": "f55030041f6d644a364ae11775928c7aeabdcc09333ee970d92e162bfac07799"
+    },
+    {
+      "review_id": "R009",
+      "case_id": "p-ta-01",
+      "type": "PAIR",
+      "content_sha256": "9c7e2e088d0423e75d5c085983c9493da84cf3840ae6c6ee54588aa6136cf132",
+      "proposal_sha256": "dcf8cb32c0470578c75e1bd1f96350224f1b6e828b72e9b0912838453ad844c1"
+    },
+    {
+      "review_id": "R010",
+      "case_id": "i-gi-02",
+      "type": "INDEPENDENCE",
+      "content_sha256": "edb224aa539f3658f19bd2b12e7e2275e8b301b68e2b669991cf0fd0049208ca",
+      "proposal_sha256": "281999a2f004f892d085274739494eb5daca879f679009c22b8ee1f79620c966"
+    },
+    {
+      "review_id": "R011",
+      "case_id": "g-wi-01",
+      "type": "GROUND",
+      "content_sha256": "7141cbd29f4df8976b06082ac6a33352bb9a9a6fc1783138d9364d2a77965d71",
+      "proposal_sha256": "e07cb89a21c53d225635f239f7f1056c10518c05a40c4e239d913566b271ebec"
+    },
+    {
+      "review_id": "R012",
+      "case_id": "p-ta-03",
+      "type": "PAIR",
+      "content_sha256": "73138b4f8ffff0a17c367601854e9a28fe123784964c133d3b7aa3fcb90cd33c",
+      "proposal_sha256": "63c67fe1c3a8da6a2b835ee4645b18c37ba7392a6b142d7e5dc7ca1b92229247"
+    },
+    {
+      "review_id": "R013",
+      "case_id": "p-ps-01",
+      "type": "PAIR",
+      "content_sha256": "46cefdf247010e5858fce73b94f9e818a2489cb1144ce95d65b9e157bfc4030b",
+      "proposal_sha256": "3d740b92e8ecd3d6888d8ff355c5c28490c10c1963495f2bf3353eb850a8bc5c"
+    },
+    {
+      "review_id": "R014",
+      "case_id": "s-ir-01",
+      "type": "SUPPORT",
+      "content_sha256": "b1c85a5e5dc0536d6d9bc88ccd065b9abfc120b94cb4583026cb725ab65ab9d9",
+      "proposal_sha256": "783267c72967fec54647b167bdf67ce62ed21c39c81f2c4a411aa64d08cbdca0"
+    },
+    {
+      "review_id": "R015",
+      "case_id": "p-fm-06",
+      "type": "PAIR",
+      "content_sha256": "9eb20b282321cc055e8dec6ed20453cd4ed967f9d2f3c825771df483d98e7013",
+      "proposal_sha256": "13320aa2f37432570c5888ac73e73b7a212d5f5a7de65d177afef2ad90326ce4"
+    },
+    {
+      "review_id": "R016",
+      "case_id": "s-t6-04",
+      "type": "SUPPORT",
+      "content_sha256": "929116d2621729f772c8b7b4e221dce13f2709864b5656c18007be88c80a5bde",
+      "proposal_sha256": "14bdad38ce326f80ee7f2f0faf448ea7c2926e5c97538fdcd42985178482bbfb"
+    },
+    {
+      "review_id": "R017",
+      "case_id": "s-fh-02",
+      "type": "SUPPORT",
+      "content_sha256": "cabe60e4a262687736eb4e582512f8fe947232bb03a364a2ec5d25d6c29c030b",
+      "proposal_sha256": "69d5ad2aab25a858d24bb81c7cd1cb4a2f24f275fc8daedb12d27ba3d5ed07c4"
+    },
+    {
+      "review_id": "R018",
+      "case_id": "g-qu-01",
+      "type": "GROUND",
+      "content_sha256": "17110c03f834a4d6e1bebab7412cd24a3da4cbbdbb6b78de32f9bfd927bee24e",
+      "proposal_sha256": "db7144fab52a2415d7a8b4fed7f95cc0042bc9581ada804c3f95341d50aac0b8"
+    },
+    {
+      "review_id": "R019",
+      "case_id": "p-ct-03",
+      "type": "PAIR",
+      "content_sha256": "990971bab8779eb8979dafdcee9f43f68e1f4306ca8bdd28b975c896edfc66d7",
+      "proposal_sha256": "37b8c61447445cd9faa47e71acdbc292b870a82ebb901b005c9152aa38eae6bf"
+    },
+    {
+      "review_id": "R020",
+      "case_id": "p-fm-02",
+      "type": "PAIR",
+      "content_sha256": "6ea4935c573c4398f425c73d17c3f1bd789e9b94bc5d2b56154854615da8fe1f",
+      "proposal_sha256": "5e19911ee07abf47c9d2ffd7a278c02d157b0e124563f46c1db47f321e5011e2"
+    },
+    {
+      "review_id": "R021",
+      "case_id": "p-ct-04",
+      "type": "PAIR",
+      "content_sha256": "ffc33390cfe637ea3a75a737b8fa75d3e2c954a74f8fbb810e199b9076d5a3dd",
+      "proposal_sha256": "ebb52839a534ba185c5ab46aa37474e73c9aeae20bf2082ae883ca2128a09f3c"
+    },
+    {
+      "review_id": "R022",
+      "case_id": "p-fm-04",
+      "type": "PAIR",
+      "content_sha256": "2f1a2dd39863416bb0f21a24ce682f8faf63e6ea3c2ba3b9d7c9fbd9b7c3ea42",
+      "proposal_sha256": "ec1d7313524a9d50d8a07f251c715f6619e4deba573963711cb534abf5dd107a"
+    },
+    {
+      "review_id": "R023",
+      "case_id": "p-ta-02",
+      "type": "PAIR",
+      "content_sha256": "b9a28ebc218f92961dabc591f042750df763bb6523cbb4b7b55834a07ad29155",
+      "proposal_sha256": "d68ba773186ab9dff903184c3e4766bc882e4d09778cf6a3886ab3caef53a9ba"
+    },
+    {
+      "review_id": "R024",
+      "case_id": "s-ir-02",
+      "type": "SUPPORT",
+      "content_sha256": "dcb1b7f762a8d4898429db57d48f09a76444596394ec63e29554f78743d91726",
+      "proposal_sha256": "2fcfd8cd22ef7402aa06da0490461999b7c6ae90e6273c692dbc98f3abf1da3a"
+    },
+    {
+      "review_id": "R025",
+      "case_id": "s-pc-01",
+      "type": "SUPPORT",
+      "content_sha256": "07e39af6af77afadc6c19dca816cb5f3eceb8e64cf843f86c2f5ba00fd81c73b",
+      "proposal_sha256": "34be760130bc889cfeba7605deec7a6db8a43f0ac23d514a85df2204f1912bd6"
+    },
+    {
+      "review_id": "R026",
+      "case_id": "p-al-01",
+      "type": "PAIR",
+      "content_sha256": "5661ec4e2686fdc146e20c6d1e6ea01355f23a1cf8e49b6de570778df0409812",
+      "proposal_sha256": "46cc8a45715c0ca16672d3f573a39391fc9200a621c12f4bf13ddd51123fe2f9"
+    },
+    {
+      "review_id": "R027",
+      "case_id": "p-ct-02",
+      "type": "PAIR",
+      "content_sha256": "e0d899f048681e709400274785ad0f59948e054ff70030d2c6d6084d33ebf81a",
+      "proposal_sha256": "d436894331e0cc7dde4148ce4dbdc6f9fa3da715b1a7629a699b0823c46a0fae"
+    },
+    {
+      "review_id": "R028",
+      "case_id": "p-pq-03",
+      "type": "PAIR",
+      "content_sha256": "f900da71a3fa7811f6d744b4617345ecab2f5d9f035fa1ff4181a1acdb6e4b61",
+      "proposal_sha256": "db2e7b064197f76cf611a429943a74494f062f46a86a217c2884ff8b3b4aa904"
+    },
+    {
+      "review_id": "R029",
+      "case_id": "i-gi-01",
+      "type": "INDEPENDENCE",
+      "content_sha256": "81658c3fd53c5f04375b5769c4bb5561238be4beb612a31d0ec3332e087f2aa2",
+      "proposal_sha256": "317d485fa3c41f875b801d3d9e828bcadf7d64a96e4be184bcc38721109d8704"
+    },
+    {
+      "review_id": "R030",
+      "case_id": "p-ps-04",
+      "type": "PAIR",
+      "content_sha256": "be714ce381dd81b4009c5943f726ed2a315e294c9562caea052a5ca07b8ca213",
+      "proposal_sha256": "0d3b367094edcc2d6e571add3f7c9d5304f1681b14561649e9ced4cee4eaa5ac"
+    },
+    {
+      "review_id": "R031",
+      "case_id": "p-fm-05",
+      "type": "PAIR",
+      "content_sha256": "786e4176697952554084333b05b5e3327ea81a4c83a8be3e0d7c4e08e2d3c420",
+      "proposal_sha256": "920b8276a64c0e6dda6102690981ce05e30a8acead4563658e37ff6e4acabc8e"
+    },
+    {
+      "review_id": "R032",
+      "case_id": "p-pq-01",
+      "type": "PAIR",
+      "content_sha256": "f92d76ea719546a96a0bbfa73d4f87a659732e60dba5899b3b6b8f64be936525",
+      "proposal_sha256": "60b1483eb830f7255b3719f8aa65ffa3f0414059983a583b642736e8b35ae04a"
+    },
+    {
+      "review_id": "R033",
+      "case_id": "p-al-04",
+      "type": "PAIR",
+      "content_sha256": "c6d07650450eeaa3539a4d4ca856272f63ec2175d220188bb6a10719d247b562",
+      "proposal_sha256": "206ccea95c4314429d955d6d83605bc7c3370dc001cb57d5e7d01d2b9ea2648e"
+    },
+    {
+      "review_id": "R034",
+      "case_id": "g-ma-01",
+      "type": "GROUND",
+      "content_sha256": "394bc9b49689b47e434f3fbef30eb23d98e49e67a21c2688625b628ab9e72c71",
+      "proposal_sha256": "a8ae6f005a699b6aa05d2c616318ab91c1f72857a9737c200b883c9230b1ee96"
+    },
+    {
+      "review_id": "R035",
+      "case_id": "s-t6-03",
+      "type": "SUPPORT",
+      "content_sha256": "af306581b744214a45c002221c726d16208195569fb60283ff1cfa03ceccef2b",
+      "proposal_sha256": "9510a659049f979dd0f3fbacc40ab1d1d33d1e0a52992bed4148b2b29e6c2ada"
+    },
+    {
+      "review_id": "R036",
+      "case_id": "s-t6-02",
+      "type": "SUPPORT",
+      "content_sha256": "9ae1b14618ba0e01f70b740efdbbc82e192bd32d27a3d53e9b6e5c3e55692127",
+      "proposal_sha256": "a6bc97d2d2a3ecfed49d8a039b3155ded55bd076986cd6d90c7e7926775fe491"
+    },
+    {
+      "review_id": "R037",
+      "case_id": "p-fm-03",
+      "type": "PAIR",
+      "content_sha256": "7746bc3cba91df59b36553a03cc602f9304489cd1782833ba02acecdb920f370",
+      "proposal_sha256": "7716538e823f6e518507be6bbb60648e0fea45407fa85fa12daac4f5806530fc"
+    },
+    {
+      "review_id": "R038",
+      "case_id": "p-ct-01",
+      "type": "PAIR",
+      "content_sha256": "a2f705f4d1a2b28d25987a060fc919323af35058de3e1b6876a5a2ad1bd6e207",
+      "proposal_sha256": "3d6c393e142a21cccb9fb9bc857bdf458eec8576eed84212a261f7ea92c036f2"
+    },
+    {
+      "review_id": "R039",
+      "case_id": "s-fh-03",
+      "type": "SUPPORT",
+      "content_sha256": "c513358536f6fbf4b82209632264ac356574d3139843fb33b12e9f64b401f84e",
+      "proposal_sha256": "86ba9e25172f3cf90e3a96e209b160586ce4a7e19d852916e08a4f3834bf67f9"
+    },
+    {
+      "review_id": "R040",
+      "case_id": "p-ps-03",
+      "type": "PAIR",
+      "content_sha256": "7f77356a06e90385d99db665587ccc714162ba80dafd97561212e3d004c371c2",
+      "proposal_sha256": "4d27bd39476bf77ddd52144ebf9511861d8de441fa1155eafba73270917f1b77"
+    },
+    {
+      "review_id": "R041",
+      "case_id": "s-pc-02",
+      "type": "SUPPORT",
+      "content_sha256": "71ceb2e0b468bcabf06af39a2a59cca6b36a2a3563d308961b37c6a31f0f3e60",
+      "proposal_sha256": "5df5c126f01cab98ac771780dcfb9ec1409904db5f5199a47116c36061b9ca95"
+    },
+    {
+      "review_id": "R042",
+      "case_id": "g-qu-02",
+      "type": "GROUND",
+      "content_sha256": "afeb7ebdeb319e5e516b52110d383a723d2748be491abdb3c83ce730508b78b0",
+      "proposal_sha256": "65190c6cbf7ebb9a1e8c2a96e63fe5e0a661807b1229ff5fe142bd9fdab2e106"
+    },
+    {
+      "review_id": "R043",
+      "case_id": "i-sy-01",
+      "type": "INDEPENDENCE",
+      "content_sha256": "c9356ed193f805959fe2ec89afec916a28d61a41ef1fd68283af7fb6e03f876a",
+      "proposal_sha256": "f2178148593754323995200049896e461cc7a88acf5f8165fc96c0c430235fcd"
+    },
+    {
+      "review_id": "R044",
+      "case_id": "p-fm-01",
+      "type": "PAIR",
+      "content_sha256": "468c07cb3db285884f4fa6384c0e253c3fc5b80a255ac0a774de3148f79e191f",
+      "proposal_sha256": "031b548e4017b36e21b12384b02be58ee9a3592f81e1eda04635106c636c2e16"
+    },
+    {
+      "review_id": "R045",
+      "case_id": "p-pq-02",
+      "type": "PAIR",
+      "content_sha256": "b7686a6dacf889a6da4840385f4823939580e040c58a82931c71650e9d5c28e2",
+      "proposal_sha256": "0f58f86514dab1a5bb383dc297ebe90b803cebde56899a98586e0ee59b2db5ac"
+    },
+    {
+      "review_id": "R046",
+      "case_id": "g-ns-01",
+      "type": "GROUND",
+      "content_sha256": "25436657e532f1c5ee3e4d219f4214f482ee2ac08f23278962b039effd3c511d",
+      "proposal_sha256": "de181c2f825ce6836a2904dc14109721c454a7a07873f0f3232785f63e7c36bd"
+    },
+    {
+      "review_id": "R047",
+      "case_id": "g-qu-03",
+      "type": "GROUND",
+      "content_sha256": "87093dcf590dab0d59a61338a073cb738f94cd207045c7b22024804ae6ad7f51",
+      "proposal_sha256": "825980099b0360f2edfa9cd443ff09ebc2c47be285b3e3fbea1757ae02020765"
+    },
+    {
+      "review_id": "R048",
+      "case_id": "g-ma-02",
+      "type": "GROUND",
+      "content_sha256": "0cbf3cd20715d2937db24376c4cbef1353256d4f5955fc5ed89615a93c49a69a",
+      "proposal_sha256": "e67d271705b92afc4aba6f93f55bc0ee4b1630e6ca3d90bdf9aa78056f8167ff"
+    }
+  ]
+}

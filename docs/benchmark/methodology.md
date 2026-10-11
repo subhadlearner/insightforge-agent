@@ -36,7 +36,7 @@ Usage (input and output tokens, latency, retries, parse failures) is optional an
 - Ground truth lives only in the case file. Predictions are stored apart (`verdicts.jsonl`, `raw.jsonl`) and joined to cases at report time; no write path goes from predictions to cases.
 - Label status: `proposed` (no review data), `reviewed` (reviewer and date; an optional second review must be by a different person and agree), `disputed` (needs a note).
 - **Qualification metrics use `reviewed` labels only.** Disputed labels are always excluded. Proposed labels, critical or not, are excluded unless `--allow-proposed` is passed; such a report is stamped `EXPLORATORY`, says it is not a qualification result, and counts the proposed cases it included. When proposed critical cases are excluded the report says how many.
-- A second review stores the second reviewer's own label (`second_label`), reviewer and date. A reviewed case needs the second label to equal `expected`; a differing one makes the case `disputed` with both labels kept and a note. The review workflow itself (M1.5) is not part of M1.2.
+- A second review stores the second reviewer's own label (`second_label`), reviewer and date. A reviewed case needs the second label to equal `expected`; a differing one makes the case `disputed` with both labels kept and a note. The review workflow itself (M1.5) is not part of M1.2. The offline owner-review tooling (blind packet, decision sheet, `bench review`) is described in [owner-review.md](owner-review.md); the plan for reconciling, second review and agreement statistics is [review-integration-plan.md](review-integration-plan.md).
 - Case ids must not contain a label name, so an id cannot leak the answer.
 
 ## Denominators
