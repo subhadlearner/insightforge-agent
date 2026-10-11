@@ -86,7 +86,7 @@ def test_a_test_belongs_to_at_most_one_tier(request):
 
 
 def test_live_tests_are_excluded_from_ordinary_runs(request):
-    assert "not live" in request.config.getini("addopts")
+    assert "not live" in " ".join(request.config.getini("addopts"))
     if "live" in (request.config.option.markexpr or "").replace("not live", ""):
         pytest.skip("this run selected live tests on purpose")
     live = [i.nodeid for i in request.session.items if i.get_closest_marker("live")]

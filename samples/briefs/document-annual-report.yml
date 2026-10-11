@@ -1,0 +1,36 @@
+# Sample brief library (design.md section 11; T16 #17 completes it to 5 briefs and the eval command).
+# T7 (#8): the evaluation brief for the uploaded-document path.
+id: document-annual-report
+industry: Medical devices
+question_type: Company deep dive from an uploaded annual report, set against the wider market
+brief: >-
+  Using the uploaded Northwind Health 2025 annual report, assess the company's revenue and
+  segment performance, its research and development pipeline, and its principal risks, and
+  compare its growth with the wider medical devices market.
+source_toggles:
+  web: true
+  documents: true
+  memory: false
+documents:
+  - samples/documents/northwind-health-annual-report-2025.pdf  # fictional; regenerate with make_sample_documents.py
+expected_report_structure:
+  sections:
+    - heading: Executive Summary
+      notes: At most 150 words, plain language.
+    - heading: Revenue and segment performance
+      source_types: [documents]
+      must_cite: [revenue of 612 million dollars in fiscal 2025, segment revenues]
+    - heading: Research and development pipeline
+      source_types: [documents]
+      must_cite: [R&D spending of 71 million dollars, NW-200 pivotal trial and expected approval]
+    - heading: Principal risks
+      source_types: [documents]
+      must_cite: [single titanium supplier, hospital pricing pressure, NW-200 approval delay]
+    - heading: Market comparison
+      source_types: [web]
+      notes: Market growth figures come from web Sources, never from the annual report.
+    - heading: Gaps & limitations
+  checks:
+    - Every Claim drawn from the report cites the PDF with its page and section heading.
+    - Document Claims are fact-checked against the stored chunks of the cited PDF (check "document_passages").
+    - The Doc Reader returns chunk IDs only; no chunk text appears in Planner or Researcher prompts.

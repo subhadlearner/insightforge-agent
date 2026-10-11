@@ -16,7 +16,7 @@ from insightforge_agent.pipeline.deps import Deps
 
 MAX_STATEMENT_CHARS = 600  # a statement is one sentence; a pasted page is not
 
-SYSTEM = """You extract facts from numbered passages of one web page. Reply with JSON only:
+SYSTEM = """You extract facts from numbered passages of one source (a web page or a document). Reply with JSON only:
 {"facts": [{"passage_index": <int>, "statement": "<one self-contained sentence the passage
 states, keeping every number and name exactly as written>", "entities": ["<named entity>"],
 "entity": "<the subject the fact is about>", "predicate": "<short snake_case relation, such as
@@ -46,7 +46,13 @@ def _index_label(position: int, window: Window) -> str:
     return str(window.passage.index)
 
 
-def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> ExtractionResult:
+def extract(
+    deps: Deps, owner_id: str, run_id: str, source_ids: list[str],
+    scope: dict[str, set[int] | None] | None = None,
+) -> ExtractionResult:
+    """`scope` limits a Source to the Passage indices a Doc Reader retrieved; a Source mapped
+    to None, or absent, is read whole (a web page)."""
+    scope = scope or {}
     facts: list[ExtractedFact] = []
     entities: dict[str, None] = {}
     for sid in source_ids:
@@ -54,12 +60,14 @@ def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> Ex
         if contents.observation is None:
             continue
         obs_id = contents.observation.id
-        by_index = {p.index: p for p in contents.passages}
+        wanted = scope.get(sid)
+        passages = [p for p in contents.passages if wanted is None or p.index in wanted]
+        by_index = {p.index: p for p in passages}
         from_source: dict[str, ExtractedFact] = {}
-        for batch in batch_passages(contents.passages, deps.passage_token_cap, _index_label):
+        for batch in batch_passages(passages, deps.passage_token_cap, _index_label):
             known = {w.passage.index for w in batch}
             numbered = render_batch(batch, _index_label)
-            user = f"Page title: {contents.source.title}\n\n{numbered}"
+            user = f"Source title: {contents.source.title}\n\n{numbered}"
             deps.spend(owner_id, run_id, SYSTEM, user)
             try:
                 reply = ask_json(deps.light_model, SYSTEM, user, _Facts)

@@ -1,9 +1,10 @@
-"""The outer LangGraph (ADR-0001): PLANNING -> RESEARCHING -> (repair) -> EXTRACTING ->
-SYNTHESIZING -> WRITING -> FACT_CHECKING -> COMPLETE.
+"""The outer LangGraph (ADR-0001): (INGESTING) -> PLANNING -> RESEARCHING -> (repair) ->
+EXTRACTING -> SYNTHESIZING -> WRITING -> FACT_CHECKING -> COMPLETE.
 
-Graph state holds IDs and small structured values only. Source bodies and Passage text stay
-in the SourceStore and are read by the stage that needs them, one bounded batch at a time.
-INGESTING is skipped (no uploaded documents yet)."""
+Graph state holds IDs and small structured values only. Source bodies, uploaded file bytes and
+Passage text stay out of it: uploads reach INGESTING through the compiled graph, and text is
+read from the SourceStore by the stage that needs it, one bounded batch at a time. INGESTING
+runs only when documents were uploaded."""
 
 import uuid
 from collections.abc import Callable
@@ -12,6 +13,11 @@ from typing import TypedDict
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 
+from insightforge_agent.agents.doc_reader import (
+    DOC_SEARCH_EVENT,
+    doc_reader_subagent,
+    make_doc_search_tool,
+)
 from insightforge_agent.agents.planner import ApprovedDispatchGuard, build_planner, submitted_plan
 from insightforge_agent.agents.researcher import (
     SUMMARY_EVENT,
@@ -29,6 +35,7 @@ from insightforge_agent.domain.contracts import (
     SubTaskResult,
     VerifiedReport,
 )
+from insightforge_agent.domain.documents import Upload, check_uploads, chunk_id, chunk_ids_in
 from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
 from insightforge_agent.domain.models import (
     Report,
@@ -37,18 +44,31 @@ from insightforge_agent.domain.models import (
     SubTaskRecord,
     SubTaskStatus,
 )
-from insightforge_agent.domain.plan import MAX_ASPECTS, SubTaskPlan, plan_violations, trim_plan
+from insightforge_agent.domain.plan import (
+    AGENT_FOR_SOURCE_TYPE,
+    MAX_ASPECTS,
+    SubTaskPlan,
+    plan_violations,
+    trim_plan,
+)
 from insightforge_agent.domain.submission import check_submission
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.dispatch import dispatches, missing_ids, resolve, segments
 from insightforge_agent.pipeline.errors import RunFailed
 from insightforge_agent.pipeline.extract import extract
 from insightforge_agent.pipeline.fact_check import fact_check
+from insightforge_agent.pipeline.ingest import ingest_documents
 from insightforge_agent.pipeline.synthesize import synthesize
 from insightforge_agent.pipeline.write import write_report
 
-# Source types a Run can actually carry out so far; documents and memory arrive in T7 and T8.
-IMPLEMENTED_SOURCE_TYPES = ["web"]
+# Source types a Run can actually carry out so far; memory arrives in T8.
+IMPLEMENTED_SOURCE_TYPES = ["web", "documents"]
+
+
+def runnable_source_types(deps: Deps) -> list[str]:
+    """Documents need the chunker and the `doc_chunks` index wired in."""
+    return [t for t in IMPLEMENTED_SOURCE_TYPES
+            if t != "documents" or (deps.doc_index is not None and deps.chunker is not None)]
 DESCRIPTION_RULE = ('Each task description must be exactly "SUBTASK_ID=<id> <query>", with the '
                     "query copied verbatim and nothing added.")
 
@@ -59,6 +79,8 @@ class State(TypedDict, total=False):
     run_id: str
     brief: str
     allowed_types: list[str]
+    has_uploads: bool
+    documents: list[str]  # Source IDs of the ingested uploads
     plan: dict
     repaired: bool
     missing: list[str]
@@ -83,34 +105,62 @@ def summaries_from_log(deps: Deps, owner_id: str, run_id: str) -> dict[str, Sour
     return found
 
 
+def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> set[str]:
+    """Every chunk ID the Doc Reader's search tool returned in this Run, from the Run log."""
+    found: set[str] = set()
+    cursor = 0
+    while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
+        for e in batch:
+            if e.type == DOC_SEARCH_EVENT:
+                found.update(e.payload["chunk_ids"])
+        cursor = batch[-1].seq
+    return found
+
+
 def outer_config(thread_id: str) -> dict:
     """The outer graph checkpoints under its own thread, apart from the Planner's."""
     return {"configurable": {"thread_id": f"graph-{thread_id}"}}
 
 
-def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
-    """Compile the outer graph for one Run, checkpointed so its state survives a restart."""
-    # The Researcher tool owns one Run's ids, so the Planner is built per Run, on first use.
+def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
+                uploads: list[Upload] | None = None):
+    """Compile the outer graph for one Run, checkpointed so its state survives a restart.
+    `uploads` are the Run's PDFs; their bytes stay here and never enter graph state."""
+    # The Researcher tools own one Run's ids, so the Planner is built per Run, on first use.
     holder: dict = {}
     approved: dict[str, str] = {}  # Sub-task id -> query the Planner may dispatch right now
+    agent_of: dict[str, str] = {}  # Sub-task id -> the subagent its source type needs
 
     def planner_for(state: State):
         if "planner" not in holder:
-            tool = make_web_search_tool(
-                owner_id=state["owner_id"], run_id=state["run_id"], search=deps.search,
+            owner, run_id = state["owner_id"], state["run_id"]
+            web = make_web_search_tool(
+                owner_id=owner, run_id=run_id, search=deps.search,
                 fetcher=deps.fetcher, store=deps.store, summarizer=deps.light_model,
                 events=deps.repos.events, now=deps.now,
                 passage_token_cap=deps.passage_token_cap,
             )
+            subagents = [researcher_subagent([web], deps.researcher_model)]
+            if "documents" in state.get("allowed_types", []):
+                docs = make_doc_search_tool(owner_id=owner, run_id=run_id, index=deps.doc_index,
+                                            events=deps.repos.events, now=deps.now)
+                subagents.append(doc_reader_subagent([docs], deps.researcher_model))
             holder["planner"] = build_planner(
                 model=deps.planner_model,
-                subagents=[researcher_subagent([tool], deps.researcher_model)],
+                subagents=subagents,
                 checkpointer=deps.checkpointer,
-                guard=ApprovedDispatchGuard(lambda: approved, lambda sid, why, text: deps.log(
-                    state["owner_id"], state["run_id"], "dispatch_rejected",
-                    subtask_id=sid, reason=why, description=text)),
+                guard=ApprovedDispatchGuard(
+                    lambda: approved,
+                    lambda sid, why, text: deps.log(owner, run_id, "dispatch_rejected",
+                                                    subtask_id=sid, reason=why, description=text),
+                    agent_for=lambda sid: agent_of.get(sid, AGENT_FOR_SOURCE_TYPE["web"])),
             )
         return holder["planner"]
+
+    def listing_of(state: State, ids: list[str]) -> str:
+        by_id = {t["id"]: t for t in state["plan"]["sub_tasks"]}
+        agent_of.update({i: AGENT_FOR_SOURCE_TYPE[by_id[i]["source_type"]] for i in ids})
+        return "\n".join(f"- {i}: {by_id[i]['query']} [subagent_type {agent_of[i]}]" for i in ids)
 
     def cfg(state: State) -> dict:
         return {"configurable": {"thread_id": state["thread_id"]},
@@ -122,6 +172,20 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
 
     def thread(state: State) -> list:
         return planner_for(state).get_state(cfg(state)).values["messages"]
+
+    def ingesting(state: State) -> State:
+        enter(state, RunState.INGESTING)
+        owner, run_id = state["owner_id"], state["run_id"]
+        documents = ingest_documents(deps, owner, run_id, uploads or [])
+        allowed = state["allowed_types"]
+        if not documents:
+            allowed = [t for t in allowed if t != "documents"]
+            deps.log(owner, run_id, "documents_unavailable",
+                     reason="no uploaded document could be read")
+            if not allowed:
+                raise RunFailed("no uploaded document could be read and no other source type "
+                                "is enabled")
+        return {"documents": documents, "allowed_types": allowed}
 
     def planning(state: State) -> State:
         enter(state, RunState.PLANNING)
@@ -163,7 +227,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
         enter(state, RunState.RESEARCHING)
         approved.clear()
         approved.update({t["id"]: t["query"] for t in state["plan"]["sub_tasks"]})
-        listing = "\n".join(f"- {i}: {q}" for i, q in approved.items())
+        listing = listing_of(state, list(approved))
         planner_for(state).invoke({"messages": [HumanMessage(
             f"RESEARCH: dispatch exactly these approved Sub-tasks now:\n{listing}\n{DESCRIPTION_RULE}")]}, cfg(state))
         return {}
@@ -179,7 +243,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
 
     def repair(state: State) -> State:
         by_id = {t["id"]: t for t in state["plan"]["sub_tasks"]}
-        listing = "\n".join(f"- {i}: {by_id[i]['query']}" for i in state["missing"])
+        listing = listing_of(state, state["missing"])
         approved.clear()
         approved.update({i: by_id[i]["query"] for i in state["missing"]})
         deps.log(state["owner_id"], state["run_id"], "repair", missing=state["missing"])
@@ -191,10 +255,15 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
         owner, run_id = state["owner_id"], state["run_id"]
         known = {s.id for s in deps.repos.sources.list_for_run(owner, run_id)}
         summaries = summaries_from_log(deps, owner, run_id)
+        returned = returned_chunks(deps, owner, run_id)
+        documents = set(state.get("documents", []))
+        source_type = {t["id"]: t["source_type"] for t in state["plan"]["sub_tasks"]}
         results = []
         for sid, outcome in outcomes(state).items():
             refs: list[SourceRef] = []
-            if outcome.status == "succeeded":
+            if outcome.status == "succeeded" and source_type[sid] == "documents":
+                refs = document_refs(owner, outcome.dispatch.result or "", returned, documents)
+            elif outcome.status == "succeeded":
                 for src in source_ids_in(outcome.dispatch.result or ""):
                     ref = summaries.get(src)
                     if src in known and ref is not None:
@@ -210,12 +279,36 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
             raise RunFailed("every Sub-task failed")
         return {"research": ResearchResults(results=results).model_dump()}
 
+    def document_refs(owner: str, reply: str, returned: set[str],
+                      documents: set[str]) -> list[SourceRef]:
+        """The chunks a Doc Reader named that its search really returned, grouped by
+        document. A chunk ID it invented, or one from another Run, is ignored."""
+        by_source: dict[str, list] = {}
+        for ref in chunk_ids_in(reply):
+            if chunk_id(ref) not in returned:
+                continue
+            try:
+                source_id = deps.repos.observations.get(owner, ref.observation_id).source_id
+            except NotFoundError:
+                continue
+            if source_id in documents:
+                by_source.setdefault(source_id, []).append(ref)
+        out = []
+        for source_id, chosen in by_source.items():
+            source = deps.repos.sources.get(owner, source_id)
+            pages = sorted({p.page for c in chosen for p in deps.store.get_passages(
+                owner, c.observation_id, [c.index]) if p.page})
+            out.append(SourceRef(
+                source_id=source_id, title=source.title, passages=chosen,
+                summary=f"{len(chosen)} chunk(s) of {source.title}"
+                        + (f", pages {', '.join(map(str, pages))}" if pages else "")))
+        return out
+
     def extracting(state: State) -> State:
         enter(state, RunState.EXTRACTING)
         research = ResearchResults.model_validate(state["research"])
-        source_ids = list(dict.fromkeys(
-            ref.source_id for r in research.results for ref in r.source_refs))
-        result = extract(deps, state["owner_id"], state["run_id"], source_ids)
+        scope = research.passage_scope()
+        result = extract(deps, state["owner_id"], state["run_id"], list(scope), scope)
         return {"extraction": result.model_dump()}
 
     def synthesizing(state: State) -> State:
@@ -265,12 +358,14 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
         return {"report_id": report.id}
 
     g = StateGraph(State)
-    for name, fn in [("planning", planning), ("researching", researching), ("verify", verify),
+    for name, fn in [("ingesting", ingesting), ("planning", planning), ("researching", researching), ("verify", verify),
                      ("repair", repair), ("collect", collect), ("extracting", extracting),
                      ("synthesizing", synthesizing), ("writing", writing), ("fact_checking", fact_checking),
                      ("complete", complete)]:
         g.add_node(name, fn)
-    g.add_edge(START, "planning")
+    g.add_conditional_edges(START, lambda s: "ingesting" if s.get("has_uploads") else "planning",
+                            {"ingesting": "ingesting", "planning": "planning"})
+    g.add_edge("ingesting", "planning")
     g.add_edge("planning", "researching")
     g.add_edge("researching", "verify")
     g.add_conditional_edges(
@@ -288,22 +383,29 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None):
 
 def run_brief(
     deps: Deps, owner_id: str, brief: Brief, on_state: Callable[[dict], None] | None = None,
+    uploads: list[Upload] | None = None,
 ) -> Run:
     """Create a Run for the Brief and carry it to COMPLETE or FAILED. A Brief with no available
-    source type raises SubmissionRejected before any Run exists. A Run that fails does not raise; its reason is in the Run log. `on_state` sees every graph state snapshot."""
+    source type, or with uploads that break the document limits (at most 10 PDFs of at most
+    20 MB, matching `brief.document_ids`), raises SubmissionRejected before any Run exists. A
+    Run that fails does not raise; its reason is in the Run log. `on_state` sees every graph
+    state snapshot."""
+    uploads = list(uploads or [])
     available = check_submission(brief, bool(deps.repos.reports.list_for_owner(owner_id)))
-    allowed = [t for t in available if t in IMPLEMENTED_SOURCE_TYPES]
+    allowed = [t for t in available if t in runnable_source_types(deps)]
     if not allowed:
         raise SubmissionRejected(
             f"no runnable source type: {', '.join(available)} cannot be researched yet")
+    check_uploads(brief, uploads)
+    ingest = "documents" in allowed
     run = Run(id=f"run_{deps.new_id()}", owner_id=owner_id, brief=brief.text,
-              state=RunState.PLANNING, created_at=deps.now())
+              state=RunState.INGESTING if ingest else RunState.PLANNING, created_at=deps.now())
     deps.repos.runs.add(run)
     initial: State = {"thread_id": f"thread-{uuid.uuid4()}", "owner_id": owner_id,
                       "run_id": run.id, "brief": brief.text,
-                      "allowed_types": allowed}
+                      "allowed_types": allowed, "has_uploads": ingest}
     try:
-        for snapshot in build_graph(deps).stream(
+        for snapshot in build_graph(deps, uploads=uploads if ingest else []).stream(
                 initial, outer_config(initial["thread_id"]), stream_mode="values"):
             if on_state:
                 on_state(snapshot)

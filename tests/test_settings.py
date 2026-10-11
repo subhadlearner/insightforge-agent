@@ -72,3 +72,22 @@ def test_evidence_limits_and_bucket_thresholds_are_settings_that_reach_the_pipel
         4000, 1500, 50000)
     assert (deps.thresholds.credibility_high, deps.thresholds.recency_fresh_days) == (0.8, 90)
     assert Settings.model_fields["evidence_budget_tokens"].default == 6000
+
+
+def test_documents_are_wired_with_the_configured_local_embedding_model(monkeypatch):
+    """T7: production wiring builds the Doc Reader's pieces without loading a model or opening a
+    connection; the one embedding model serves documents, relevance and the Fact-Checker."""
+    from insightforge_agent.agents.doc_reader import DoclingChunker
+    from insightforge_agent.embeddings import FastEmbedEmbedder
+    from insightforge_agent.pipeline.graph import runnable_source_types
+    from insightforge_agent.pipeline.wiring import build_deps
+    from insightforge_agent.stores.memory import MemoryRepos
+
+    s = make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t")
+    deps = build_deps(s, MemoryRepos(), checkpointer=None)
+    assert isinstance(deps.embedder, FastEmbedEmbedder)
+    assert deps.embedder.model_name == "BAAI/bge-small-en-v1.5"
+    assert deps.doc_index is not None and deps.doc_index._embedder is deps.embedder
+    assert deps.doc_index._dimensions == 384
+    assert isinstance(deps.chunker, DoclingChunker)
+    assert runnable_source_types(deps) == ["web", "documents"]

@@ -153,10 +153,18 @@ def synthesize(
 ) -> EvidenceBundle:
     by_id: dict[str, SubTask] = {t.id: t for t in plan.sub_tasks}
     sources_of: dict[str, list[str]] = {t.id: [] for t in plan.sub_tasks}
+    # Per Sub-task and Source, the Passage indices a Doc Reader retrieved (None: the whole Source).
+    only: dict[tuple[str, str], set[int] | None] = {}
     for result in research.results:
         if result.status == "succeeded":
             # Deduplicated within a Sub-task only: a Source several Sub-tasks found is read for each.
             sources_of[result.subtask_id] = list(dict.fromkeys(r.source_id for r in result.source_refs))
+            for r in result.source_refs:
+                key = (result.subtask_id, r.source_id)
+                if not r.passages or only.get(key, set()) is None:
+                    only[key] = None
+                else:
+                    only.setdefault(key, set()).update(p.index for p in r.passages)
 
     contents = {sid: deps.store.read_source(owner_id, sid)
                 for sid in dict.fromkeys(s for ids in sources_of.values() for s in ids)}
@@ -169,7 +177,8 @@ def synthesize(
     # 1. Draft, one Sub-task at a time.
     drafted: list[_Candidate] = []
     for task in sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id)):
-        passages = [p for sid in sources_of[task.id] for p in contents[sid].passages]
+        passages = [p for sid in sources_of[task.id] for p in contents[sid].passages
+                    if only[(task.id, sid)] is None or p.index in only[(task.id, sid)]]
         for batch in batch_passages(passages, deps.passage_token_cap):
             drafted += _draft(deps, owner_id, run_id, task, batch)
 

@@ -25,6 +25,9 @@ class SourceRef(BaseModel):
     source_id: str
     title: str
     summary: str
+    # The chunks a Doc Reader retrieved (references only, never text). Empty means the whole
+    # Source, as for a fetched web page.
+    passages: list["PassageRef"] = Field(default_factory=list)
 
 
 class SubTaskResult(BaseModel):
@@ -36,12 +39,29 @@ class SubTaskResult(BaseModel):
 class ResearchResults(BaseModel):
     results: list[SubTaskResult]
 
+    def passage_scope(self) -> dict[str, set[int] | None]:
+        """Per Source, the Passage indices any Sub-task retrieved, or None for the whole Source.
+        A Source one Sub-task read whole is read whole."""
+        scope: dict[str, set[int] | None] = {}
+        for r in self.results:
+            for ref in r.source_refs:
+                if not ref.passages or scope.get(ref.source_id, set()) is None:
+                    scope[ref.source_id] = None
+                else:
+                    scope.setdefault(ref.source_id, set()).update(p.index for p in ref.passages)
+        return scope
+
 
 class PassageRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     observation_id: str
     index: int
+
+
+SourceRef.model_rebuild()
+SubTaskResult.model_rebuild()
+ResearchResults.model_rebuild()
 
 
 class ExtractedFact(BaseModel):

@@ -12,6 +12,8 @@ SourceType = Literal["web", "documents", "memory"]
 # parsing reads it back with this same pattern, so an accepted id always round-trips.
 SUBTASK_ID_PATTERN = r"[A-Za-z0-9_]+"
 RESEARCHER = "researcher"
+DOC_READER = "doc_reader"
+AGENT_FOR_SOURCE_TYPE: dict[str, str] = {"web": RESEARCHER, "documents": DOC_READER}
 
 
 def dispatched_id(description: str) -> str | None:

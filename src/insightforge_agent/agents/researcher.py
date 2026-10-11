@@ -117,9 +117,9 @@ def make_web_search_tool(
             ])
             line = " ".join(reply.text.split())[:SUMMARY_MAX_CHARS]
             ref = SourceRef(source_id=obs.source_id, title=page.title, summary=line)
-            log(SUMMARY_EVENT, **ref.model_dump())
+            log(SUMMARY_EVENT, **ref.model_dump(exclude={"passages"}))
             refs.append(ref)
-        return json.dumps([r.model_dump() for r in refs])
+        return json.dumps([r.model_dump(exclude={"passages"}) for r in refs])
 
     return web_search
 
