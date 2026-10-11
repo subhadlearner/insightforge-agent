@@ -2,6 +2,8 @@
 
 import json
 
+from langchain_core.messages import AIMessage
+
 from insightforge_agent.domain.contracts import Brief
 from insightforge_agent.domain.models import RunState, SubTaskStatus
 from insightforge_agent.pipeline.graph import run_brief
@@ -103,6 +105,19 @@ def test_writer_is_retried_then_succeeds(make_deps):
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     assert run.state == RunState.COMPLETE
     assert len([e for e in events(deps, run) if e.type == "writer_violations"]) == 2
+
+
+def test_writer_retry_prompt_keeps_the_short_bad_json_message(make_deps):
+    """F3 widened the logged diagnostic; what the Writer is told on a retry is unchanged."""
+    good = fakes.writer()
+    replies = iter([AIMessage(content="not json", response_metadata={"stop_reason": "end_turn"})])
+    writer = ScriptedChat(reply=lambda m: next(replies, None) or good.reply(m))
+    deps = make_deps(writer_model=writer)
+    run = run_brief(deps, "alice", Brief(text=BRIEF))
+    assert run.state == RunState.COMPLETE
+    retry = str(writer.seen[1][-1].content)
+    assert retry.endswith("Fix them:\n- the reply was not valid report JSON: "
+                          "ReportDraft: 1 problem(s) in 'not json'")
 
 
 def test_writer_exhausting_retries_fails_the_run_with_no_report(make_deps):

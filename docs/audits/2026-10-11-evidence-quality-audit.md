@@ -60,6 +60,13 @@
 
 ## F3. Five unparseable model replies (OPTIONAL)
 
+> **Status (2026-10-12): diagnostics added; truncation still unproven.**
+> - `BadModelReply` now records the failure kind (incomplete JSON, malformed JSON or schema), the reply length, a bounded head and tail, the stop reason and the output and reasoning tokens.
+> - Nothing from October 10 beyond the logged first 200 characters survives. Each of the five replies was well-formed JSON for at least 200 characters with exactly one problem after that, which fits truncation, malformed JSON and a one-field schema error alike.
+> - The light role's `max_tokens` is confirmed as 4096 and left unchanged. A one-call drafting probe is proposed and awaits the owner's authorisation.
+>
+> Details: `2026-10-12-f3-json-replies.md`.
+
 - **Problem.** 1 extraction batch and 4 drafting batches returned invalid JSON. Each batch was skipped and logged, with no retry (`agents/llm_json.py`).
 - **Evidence.** The light role uses the `ChatAnthropic` default `max_tokens=4096` (checked offline: `ChatAnthropic(model="claude-haiku-5-5").max_tokens == 4096`, langchain-anthropic 1.7.5). Only the writer was raised to 16,000 (`llm.py:31-33`), after the T3 live run found the Writer's JSON cut off at exactly this default. The October 10 run used 34,315 reasoning tokens, and reasoning shares that budget. Truncation is the leading hypothesis but is **not established**: the log keeps only the first 200 characters of each reply.
 - **Grading impact.** Low. The batches fail safe, and the Report still had 27 Claims. The cost is some lost recall.

@@ -85,7 +85,7 @@ def write_report(
             draft = ask_json(deps.writer_model, SYSTEM, user, ReportDraft)
             last = violations(draft, bundle)
         except BadModelReply as e:
-            last = [f"the reply was not valid report JSON: {e}"]
+            last = [f"the reply was not valid report JSON: {e.brief}"]
         if not last:
             return draft.model_copy(update={"gaps": gaps})
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
