@@ -57,7 +57,7 @@ A zero denominator is reported as **undefined**, never as 0. Intervals are Wilso
 
 ## Pilot set (M1.4)
 
-48 cases, every label `proposed` and every case `synthetic` (invented companies; nothing is an excerpt, so nothing needs a URL). All 48 labels are now `reviewed` by the owner (single reviewer; the independent second review was waived, so agreement and kappa are unavailable, n = 0). See [review-outcome.md](review-outcome.md).
+48 cases, every case `synthetic` (invented companies; nothing is an excerpt, so nothing needs a URL). All 48 labels are now `reviewed` by the owner (single reviewer; the independent second review was waived, so agreement and kappa are unavailable, n = 0). See [review-outcome.md](review-outcome.md).
 
 | Type | Cases | Categories (count) |
 |---|---|---|
