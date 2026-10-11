@@ -113,14 +113,16 @@ def test_the_sheet_template_is_blank_and_carries_no_identity_or_date(pilot):
 def test_the_committed_review_files_match_a_fresh_build_of_the_case_file(pilot):
     items = review.build_items(pilot)
     assert (COMMITTED / review.PACKET_FILE).read_text(encoding="utf-8") == review.render_packet(items)
-    assert json.loads((COMMITTED / review.MAPPING_FILE).read_text(encoding="utf-8")) \
-        == review.build_mapping(items)
+    # The proposal pin deliberately records the record as it was before review, so after the
+    # review integration only the packet content digests are expected to match a fresh build.
+    strip = lambda m: [{k: v for k, v in i.items() if k != "proposal_sha256"} for i in m["items"]]  # noqa: E731
+    committed = json.loads((COMMITTED / review.MAPPING_FILE).read_text(encoding="utf-8"))
+    assert strip(committed) == strip(review.build_mapping(items))
     sheet = review.read_sheet(COMMITTED / review.SHEET_FILE)
     assert [r["review_id"] for r in sheet] == [i.review_id for i in items]
 
 
-def test_the_pilot_cases_are_still_all_proposed(pilot):
-    assert {c.label_status.value for c in pilot} == {"proposed"}
+def test_the_pilot_composition_is_unchanged_by_review(pilot):
     assert len(pilot) == 48 and sum(c.critical for c in pilot) == 28
 
 

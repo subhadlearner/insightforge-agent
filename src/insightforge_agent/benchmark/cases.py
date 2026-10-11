@@ -206,6 +206,10 @@ class BenchmarkCase(_Frozen):
     second_reviewer: str | None = None
     second_reviewed_at: date | None = None
     second_label: Label | None = None  # the second reviewer's own judgment, kept even if it differs
+    # Audit trail (M1.5). `expected` stays the final label; these keep what it replaced.
+    proposed_label: Label | None = None  # the label originally proposed, before any review
+    first_label: Label | None = None  # the reviewer's own blind judgment (reviewer, reviewed_at)
+    adjudication_note: str | None = None  # why expected differs from first_label
 
     @model_validator(mode="before")
     @classmethod
@@ -251,15 +255,28 @@ class BenchmarkCase(_Frozen):
             raise ValueError("second review needs reviewer, date and label together")
         if self.second_label is not None and not label_belongs_to(self.type, self.second_label):
             raise ValueError(f"second_label {self.second_label} is not a {self.type} label")
+        for name in ("proposed_label", "first_label"):
+            value = getattr(self, name)
+            if value is not None and not label_belongs_to(self.type, value):
+                raise ValueError(f"{name} {value} is not a {self.type} label")
         if self.label_status is LabelStatus.PROPOSED:
-            if self.reviewer or self.reviewed_at or self.dispute_note or has_second:
+            if (self.reviewer or self.reviewed_at or self.dispute_note or has_second
+                    or self.proposed_label or self.first_label or self.adjudication_note):
                 raise ValueError("a proposed label carries no review or dispute metadata")
             return
+        if self.adjudication_note is not None and (
+                self.label_status is not LabelStatus.REVIEWED
+                or self.first_label in (None, self.expected) or not self.adjudication_note.strip()):
+            raise ValueError("an adjudication_note needs a reviewed label whose expected "
+                             "differs from first_label")
         if self.label_status is LabelStatus.REVIEWED:
             if not (self.reviewer or "").strip() or self.reviewed_at is None:
                 raise ValueError("a reviewed label needs reviewer and reviewed_at")
             if self.dispute_note:
                 raise ValueError("a reviewed label cannot carry a dispute note")
+            if self.first_label not in (None, self.expected) and self.adjudication_note is None:
+                raise ValueError("expected differs from first_label: an adjudication_note "
+                                 "is required")
             if has_second and self.second_label != self.expected:
                 raise ValueError("a second review that differs from expected makes the label disputed")
             if has_second and self.second_reviewer == self.reviewer:

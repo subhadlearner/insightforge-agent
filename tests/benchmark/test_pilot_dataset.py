@@ -2,6 +2,7 @@
 
 These tests pin the agreed composition, so the dataset cannot drift without a visible change."""
 
+import json
 import re
 from collections import Counter
 from pathlib import Path
@@ -66,9 +67,30 @@ def test_the_set_has_48_cases_in_the_agreed_composition(cases):
         assert dict(found) == categories, case_type
 
 
-def test_every_label_starts_proposed_with_no_review_data(cases):
-    assert {c.label_status for c in cases} == {LabelStatus.PROPOSED}
-    assert all(c.reviewer is None and c.second_label is None for c in cases)
+ADJUDICATED = {"p-fm-03", "p-fm-06", "p-ps-03"}
+
+
+def test_every_label_is_reviewed_and_matches_the_frozen_owner_record(cases):
+    frozen = json.loads((ROOT / "review" / "owner-decisions.frozen.json").read_text(encoding="utf-8"))
+    owner = {d["case_id"]: d for d in frozen["decisions"]}
+    assert {c.id for c in cases} == set(owner) and len(owner) == 48
+    for case in cases:
+        d = owner[case.id]
+        assert case.label_status is LabelStatus.REVIEWED
+        assert (case.first_label.value, case.reviewer, case.reviewed_at.isoformat()) ==             (d["label"], d["reviewer"], d["reviewed_on"]), case.id
+        assert case.second_label is None  # the independent second review was waived
+        assert case.proposed_label is not None
+
+
+def test_only_the_three_adjudicated_cases_differ_from_the_blind_review(cases):
+    differing = {c.id for c in cases if c.first_label != c.expected}
+    assert differing == ADJUDICATED
+    for case in cases:
+        assert (case.adjudication_note is not None) == (case.id in ADJUDICATED)
+        if case.id in ADJUDICATED:
+            assert case.first_label.value == "CONTRADICTORY"
+            assert case.expected.value == "DIFFERENT_FACT" == case.proposed_label.value
+            assert "Issue #34" in case.adjudication_note
 
 
 def test_the_set_is_negative_heavy_with_both_controls_for_every_type(cases):

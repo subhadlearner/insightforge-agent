@@ -1,0 +1,489 @@
+{
+  "format": 1,
+  "kind": "owner-blind-review",
+  "finalized_on": "2026-10-11",
+  "sheet_sha256": "861ec9f7545a472e45bbcfe7c3ea539576f27d7a5fa153dbc0bb838e1f41e40d",
+  "mapping_sha256": "08c12abd0fbff3d8dfe543aceb1df02ef21ea6bf9b99099fc23c7ce9723fbdc1",
+  "decisions": [
+    {
+      "review_id": "R001",
+      "case_id": "p-ps-02",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R002",
+      "case_id": "p-al-02",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R003",
+      "case_id": "p-al-03",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R004",
+      "case_id": "s-fh-01",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R005",
+      "case_id": "g-wi-02",
+      "type": "GROUND",
+      "label": "NOT_GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R006",
+      "case_id": "s-t6-01",
+      "type": "SUPPORT",
+      "label": "CONTRADICTED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R007",
+      "case_id": "s-ir-03",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R008",
+      "case_id": "i-sy-02",
+      "type": "INDEPENDENCE",
+      "label": "DEPENDENT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R009",
+      "case_id": "p-ta-01",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R010",
+      "case_id": "i-gi-02",
+      "type": "INDEPENDENCE",
+      "label": "INDEPENDENT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R011",
+      "case_id": "g-wi-01",
+      "type": "GROUND",
+      "label": "NOT_GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R012",
+      "case_id": "p-ta-03",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R013",
+      "case_id": "p-ps-01",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R014",
+      "case_id": "s-ir-01",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R015",
+      "case_id": "p-fm-06",
+      "type": "PAIR",
+      "label": "CONTRADICTORY",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R016",
+      "case_id": "s-t6-04",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R017",
+      "case_id": "s-fh-02",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R018",
+      "case_id": "g-qu-01",
+      "type": "GROUND",
+      "label": "GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R019",
+      "case_id": "p-ct-03",
+      "type": "PAIR",
+      "label": "CONTRADICTORY",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R020",
+      "case_id": "p-fm-02",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R021",
+      "case_id": "p-ct-04",
+      "type": "PAIR",
+      "label": "CONTRADICTORY",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R022",
+      "case_id": "p-fm-04",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R023",
+      "case_id": "p-ta-02",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": true,
+      "note": "Factually they are same fact but the passage context is different on which the statement has been made. Hence given different fact as verdict.",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R024",
+      "case_id": "s-ir-02",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R025",
+      "case_id": "s-pc-01",
+      "type": "SUPPORT",
+      "label": "SUPPORTED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R026",
+      "case_id": "p-al-01",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R027",
+      "case_id": "p-ct-02",
+      "type": "PAIR",
+      "label": "CONTRADICTORY",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R028",
+      "case_id": "p-pq-03",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R029",
+      "case_id": "i-gi-01",
+      "type": "INDEPENDENCE",
+      "label": "INDEPENDENT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R030",
+      "case_id": "p-ps-04",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R031",
+      "case_id": "p-fm-05",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R032",
+      "case_id": "p-pq-01",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": true,
+      "note": "There is a very little margin of error, I think in finance reporting this is accepted; hence given same fact as verdict.",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R033",
+      "case_id": "p-al-04",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R034",
+      "case_id": "g-ma-01",
+      "type": "GROUND",
+      "label": "NOT_GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R035",
+      "case_id": "s-t6-03",
+      "type": "SUPPORT",
+      "label": "CONTRADICTED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R036",
+      "case_id": "s-t6-02",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R037",
+      "case_id": "p-fm-03",
+      "type": "PAIR",
+      "label": "CONTRADICTORY",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R038",
+      "case_id": "p-ct-01",
+      "type": "PAIR",
+      "label": "CONTRADICTORY",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R039",
+      "case_id": "s-fh-03",
+      "type": "SUPPORT",
+      "label": "INSUFFICIENT_EVIDENCE",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R040",
+      "case_id": "p-ps-03",
+      "type": "PAIR",
+      "label": "CONTRADICTORY",
+      "uncertain": true,
+      "note": "The statements looks like different fact but there is a big difference on having same revenue for a quarter and a full year; hence given contradictory as verdict.",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R041",
+      "case_id": "s-pc-02",
+      "type": "SUPPORT",
+      "label": "SUPPORTED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R042",
+      "case_id": "g-qu-02",
+      "type": "GROUND",
+      "label": "GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R043",
+      "case_id": "i-sy-01",
+      "type": "INDEPENDENCE",
+      "label": "DEPENDENT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R044",
+      "case_id": "p-fm-01",
+      "type": "PAIR",
+      "label": "DIFFERENT_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R045",
+      "case_id": "p-pq-02",
+      "type": "PAIR",
+      "label": "SAME_FACT",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R046",
+      "case_id": "g-ns-01",
+      "type": "GROUND",
+      "label": "NOT_GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R047",
+      "case_id": "g-qu-03",
+      "type": "GROUND",
+      "label": "GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    },
+    {
+      "review_id": "R048",
+      "case_id": "g-ma-02",
+      "type": "GROUND",
+      "label": "NOT_GROUNDED",
+      "uncertain": false,
+      "note": "",
+      "reviewer": "Subhadeep",
+      "reviewed_on": "2026-10-11"
+    }
+  ]
+}

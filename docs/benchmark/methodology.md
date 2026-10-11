@@ -36,7 +36,7 @@ Usage (input and output tokens, latency, retries, parse failures) is optional an
 - Ground truth lives only in the case file. Predictions are stored apart (`verdicts.jsonl`, `raw.jsonl`) and joined to cases at report time; no write path goes from predictions to cases.
 - Label status: `proposed` (no review data), `reviewed` (reviewer and date; an optional second review must be by a different person and agree), `disputed` (needs a note).
 - **Qualification metrics use `reviewed` labels only.** Disputed labels are always excluded. Proposed labels, critical or not, are excluded unless `--allow-proposed` is passed; such a report is stamped `EXPLORATORY`, says it is not a qualification result, and counts the proposed cases it included. When proposed critical cases are excluded the report says how many.
-- A second review stores the second reviewer's own label (`second_label`), reviewer and date. A reviewed case needs the second label to equal `expected`; a differing one makes the case `disputed` with both labels kept and a note. The review workflow itself (M1.5) is not part of M1.2. The offline owner-review tooling (blind packet, decision sheet, `bench review`) is described in [owner-review.md](owner-review.md); the plan for reconciling, second review and agreement statistics is [review-integration-plan.md](review-integration-plan.md).
+- A second review stores the second reviewer's own label (`second_label`), reviewer and date. A reviewed case needs the second label to equal `expected`; a differing one makes the case `disputed` with both labels kept and a note. The review workflow itself (M1.5) is not part of M1.2. Reviewed cases also keep `proposed_label` (the original proposal), `first_label` (the reviewer's blind judgment) and, where `expected` differs from it, a required `adjudication_note`. The offline owner-review tooling (blind packet, decision sheet, `bench review`) is described in [owner-review.md](owner-review.md); the plan for reconciling, second review and agreement statistics is [review-integration-plan.md](review-integration-plan.md).
 - Case ids must not contain a label name, so an id cannot leak the answer.
 
 ## Denominators
@@ -57,7 +57,7 @@ A zero denominator is reported as **undefined**, never as 0. Intervals are Wilso
 
 ## Pilot set (M1.4)
 
-48 cases, every label `proposed` and every case `synthetic` (invented companies; nothing is an excerpt, so nothing needs a URL). Nothing here is human-verified until M1.5 reviews it.
+48 cases, every case `synthetic` (invented companies; nothing is an excerpt, so nothing needs a URL). All 48 labels are now `reviewed` by the owner (single reviewer; the independent second review was waived, so agreement and kappa are unavailable, n = 0). See [review-outcome.md](review-outcome.md).
 
 | Type | Cases | Categories (count) |
 |---|---|---|
