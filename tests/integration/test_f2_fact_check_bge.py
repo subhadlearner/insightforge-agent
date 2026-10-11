@@ -2,19 +2,20 @@
 
 Each Claim goes through the real `fact_check()` against a re-fetched web page of one paragraph
 (one Passage), with `FastEmbedEmbedder("BAAI/bge-small-en-v1.5")`, the approved threshold (0.85)
-and the numeric check. Failure messages show the similarity, so a model or policy change is easy
-to read. Results and the open decision: docs/audits/2026-10-11-f2-fact-checker.md.
+and the numeric check. Every case prints its verdict and similarity (`-rP` shows them for passing
+cases, `--runxfail` for the known failures). Results and the open decision:
+docs/audits/2026-10-11-f2-fact-checker.md.
 
 - Plain tests: behaviour that holds today and must keep holding.
 - `xfail(strict=True)`: known F2 failures under the approved policy. A fix that makes one pass
-  fails the suite until its marker is removed."""
+  fails the suite until its marker is removed. Setup problems raise `RuntimeError`, so they
+  cannot pass for an expected failure."""
 
 import pytest
 
 from insightforge_agent.pipeline.fact_check import fact_check
-from tests.pipeline.test_t6_writer_fact_check import URL, Fetcher, draft_of, evidence
+from tests.pipeline.test_t6_writer_fact_check import SALES, URL, Fetcher, draft_of, evidence
 
-SALES = "BYD sold 4.27 million vehicles in 2025, up from 3.02 million in 2024."
 PARAGRAPH = (f"{SALES} Plug-in hybrids made up about half of those sales, the company said in "
              "its annual filing. The company expanded its overseas network to 70 countries and "
              "opened plants in Hungary and Brazil.")
@@ -25,24 +26,19 @@ WRONG_YEAR = "BYD sold 4.27 million vehicles in 2024, up from 3.02 million in 20
 F2_OPEN = "F2: needs an owner decision; see docs/audits/2026-10-11-f2-fact-checker.md"
 
 
-def verdict_of(make_deps, embedder, claim: str, page: str):
-    """The verdict for one Claim whose cited Evidence item and re-fetched page are `page`."""
+def assert_verdict(make_deps, embedder, claim: str, page: str, expected: str):
+    """Fact-check one Claim whose cited Evidence item and re-fetched page are `page`."""
     deps = make_deps(fetcher=Fetcher({URL: page}), embedder=embedder)
     _, bundle = evidence(deps, [page])
     (v,) = fact_check(deps, "alice", "run_1", draft_of([claim]), bundle).verdicts
-    assert v.check == "web_refetch"
-    assert len(deps.repos.passages.list("alice", v.matched.observation_id)) == 1, "one Passage"
-    return v
-
-
-def explain(v, claim: str, page: str) -> str:
-    return (f"verdict={v.verdict} similarity={v.similarity:.3f} (threshold 0.85) "
-            f"reason={v.reason!r}\n  claim:   {claim}\n  passage: {page}")
-
-
-def assert_verdict(make_deps, embedder, claim: str, page: str, expected: str):
-    v = verdict_of(make_deps, embedder, claim, page)
-    assert v.verdict == expected, explain(v, claim, page)
+    if v.check != "web_refetch" or v.matched is None or len(
+            deps.repos.passages.list("alice", v.matched.observation_id)) != 1:
+        raise RuntimeError(f"setup: expected one re-fetched Passage, got {v!r}")
+    explained = (f"verdict={v.verdict} similarity={v.similarity:.3f} "
+                 f"(threshold {deps.similarity_threshold}) reason={v.reason!r}\n"
+                 f"  claim:   {claim}\n  passage: {page}")
+    print(explained)
+    assert v.verdict == expected, explained
 
 
 # --- correct Claims must be verified ---------------------------------------------------------
@@ -52,6 +48,13 @@ def assert_verdict(make_deps, embedder, claim: str, page: str, expected: str):
                  "Battery output hit 4.27 GWh at Tessera Energy's Nevada plant.",
                  id="g-qu-02-abbreviation"),
     pytest.param(PARAPHRASE, SALES, id="writer-paraphrase-one-sentence-passage"),
+    pytest.param("General Motors delivered 2.7 million vehicles in the US in 2025.",
+                 "GM delivered 2.7 million vehicles in the US in 2025.",
+                 id="entity-full-name-vs-abbreviation"),
+    pytest.param("GM delivered 2.7 million vehicles in the US in 2025.",
+                 "General Motors delivered 2.7 million vehicles in the US in 2025.",
+                 id="entity-abbreviation-vs-full-name"),
+    pytest.param(SALES, SALES.replace("BYD", "BYD Co. Ltd."), id="entity-legal-name"),
 ])
 def test_a_correct_claim_is_verified(make_deps, embedder, claim, page):
     assert_verdict(make_deps, embedder, claim, page, "verified")
