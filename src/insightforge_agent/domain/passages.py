@@ -103,6 +103,79 @@ def batch_passages(
     return batches
 
 
+MAX_SENTENCE_CHARS = 600  # a longer "sentence" (scraped text without stops) is cut into pieces
+
+# A word ending a sentence: "." "!" or "?", optionally followed by closing quotes or brackets.
+_STOP = re.compile(r"[.!?][\"'”’)\]]*$")
+# The next sentence's first letter, after any opening quotes or brackets.
+_OPENING = re.compile(r"^[\"'“‘(\[]*([^\W\d_])")
+
+
+def sentences_of(text: str) -> list[str]:
+    """The sentences of `text`, in order, each at most `MAX_SENTENCE_CHARS` long. A sentence
+    ends at a stop followed by a word whose first letter is upper case, so "approx. 40%" and
+    "vs. 3.02" stay whole. An abbreviation before a capital ("BYD Co. Ltd.") is cut, which the
+    two-sentence windows of `candidate_spans` put back together; no abbreviation list is kept,
+    so "...than Kia. Hyundai..." is split correctly. Deterministic; only whitespace is dropped."""
+    sentences, current = [], []
+    words = text.split()
+    for n, word in enumerate(words):
+        current.append(word)
+        following = _OPENING.match(words[n + 1]) if n + 1 < len(words) else None
+        if n + 1 == len(words) or (_STOP.search(word) and following
+                                   and following.group(1).isupper()):
+            sentences.extend(_pieces(" ".join(current), MAX_SENTENCE_CHARS))
+            current = []
+    return sentences
+
+
+@dataclass(frozen=True)
+class Span:
+    """One sentence, or a window of adjacent sentences (`first` to `last`, by position), of one
+    Passage: what the Fact-Checker compares a Claim with. Temporary like a Window; it still
+    names, and is cited as, its parent Passage."""
+
+    passage: Passage
+    text: str
+    first: int = 0
+    last: int = 0
+
+    def overlaps(self, other: "Span") -> bool:
+        """Whether both come from the same Passage and share a sentence."""
+        return (self.passage.observation_id, self.passage.index) == (
+            other.passage.observation_id, other.passage.index) and (
+            self.first <= other.last and other.first <= self.last)
+
+    def contains(self, other: "Span") -> bool:
+        """Whether every sentence of `other` is in this span (same Passage)."""
+        return self.overlaps(other) and self.first <= other.first and other.last <= self.last
+
+
+MAX_WINDOW_SENTENCES = 4  # the widest window, however many sentences a Claim has
+
+
+def window_width(statement: str) -> int:
+    """Windows as wide as the statement, so a Claim of several sentences can match the
+    Passage text that states it: at least 2 sentences, at most `MAX_WINDOW_SENTENCES`."""
+    return min(MAX_WINDOW_SENTENCES, max(2, len(sentences_of(statement))))
+
+
+def candidate_spans(passages: list[Passage], width: int = 2) -> list[Span]:
+    """Every sentence of every Passage, each followed by its windows with the next sentences
+    (2 up to `width` sentences in all), so a statement split across a sentence boundary can
+    still be matched. A Passage of n sentences gives fewer than n * width spans, each at most
+    `width` bounded sentences, in a fixed order."""
+    width = max(1, min(width, MAX_WINDOW_SENTENCES))
+    spans = []
+    for passage in passages:
+        sentences = sentences_of(passage.text)
+        for n in range(len(sentences)):
+            for k in range(1, width + 1):
+                if n + k <= len(sentences):
+                    spans.append(Span(passage, " ".join(sentences[n:n + k]), n, n + k - 1))
+    return spans
+
+
 _SPACE_CURRENCY = re.compile(r"([$€£])\s*(\d[\d,]*(?:\.\d+)?)")
 _CURRENCY = {"$": "dollar", "€": "euro", "£": "pound"}
 _VALUE_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?|[^\W\d_]+|%")

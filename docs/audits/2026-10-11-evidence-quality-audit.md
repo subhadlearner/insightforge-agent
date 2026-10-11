@@ -33,6 +33,8 @@
 
 ## F2. The Fact-Checker fails true Claims and can pass false ones (MUST FIX)
 
+> **Status (2026-10-12): CLOSED.** The real-model validation passed 16/16 with `claude-haiku-5-5`. The remaining limits are on the T16 watchlist. Measured with the production `bge-small` embedder, no threshold separated a correct paraphrase (0.961) from a wrong-measure Claim (0.963; g-ma-02 0.948). The owner therefore approved span matching plus one light-model entailment call per sampled Claim, with the threshold and numeric check unchanged. All 16 F2 regression cases pass with real retrieval, with both a scripted judge and the real light model. Details and the remaining limits: `2026-10-11-f2-fact-checker.md`.
+
 - **Problem.**
   - `fact_check` compares a one-sentence Claim with whole re-fetched paragraphs, using the bag-of-words `HashingEmbedder(256)` at 0.85 (`pipeline/fact_check.py:36-110`, `pipeline/deps.py:36`).
   - Cosine between a sentence and a paragraph falls roughly with the square root of the paragraph's length, and any paraphrase by the Writer lowers it further.

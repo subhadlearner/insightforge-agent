@@ -118,13 +118,17 @@ def test_a_quoted_span_that_passes_the_lexical_check_is_not_applicable():
     assert v.diagnostics["span_in_passage"] is True
 
 
-def test_claim_passage_runs_the_real_fact_check_and_verifies_a_matching_claim():
+def test_a_claim_passing_the_fact_check_gates_is_not_applicable_since_entailment_decides(
+        monkeypatch):
+    # F2: only the entailment call can verify, and the baseline makes no model call.
+    monkeypatch.setattr(b, "fact_check", lambda *a, **k: pytest.fail("only for Historical Claims"))
     text = "BYD sold 4.27 million battery electric vehicles in 2025."
     v = judge(ground("CLAIM_PASSAGE", text, text))
-    assert v.status is JudgeStatus.JUDGED and v.label == "GROUNDED"
-    assert v.diagnostics["production_verdict"] == "verified"
+    assert v.status is JudgeStatus.NOT_APPLICABLE and v.label is None
+    assert v.reason == b.NO_CLAIM_ENTAILMENT
+    assert v.diagnostics["production_verdict"] == "needs_entailment"
     assert v.diagnostics["semantic_entailment"] is False
-    assert v.diagnostics["similarity"] >= 0.85
+    assert v.diagnostics["similarity"] >= 0.85 and v.diagnostics["candidate_spans"] == 1
 
 
 def test_claim_passage_below_the_similarity_threshold_is_unverified():

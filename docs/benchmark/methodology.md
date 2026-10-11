@@ -95,11 +95,11 @@ Production decides most of these questions with a model (T5 drafts and judges en
 | PAIR, keys differ | a nonmerge does not say DIFFERENT_FACT or CONTRADICTORY | NOT_APPLICABLE; the Extraction conflict rule (`detect_conflicts`) is recorded as a diagnostic, never as a label, because production also needs a model CONTRADICTED verdict |
 | PAIR, no structured fields | the merge key cannot be formed | NOT_APPLICABLE |
 | SUPPORT | `literal_problem` is only a necessary condition; support is a model verdict | always NOT_APPLICABLE; literal result and the real T5 drop outcome are recorded |
-| GROUND / CLAIM_PASSAGE | the real `fact_check()` over in-memory fixtures: `HashingEmbedder(256)`, threshold 0.85, numeric check, document path (no fetch) | `verified` -> GROUNDED, `unverified` -> NOT_GROUNDED (failure UNSUPPORTED_CLAIM below the threshold, else UNSUPPORTED_NUMBER); a historical Claim is `unchecked` -> NOT_APPLICABLE |
+| GROUND / CLAIM_PASSAGE | the real `fact_check` gates (`screen`: sentence spans, `HashingEmbedder(256)`, threshold 0.85, numeric check), document path (no fetch); the real `fact_check()` for a Historical Claim. Since F2 (baseline `m1.3-2`) production verifies only through an entailment call | a span passes the gates -> NOT_APPLICABLE (the model would decide); `unverified` -> NOT_GROUNDED (failure UNSUPPORTED_CLAIM below the threshold, else UNSUPPORTED_NUMBER); a historical Claim is `unchecked` -> NOT_APPLICABLE. Never GROUNDED |
 | GROUND / QUOTED_SPAN | `literal_problem` of the statement against the quoted span | fail -> NOT_GROUNDED (UNSUPPORTED_NUMBER or UNSUPPORTED_ENTITY); pass -> NOT_APPLICABLE (T5 has no span-support judgment) |
 | INDEPENDENCE | `sources_independent` (different domains, neither text links to the other) | True -> INDEPENDENT, False -> DEPENDENT (never UNDETERMINED) |
 
-`fact_check` verifies by embedding similarity plus a numeric check. It is **production verification, not semantic entailment**, and every CLAIM_PASSAGE Verdict says `semantic_entailment=false`. `INDEPENDENT` means only that production's lexical predicate holds (syndication and common ownership are invisible to it). The baseline reports explicit zero tokens (it made no call) and leaves latency unknown. Scripted model replies may exercise production orchestration in tests but are never recorded as predictions.
+Since F2, `fact_check` verifies only through a light-model entailment call after its similarity and numeric gates. The baseline runs the gates and never the call, so every CLAIM_PASSAGE Verdict says `semantic_entailment=false`. `INDEPENDENT` means only that production's lexical predicate holds (syndication and common ownership are invisible to it). The baseline reports explicit zero tokens (it made no call) and leaves latency unknown. Scripted model replies may exercise production orchestration in tests but are never recorded as predictions.
 
 ### Evidence dispositions
 
@@ -133,7 +133,7 @@ A Verdict may carry `evidence_disposition` (and `evidence_reason`) diagnostics, 
 - Abstention can raise precision and lower FPR; read them with coverage and the worst-case FPR.
 - The baseline is a floor, not a verdict on semantics: lexical and structural checks only. Its high NOT_APPLICABLE share is the honest result; coverage is never inflated by guessing.
 - A PAIR case's merge-key outcome depends on the structured fields the case supplies, which stand in for T5's drafting model.
-- CLAIM_PASSAGE uses a hashing embedder (bag of words): near-paraphrases score low, and near-copies with one changed word score high.
+- CLAIM_PASSAGE uses a hashing embedder (bag of words), not production's bge-small: near-paraphrases score low, and near-copies with one changed word score high, so the gates it reports differ from production's.
 - Recorded runs are replayed for reporting. A recording is bound to the exact prediction-facing case by a content hash.
 
 ## Code boundary (import-linter)

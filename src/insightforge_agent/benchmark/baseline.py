@@ -10,13 +10,15 @@ Owner-approved mapping (M1.3, issue #31):
                 or no merge; the extraction conflict rule is recorded, never used as a label).
   SUPPORT       always NOT_APPLICABLE (support is an LLM entailment verdict); the lexical
                 check and whether T5 would drop the item are recorded.
-  GROUND        CLAIM_PASSAGE: the real `fact_check` (verified -> GROUNDED, unverified ->
-                NOT_GROUNDED). QUOTED_SPAN: a failed literal check -> NOT_GROUNDED; a pass ->
-                NOT_APPLICABLE (T5 has no span-support judgment).
+  GROUND        CLAIM_PASSAGE: the real `fact_check` gates (`screen`). Since F2, support is an
+                entailment verdict: a span passes the similarity and numeric gates ->
+                NOT_APPLICABLE; the gates reject the Claim -> NOT_GROUNDED (production marks
+                it unverified without a model call); a Historical Claim -> NOT_APPLICABLE.
+                QUOTED_SPAN: a failed literal check -> NOT_GROUNDED; a pass -> NOT_APPLICABLE
+                (T5 has no span-support judgment).
   INDEPENDENCE  `sources_independent`: True -> INDEPENDENT, False -> DEPENDENT.
 
-`fact_check` verifies by embedding similarity and a numeric check, which is not semantic
-entailment. No model, network or fetch is used: the model slots of `Deps` are tripwires."""
+No model, network or fetch is used: the model slots of `Deps` are tripwires."""
 
 import hashlib
 from collections.abc import Sequence
@@ -61,16 +63,16 @@ from insightforge_agent.domain.passages import value_in_text
 from insightforge_agent.domain.periods import UNKNOWN, period_stated_in, stated_period
 from insightforge_agent.embeddings import HashingEmbedder
 from insightforge_agent.pipeline.deps import Deps
-from insightforge_agent.pipeline.fact_check import fact_check
+from insightforge_agent.pipeline.fact_check import fact_check, screen
 from insightforge_agent.pipeline.synthesize import literal_problem, merge_identity
 from insightforge_agent.stores.memory import MemoryRepos
 from insightforge_agent.stores.source_store import PassageDraft, SourceStore
 
 CANDIDATE = "deterministic-baseline"
-CANDIDATE_VERSION = "m1.3-1"
+CANDIDATE_VERSION = "m1.3-2"  # 2: CLAIM_PASSAGE follows F2 (span gates, then entailment)
 MODEL = "none (production deterministic logic)"
 SIMILARITY_THRESHOLD = 0.85  # the production default of Deps.similarity_threshold
-EMBEDDING_DIMENSIONS = 256   # the production default HashingEmbedder
+EMBEDDING_DIMENSIONS = 256   # the baseline's fixed HashingEmbedder (production uses bge-small)
 OWNER = "benchmark"
 _FETCHED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -82,6 +84,9 @@ PENDING = "PASSES_LITERAL_CHECK_ENTAILMENT_NOT_RUN"  # a model would decide the 
 
 NO_ENTAILMENT = ("T5 decides support with a model entailment call; the deterministic checks "
                  "are only a necessary condition and cannot establish support")
+NO_CLAIM_ENTAILMENT = ("a span passes T6's similarity and numeric gates; the fact-check then "
+                       "decides support with a model entailment call, which the baseline does "
+                       "not make")
 
 
 def identity() -> RunIdentity:
@@ -238,27 +243,30 @@ class DeterministicBaseline:
             aspect_id="a", heading="a", confidence="LOW", items=[item])])
         draft = ReportDraft(title="benchmark", sections=[ReportSection(
             heading="a", claims=[Claim(text=g.claim, evidence_id=item.id, historical=g.historical)])])
-        report = fact_check(_deps(repos, store), OWNER, case.id, draft, bundle)
-        v = report.verdicts[0]
+        deps = _deps(repos, store)
+        if g.historical:  # `fact_check` returns before any embedding or model call
+            v = fact_check(deps, OWNER, case.id, draft, bundle).verdicts[0]
+            return _verdict(case, JudgeStatus.NOT_APPLICABLE,
+                            reason="T6 does not check a Historical Claim",
+                            diagnostics={"production_verdict": v.verdict, "check": v.check,
+                                         "production_reason": v.reason,
+                                         "semantic_entailment": False})
+        # The same gates `fact_check` runs; only an entailment call, never made here, verifies.
+        gates = screen(deps, g.claim, repos.passages.list(OWNER, observation.id))
         diagnostics: dict[str, Scalar] = {
-            "production_verdict": v.verdict, "check": v.check,
-            "similarity_threshold": SIMILARITY_THRESHOLD, "semantic_entailment": False,
-            **({"similarity": v.similarity} if v.similarity is not None else {})}
-        if v.verdict == "unchecked":
-            diagnostics["production_reason"] = v.reason
-            return _verdict(case, JudgeStatus.NOT_APPLICABLE, diagnostics=diagnostics,
-                            reason="T6 does not check a Historical Claim")
-        if v.verdict == "verified":
-            return _verdict(case, JudgeStatus.JUDGED, label=GroundLabel.GROUNDED,
-                            diagnostics=diagnostics,
-                            reason="T6 fact-check verified the Claim (similarity and numbers; "
-                                   "not semantic entailment)")
-        below = v.similarity is None or v.similarity < SIMILARITY_THRESHOLD
+            "check": "document_passages", "similarity_threshold": SIMILARITY_THRESHOLD,
+            "similarity": gates.similarity, "semantic_entailment": False}
+        if gates.candidates:
+            return _verdict(case, JudgeStatus.NOT_APPLICABLE, reason=NO_CLAIM_ENTAILMENT,
+                            diagnostics={**diagnostics, "production_verdict": "needs_entailment",
+                                         "candidate_spans": len(gates.candidates)})
+        below = gates.similarity < SIMILARITY_THRESHOLD
         return _verdict(
-            case, JudgeStatus.JUDGED, label=GroundLabel.NOT_GROUNDED, diagnostics=diagnostics,
+            case, JudgeStatus.JUDGED, label=GroundLabel.NOT_GROUNDED,
+            diagnostics={**diagnostics, "production_verdict": "unverified"},
             failure=GroundingFailure.UNSUPPORTED_CLAIM if below
             else GroundingFailure.UNSUPPORTED_NUMBER,
-            reason=f"T6 fact-check left the Claim unverified: {v.reason}")
+            reason=f"T6 fact-check left the Claim unverified: {gates.reason}")
 
     # ---- INDEPENDENCE -------------------------------------------------------------------
 

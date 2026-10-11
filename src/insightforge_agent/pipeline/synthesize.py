@@ -15,7 +15,6 @@
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -64,9 +63,8 @@ from insightforge_agent.domain.plan import SubTask, SubTaskPlan
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import cosine
 from insightforge_agent.pipeline.deps import Deps
+from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM, EntailmentVerdicts
 from insightforge_agent.pipeline.write import render_bundle
-
-Verdict = Literal["SUPPORTED", "CONTRADICTED", "INSUFFICIENT_EVIDENCE"]
 
 DRAFT_SYSTEM = """You draft evidence items from numbered passages for one research sub-task.
 Reply with JSON only:
@@ -77,15 +75,6 @@ as the passages write it>", "passages": [<numbers of every passage that bears on
 empty>", "as_of_period": "<the period a passage states, as 2025, 2025-Q3, 2025-09 or
 2025-01..2025-06, or UNKNOWN if none is stated>"}]}
 Only state what the passages say. Leave entity, predicate and value empty if there is none."""
-
-ENTAIL_SYSTEM = """You judge whether numbered passages support one evidence statement.
-Reply with JSON only:
-{"verdicts": [{"passage": <number>, "verdict": "SUPPORTED" | "CONTRADICTED" |
-"INSUFFICIENT_EVIDENCE", "asserts_present_state": <true if the passage asserts how things
-stand now, not history, a prediction or an announcement>}]}
-SUPPORTED: the passage states the statement. CONTRADICTED: it states something that
-conflicts with it. INSUFFICIENT_EVIDENCE: neither. Give one verdict for every passage."""
-
 
 class _DraftItem(BaseModel):
     statement: str
@@ -100,16 +89,6 @@ class _DraftItem(BaseModel):
 
 class _Drafts(BaseModel):
     items: list[_DraftItem] = Field(default_factory=list)
-
-
-class _Verdict(BaseModel):
-    passage: int
-    verdict: Verdict = "INSUFFICIENT_EVIDENCE"
-    asserts_present_state: bool = False
-
-
-class _Verdicts(BaseModel):
-    verdicts: list[_Verdict] = Field(default_factory=list)
 
 
 @dataclass
@@ -401,7 +380,7 @@ def _validate(
         user = f"Statement: {c.statement}\n\n{numbered}"
         deps.spend(owner_id, run_id, ENTAIL_SYSTEM, user)
         try:
-            reply = ask_json(deps.light_model, ENTAIL_SYSTEM, user, _Verdicts)
+            reply = ask_json(deps.light_model, ENTAIL_SYSTEM, user, EntailmentVerdicts)
         except BadModelReply as e:
             deps.log(owner_id, run_id, "entailment_failed", evidence_id=c.id, detail=str(e))
             continue
