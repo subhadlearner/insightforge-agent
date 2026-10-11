@@ -121,7 +121,7 @@ class Outcome:
     merged: list[list[str]]  # per candidate reaching validation: the Sources (tags) it cites
     items: list[EvidenceItem]
     tag_of: dict[str, str] = field(default_factory=dict)  # observation id -> page tag
-    events: list = field(default_factory=list)  # (type, payload) logged by the Run
+    events: list[tuple[str, dict]] = field(default_factory=list)  # (type, payload) logged by the Run
 
     def logged(self, type_: str) -> list[dict]:
         return [p for t, p in self.events if t == type_]
@@ -289,6 +289,7 @@ def test_the_same_explicit_period_across_independent_observations_still_corrobor
     o = synth_run(make_deps, monkeypatch, TWO, lambda ps, u: [
         structured("Orrin Bio has 310 employees in 2024.", [n], "2024") for n, _ in ps], supported)
     assert o.summary() == (2, [["a", "b"]], [(["a", "b"], "HIGH")])
+    assert o.items[0].as_of_period == "2024" and o.logged("draft_period_rejected") == []
 
 
 def test_different_explicit_periods_stay_distinct(make_deps, monkeypatch):
@@ -376,4 +377,5 @@ def test_a_period_stated_only_in_an_uncited_passage_does_not_count(make_deps, mo
     o = synth_run(make_deps, monkeypatch, page, lambda ps, u: [
         structured("Orrin Bio has 310 employees.", [2], "2024")], supported)
     (item,) = o.items
-    assert item.as_of_period == "UNKNOWN" and o.logged("draft_period_rejected")
+    assert item.as_of_period == "UNKNOWN"
+    assert [r["period"] for r in o.logged("draft_period_rejected")] == ["2024"]

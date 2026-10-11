@@ -70,8 +70,8 @@
 
 > **Status (2026-10-12): CLOSED for the temporal cases, limitation retained for `p-fm-02`.**
 > - **Baseline vs production.** The baseline finding below concerns only the merge **key**. Run through the full production Synthesis path (scripted drafting, semantically correct entailment), `p-ta-02` and `p-ta-03` became one **HIGH** item backed by two differently dated Observations. In `p-ps-01`, `p-ps-04` and `p-fm-02` the literal check prevented false corroboration, but one legitimate fact was silently lost.
-> - **Fixed.** A structured candidate with an UNKNOWN period now merges only with candidates citing exactly the same Observations, so `p-ta-02`, `p-ta-03`, `p-ps-01` and `p-ps-04` are fixed.
-> - **Retained.** `p-fm-02` (same name, different company, explicit period) is retained as a known limitation and recommended for the T16 watchlist. Without descriptors in the statements it is still a false HIGH.
+> - **Fixed.** A structured candidate with an UNKNOWN period now merges only with candidates citing exactly the same Observations, so `p-ta-02`, `p-ta-03`, `p-ps-01` and `p-ps-04` are fixed. A model-given period that no cited window states becomes UNKNOWN before Merge, so an invented period cannot merge Observations either.
+> - **Retained.** `p-fm-02` (same name, different company, explicit period) is retained as a known limitation and recommended for the T16 watchlist. Without descriptors in the statements it is still a false HIGH. A single drafted candidate citing two undated Observations can also reach HIGH; it is on the T16 watchlist as well.
 > - **Benchmark.** Baseline `m1.3-3`.
 >
 > Details: `2026-10-12-f4-false-merge.md`.

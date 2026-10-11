@@ -58,7 +58,8 @@ The `p-ps` fixes depend on the model returning non-canonical wording. If it retu
   - Not merging a candidate whose Passages fail the literal check against the kept statement would keep the lost fact. But it needs Passage reads during Merge and order-dependent ID disambiguation, and it does not touch the descriptor-free HIGH, which is the risk that matters.
 
   No semantic resolver was built. **Recommendation: put it on the T16 watchlist.** A sample Brief about a common company name would show whether this happens in practice.
-- **Undated Observations grouped by the drafting model.** One drafted candidate that itself cites two undated Observations is judged as drafted and can reach HIGH. That is a drafting judgment, not Merge (test `..._merges_only_with_the_same_set`).
+- **Undated Observations grouped by the drafting model.** One drafted candidate that itself cites two undated Observations is judged as drafted and can reach HIGH. That is a drafting judgment, not Merge (test `..._merges_only_with_the_same_set`). **Recommendation: put it on the T16 watchlist** alongside `p-fm-02`. Drafting and Confidence are not redesigned here.
+- **A period stated only in a window the model was not shown.** A Passage over the per-call cap is drafted in windows. The pre-Merge check reads only the cited windows, as the owner specified, so a period stated in another part of the same Passage is dropped before Merge, although validation (whole Passage) would accept it. The cost is lost recall, never a false merge: the item keeps UNKNOWN and its own Observation.
 - **Statement-keyed candidates** (no entity, predicate or value) are still keyed by the normalised statement alone. Identical undated wording from two Observations still merges (test `test_unstructured_candidates_are_still_keyed_by_statement_alone`). This is outside the F4 rule as specified.
 
 ## 5. Benchmark
