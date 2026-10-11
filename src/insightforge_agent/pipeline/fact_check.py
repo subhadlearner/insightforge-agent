@@ -63,8 +63,9 @@ def _ref(span: Span) -> PassageRef:
 @dataclass(frozen=True)
 class Screened:
     """The deterministic part of a verdict (steps 1-3). `candidates` are the spans, best first,
-    that the entailment call judges; when there are none, `reason` says why. `similarity` and
-    `matched` describe the best candidate, else the best span the gates rejected."""
+    that the entailment call judges, each with the similarity computed for that exact span;
+    when there are none, `reason` says why. `similarity` and `matched` describe the best
+    candidate, else the best span the gates rejected."""
 
     similarity: float
     matched: PassageRef | None
@@ -104,22 +105,23 @@ def screen(deps: Deps, claim: str, passages: list[Passage],
         missing = sorted(unsupported_numbers(claim, span.text))
         return Screened(best, _ref(span), [], f"the matched Passage does not state {missing}")
     # One place per group of overlapping spans, so a sentence and its own windows cannot fill
-    # every place and keep a supporting sentence elsewhere from the judge. A wider span that
-    # contains the chosen one and also passes the gates takes its place (keeping its rank and
-    # score), so the judge sees the context: "It sold 3.02 million..." with the sentence that
-    # names "BYD", or "Ltd. sold..." rejoined with "BYD Co.".
+    # every place and keep a supporting sentence elsewhere from the judge. A group is
+    # represented by the widest span that contains its first (best) span and also passes the
+    # gates, so the judge sees the context: "It sold 3.02 million..." with the sentence that
+    # names "BYD", or "Ltd. sold..." rejoined with "BYD Co.". Each representative carries its
+    # own similarity, and the best `TOP_K` representatives by that similarity are judged.
     def within(inner: Span, outer: Span) -> bool:
         return outer.overlaps(inner) and outer.first <= inner.first and inner.last <= outer.last
 
-    chosen: list[tuple[float, Span]] = []
+    groups: list[tuple[float, Span]] = []
     for score, span in stated:
-        n = next((i for i, (_, c) in enumerate(chosen) if span.overlaps(c)), None)
+        n = next((i for i, (_, g) in enumerate(groups) if span.overlaps(g)), None)
         if n is None:
-            if len(chosen) < TOP_K:
-                chosen.append((score, span))
-        elif within(chosen[n][1], span):  # widen that place; fold in any other it covers
-            chosen = [(chosen[n][0], span) if i == n else c for i, c in enumerate(chosen)
-                      if i == n or not within(c[1], span)]
+            groups.append((score, span))
+        elif within(groups[n][1], span):  # widen that group; fold in any other it covers
+            groups = [(score, span) if i == n else g for i, g in enumerate(groups)
+                      if i == n or not within(g[1], span)]
+    chosen = sorted(groups, key=lambda g: -g[0])[:TOP_K]  # stable: ties keep their order
     return Screened(chosen[0][0], _ref(chosen[0][1]), chosen)
 
 

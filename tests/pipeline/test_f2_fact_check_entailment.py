@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.passages import candidate_spans
 from insightforge_agent.domain.tokens import estimate_tokens
-from insightforge_agent.embeddings import HashingEmbedder
+from insightforge_agent.embeddings import HashingEmbedder, cosine
 from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM
 from insightforge_agent.pipeline.fact_check import TOP_K, fact_check, screen
 from tests.pipeline.test_t6_writer_fact_check import SALES, URL, Fetcher, draft_of, evidence
@@ -87,11 +87,14 @@ def test_qualifying_spans_are_judged_in_one_call_bounded_to_top_k(make_deps):
 
 def test_a_claim_inside_a_paragraph_is_judged_against_its_sentence_not_the_paragraph(make_deps):
     model = judge("SUPPORTED")
-    v, _, _ = check(make_deps, model, page=PARAGRAPH)
-    assert v.verdict == "verified" and v.similarity == pytest.approx(1.0)
+    v, deps, _ = check(make_deps, model, page=PARAGRAPH)
     texts = [t for _, t in numbered(model.seen[0])]
     # The sentence, widened to the window with its neighbour; never the whole paragraph.
-    assert texts == [f"{SALES} Plug-in hybrids made up about half of those sales."]
+    window = f"{SALES} Plug-in hybrids made up about half of those sales."
+    assert texts == [window]
+    a, b = deps.embedder.embed([SALES, window])
+    assert v.verdict == "verified" and v.similarity == pytest.approx(cosine(a, b))
+    assert v.similarity < 1.0  # the window's own score, not the exact sentence's
 
 
 class TableEmbedder:
@@ -116,9 +119,9 @@ def test_a_sentence_and_its_own_windows_cannot_crowd_out_a_supporting_sentence(m
         "Supporting sentence.": 0.93}))
     s = screen(deps, claim, [near, good])
     # The near miss and its windows share one place (widened to the window that passes the
-    # gates, keeping the best score); the supporting sentence keeps its own.
+    # gates, with that window's own score); the supporting sentence keeps its own.
     assert [(score, span.text) for score, span in s.candidates] == [
-        (pytest.approx(0.96), "Near miss. Tail one. Tail two."),
+        (pytest.approx(0.95), "Near miss. Tail one. Tail two."),
         (pytest.approx(0.93), "Supporting sentence.")]
     assert s.candidates[1][1].passage == good
 
@@ -130,8 +133,39 @@ def test_a_sentence_without_its_subject_is_widened_to_the_window_that_names_it(m
     deps = make_deps(embedder=TableEmbedder(claim, {
         "It sold 3.02 million vehicles in 2023.": 0.95, page.text: 0.90}))
     s = screen(deps, claim, [page])
+    # The widened span carries its own similarity (0.90), not the sentence's (0.95).
     assert [(score, span.text) for score, span in s.candidates] == [
-        (pytest.approx(0.95), page.text)]
+        (pytest.approx(0.90), page.text)]
+    assert s.similarity == pytest.approx(0.90)
+
+
+def test_a_verified_widened_span_reports_its_own_similarity(make_deps):
+    claim = "BYD sold 3.02 million vehicles in 2023."
+    page = "BYD is a Chinese automaker. It sold 3.02 million vehicles in 2023."
+    model = judge("SUPPORTED")
+    deps = make_deps(fetcher=Fetcher({URL: page}), light_model=model,
+                     embedder=TableEmbedder(claim, {
+                         "It sold 3.02 million vehicles in 2023.": 0.95, page: 0.90}))
+    _, bundle = evidence(deps, [page])
+    (v,) = fact_check(deps, "alice", "run_1", draft_of([claim]), bundle).verdicts
+    assert v.verdict == "verified" and v.similarity == pytest.approx(0.90)
+    assert [t for _, t in numbered(model.seen[0])] == [page]
+
+
+def test_top_k_is_chosen_by_the_similarity_of_the_spans_that_will_be_judged(make_deps):
+    claim = "Claim sentence."
+    a = Passage(observation_id="o", index=0, text="Anchor. Context.")
+    b, c, d = (Passage(observation_id="o", index=i, text=t)
+               for i, t in [(1, "Bee."), (2, "Cee."), (3, "Dee.")])
+    scores = {"Anchor.": 0.99, "Anchor. Context.": 0.86, "Bee.": 0.95, "Cee.": 0.93, "Dee.": 0.91}
+    deps = make_deps(embedder=TableEmbedder(claim, scores))
+    s = screen(deps, claim, [a, b, c, d])
+    # The best anchor is widened to a window at 0.86, which ranks below the other three.
+    assert [(score, span.text) for score, span in s.candidates] == [
+        (pytest.approx(0.95), "Bee."), (pytest.approx(0.93), "Cee."),
+        (pytest.approx(0.91), "Dee.")]
+    assert s.similarity == pytest.approx(0.95) and s.matched.index == 1
+    assert all(score == pytest.approx(scores[span.text]) for score, span in s.candidates)
 
 
 def test_a_window_covering_two_chosen_spans_takes_one_place(make_deps):
