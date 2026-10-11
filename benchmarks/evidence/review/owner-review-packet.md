@@ -9,7 +9,10 @@ against the date of the text they appear in. Judge the meaning, not the wording.
 
 **Fact comparison**
 - `SAME_FACT`: one fact, worded, rounded or ordered differently. Both statements are true or
-  false together.
+  false together. One statement may carry extra context (a comparison, a description, a
+  background detail) and still be `SAME_FACT`, provided the claim the other statement makes is
+  contained in it unchanged. Extra context that changes the claim's entity, measure, period or
+  scope is a different claim: `DIFFERENT_FACT`.
 - `DIFFERENT_FACT`: they concern different things (measure, period, scope, entity or
   relationship). Both can be true.
 - `CONTRADICTORY`: same entity, measure, period and scope, but they cannot both be true

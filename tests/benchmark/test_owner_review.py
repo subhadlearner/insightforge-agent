@@ -316,3 +316,115 @@ def test_cli_end_to_end_on_a_synthetic_case_file(tmp_path, capsys):
     assert "x-00" not in (tmp_path / "rv" / review.PACKET_FILE).read_text(encoding="utf-8")
     sheet = review.read_sheet(tmp_path / "rv" / review.SHEET_FILE)
     assert all(not r["label"] and not r["reviewer"] for r in sheet)
+
+
+# ---- the frozen record is verified, not trusted ------------------------------------------------
+
+def _frozen_compare(directory: Path, cases):
+    return review.compare(directory / review.FROZEN_FILE, directory / review.SHEET_FILE,
+                          directory / review.MAPPING_FILE, cases)
+
+
+def _tamper(directory: Path, change):
+    path = directory / review.FROZEN_FILE
+    record = json.loads(path.read_text(encoding="utf-8"))
+    change(record)
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+
+@pytest.fixture
+def frozen(prepared):
+    cases, directory = prepared
+    _fill(directory, _answers(directory))
+    _finalize(directory)
+    assert len(_frozen_compare(directory, cases)) == 4  # untouched record compares fine
+    return cases, directory
+
+
+@pytest.mark.parametrize("name, change", [
+    ("label", lambda r: r["decisions"][0].update(label="CONTRADICTORY")),
+    ("reviewer", lambda r: r["decisions"][1].update(reviewer="Someone Else")),
+    ("date", lambda r: r["decisions"][2].update(reviewed_on="2026-10-01")),
+    ("note", lambda r: r["decisions"][0].update(note="added later")),
+    ("uncertain", lambda r: r["decisions"][0].update(uncertain=True)),
+    ("case id", lambda r: r["decisions"][0].update(case_id="x-03")),
+    ("missing decision", lambda r: r["decisions"].pop()),
+    ("duplicate decision", lambda r: r["decisions"].append(dict(r["decisions"][0]))),
+    ("extra decision", lambda r: r["decisions"].append({**r["decisions"][0], "review_id": "R009"})),
+    ("finalized_on", lambda r: r.update(finalized_on="2026-10-01")),
+    ("extra key", lambda r: r.update(proposed_label="SAME_FACT")),
+])
+def test_compare_rejects_a_frozen_record_that_differs_from_the_finalized_sheet(frozen, name, change):
+    cases, directory = frozen
+    _tamper(directory, change)
+    with pytest.raises(review.ReviewError, match="does not match|valid|finalized"):
+        _frozen_compare(directory, cases)
+
+
+def test_compare_rejects_a_missing_sheet_a_changed_mapping_and_unreadable_json(frozen):
+    cases, directory = frozen
+    (directory / review.FROZEN_FILE).write_text("{not json", encoding="utf-8")
+    with pytest.raises(review.ReviewError, match="not valid JSON"):
+        _frozen_compare(directory, cases)
+    (directory / review.FROZEN_FILE).write_text("[]", encoding="utf-8")
+    with pytest.raises(review.ReviewError, match="not a review record"):
+        _frozen_compare(directory, cases)
+    sheet = directory / review.SHEET_FILE
+    sheet.rename(directory / "moved.csv")
+    with pytest.raises(review.ReviewError):
+        _frozen_compare(directory, cases)
+
+
+# ---- the proposal is pinned --------------------------------------------------------------------
+
+def _with_expected(cases, case_id, expected):
+    return [BenchmarkCase.model_validate({**c.model_dump(mode="json"), "expected": expected})
+            if c.id == case_id else c for c in cases]
+
+
+def test_the_mapping_pins_the_proposed_record_without_revealing_the_label(prepared):
+    cases, directory = prepared
+    text = (directory / review.MAPPING_FILE).read_text(encoding="utf-8")
+    assert "SAME_FACT" not in text and "expected" not in text
+    assert all(e.proposal_sha256 for e in review.load_mapping(directory / review.MAPPING_FILE))
+
+
+@pytest.mark.parametrize("edit", [
+    lambda c: _with_expected(c, "x-00", "DIFFERENT_FACT"),
+    lambda c: [BenchmarkCase.model_validate({**x.model_dump(mode="json"), "rationale": "new"})
+               if x.id == "x-01" else x for x in c],
+    lambda c: [BenchmarkCase.model_validate({**x.model_dump(mode="json"), "critical": True})
+               if x.id == "x-02" else x for x in c],
+])
+def test_compare_rejects_a_proposal_changed_after_preparation(frozen, edit):
+    cases, directory = frozen
+    with pytest.raises(review.ReviewError, match="proposed record"):
+        _frozen_compare(directory, edit(cases))
+
+
+def test_finalize_through_the_cli_rejects_a_proposal_changed_after_preparation(tmp_path, capsys):
+    cases_file = tmp_path / "cases.jsonl"
+    rows = [case_dict("PAIR", "x-00"), case_dict("SUPPORT", "x-01")]
+    cases_file.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    base = ["--cases", str(cases_file), "--dir", str(tmp_path / "rv")]
+    assert main(["review", "prepare", *base]) == 0
+    answers = _answers(tmp_path / "rv")
+    _fill(tmp_path / "rv", answers)
+    rows[0]["expected"] = "DIFFERENT_FACT"
+    cases_file.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    assert main(["review", "finalize", *base]) == 1
+    assert "proposed record" in capsys.readouterr().out
+    assert not (tmp_path / "rv" / review.FROZEN_FILE).exists()
+
+
+def test_an_old_mapping_without_pins_cannot_be_used_for_comparison(prepared):
+    cases, directory = prepared
+    mapping = review.load_mapping(directory / review.MAPPING_FILE)
+    unpinned = [review.MapEntry(e.review_id, e.case_id, e.case_type, e.content_sha256, "")
+                for e in mapping]
+    with pytest.raises(review.ReviewError, match="never pinned"):
+        review.verify_mapping(unpinned, cases, pin_proposals=True)
+
+
+def test_the_rubric_says_extra_context_can_still_be_the_same_fact():
+    assert "extra context" in review.RUBRIC and "contained in it unchanged" in review.RUBRIC

@@ -81,5 +81,5 @@ About 10 cases (about 20%) are judged again, blind, by a **different person**, p
 - Nothing is ever filled in for you: no reviewer name, no date, no label.
 - Labels must belong to the item's judgment type; dates must be real and not in the future.
 - A duplicate or unknown `review_id`, or a missing row, fails validation.
-- `compare` is refused until `finalize` has run.
+- `compare` is refused until `finalize` has run, and refuses if the frozen file or the proposed cases differ from what was sealed at preparation.
 - The 48 cases stay `proposed` until the integration step, which needs your decisions.

@@ -172,7 +172,7 @@ def _review(args) -> int:
             print(f"wrote {args.out}")
         return 0
     mapping = review.load_mapping(mapping_path)
-    review.verify_mapping(mapping, cases)
+    review.verify_mapping(mapping, cases, pin_proposals=args.review_command == "finalize")
     report = review.validate_sheet(review.read_sheet(sheet), mapping, date.today())
     for problem in report.problems:
         print(f"  {problem}")

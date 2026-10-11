@@ -66,7 +66,10 @@ against the date of the text they appear in. Judge the meaning, not the wording.
 
 **Fact comparison**
 - `SAME_FACT`: one fact, worded, rounded or ordered differently. Both statements are true or
-  false together.
+  false together. One statement may carry extra context (a comparison, a description, a
+  background detail) and still be `SAME_FACT`, provided the claim the other statement makes is
+  contained in it unchanged. Extra context that changes the claim's entity, measure, period or
+  scope is a different claim: `DIFFERENT_FACT`.
 - `DIFFERENT_FACT`: they concern different things (measure, period, scope, entity or
   relationship). Both can be true.
 - `CONTRADICTORY`: same entity, measure, period and scope, but they cannot both be true
@@ -102,6 +105,7 @@ class ReviewItem:
     case_id: str
     case_type: CaseType
     body: str  # exactly what the reviewer reads; the digest is taken over it
+    proposal_sha256: str  # pins the whole proposed record as it was at preparation
 
     @property
     def labels(self) -> list[str]:
@@ -170,9 +174,16 @@ def review_order(cases: Sequence[BenchmarkCase]) -> list[BenchmarkCase]:
     return sorted(cases, key=key)
 
 
+def proposal_digest(case: BenchmarkCase) -> str:
+    """Digest of the whole case record as proposed (expected label, rationale, critical flag,
+    status ...). Only the digest is stored, so the mapping does not show the proposed label."""
+    record = ORDER_SALT + "proposal:" + case.model_dump_json()
+    return hashlib.sha256(record.encode("utf-8")).hexdigest()
+
+
 def build_items(cases: Sequence[BenchmarkCase]) -> list[ReviewItem]:
     ordered = review_order(cases)
-    return [ReviewItem(f"R{n:03d}", case.id, case.type, _item_body(case))
+    return [ReviewItem(f"R{n:03d}", case.id, case.type, _item_body(case), proposal_digest(case))
             for n, case in enumerate(ordered, start=1)]
 
 
@@ -206,7 +217,8 @@ def build_mapping(items: Sequence[ReviewItem]) -> dict[str, Any]:
                 "Open only after the blind review is finalized.",
         "order_salt": ORDER_SALT,
         "items": [{"review_id": i.review_id, "case_id": i.case_id, "type": i.case_type.value,
-                   "content_sha256": i.digest} for i in items],
+                   "content_sha256": i.digest,
+                   "proposal_sha256": i.proposal_sha256} for i in items],
     }
 
 
@@ -263,18 +275,23 @@ class MapEntry:
     case_id: str
     case_type: CaseType
     content_sha256: str
+    proposal_sha256: str
 
 
 def load_mapping(path: Path) -> list[MapEntry]:
     if not path.exists():
         raise ReviewError(f"mapping not found: {path} (run `bench review prepare` first)")
     raw = json.loads(path.read_text(encoding="utf-8"))
-    return [MapEntry(e["review_id"], e["case_id"], CaseType(e["type"]), e["content_sha256"])
-            for e in raw["items"]]
+    return [MapEntry(e["review_id"], e["case_id"], CaseType(e["type"]), e["content_sha256"],
+                     e.get("proposal_sha256", "")) for e in raw["items"]]
 
 
-def verify_mapping(mapping: Sequence[MapEntry], cases: Sequence[BenchmarkCase]) -> None:
-    """The packet the owner read must still describe the cases on disk."""
+def verify_mapping(mapping: Sequence[MapEntry], cases: Sequence[BenchmarkCase],
+                   pin_proposals: bool = False) -> None:
+    """The packet the owner read must still describe the cases on disk. With `pin_proposals`
+    the whole proposed record (including expected labels) must also be unchanged since
+    preparation; finalize and compare require it, so a proposal edited after the blind review
+    cannot be compared as if it were the original."""
     by_id = {c.id: c for c in cases}
     problems = []
     for entry in mapping:
@@ -285,6 +302,9 @@ def verify_mapping(mapping: Sequence[MapEntry], cases: Sequence[BenchmarkCase]) 
                 hashlib.sha256(_item_body(case).encode("utf-8")).hexdigest() != entry.content_sha256:
             problems.append(f"{entry.review_id}: case {entry.case_id} changed since the packet "
                             "was prepared")
+        elif pin_proposals and entry.proposal_sha256 != proposal_digest(case):
+            problems.append(f"{entry.review_id}: the proposed record of {entry.case_id} changed "
+                            "(or was never pinned) since preparation")
     extra = sorted(set(by_id) - {e.case_id for e in mapping})
     if extra:
         problems.append(f"{len(extra)} case(s) are not in the packet")
@@ -379,16 +399,12 @@ def validate_sheet(rows: Sequence[dict[str, str]], mapping: Sequence[MapEntry],
 
 # ---- finalize: freeze the blind judgments ------------------------------------------------------
 
-def finalize(report: SheetReport, sheet_path: Path, mapping_path: Path, frozen_path: Path,
-             today: date) -> Path:
-    """Freeze the owner's judgments. Requires a complete, valid sheet; never overwrites. The
-    frozen record holds no proposed label, so it is safe to write before any comparison."""
-    if report.problems or report.pending:
-        raise ReviewError("the sheet is not complete and valid; run `bench review validate`")
-    record = {
+def _record(report: SheetReport, sheet_path: Path, mapping_path: Path,
+            finalized_on: date) -> dict[str, Any]:
+    return {
         "format": _FORMAT_VERSION,
         "kind": "owner-blind-review",
-        "finalized_on": today.isoformat(),  # when this freeze ran; not a review date
+        "finalized_on": finalized_on.isoformat(),  # when this freeze ran; not a review date
         "sheet_sha256": _text_digest(sheet_path),
         "mapping_sha256": _text_digest(mapping_path),
         "decisions": [
@@ -398,8 +414,45 @@ def finalize(report: SheetReport, sheet_path: Path, mapping_path: Path, frozen_p
             for d in sorted(report.decisions, key=lambda d: d.review_id)
         ],
     }
+
+
+def finalize(report: SheetReport, sheet_path: Path, mapping_path: Path, frozen_path: Path,
+             today: date) -> Path:
+    """Freeze the owner's judgments. Requires a complete, valid sheet; never overwrites. The
+    frozen record holds no proposed label, so it is safe to write before any comparison."""
+    if report.problems or report.pending:
+        raise ReviewError("the sheet is not complete and valid; run `bench review validate`")
+    record = _record(report, sheet_path, mapping_path, today)
     _create(frozen_path, json.dumps(record, indent=2) + "\n")
     return frozen_path
+
+
+def _verify_frozen(frozen: Any, sheet_path: Path, mapping_path: Path) -> None:
+    """The frozen record is derived data, not a source of truth: it must equal, field for field,
+    what freezing the original sheet and mapping produces. An altered label, reviewer, date or
+    note, and any missing, extra or duplicate decision, makes it differ."""
+    if not isinstance(frozen, dict):
+        raise ReviewError("the frozen file is not a review record")
+    if frozen.get("mapping_sha256") != _text_digest(mapping_path):
+        raise ReviewError("the id mapping changed after the review was finalized")
+    if not sheet_path.exists():
+        raise ReviewError(f"{sheet_path} not found: the finalized sheet is needed to verify "
+                          "the frozen record")
+    if frozen.get("sheet_sha256") != _text_digest(sheet_path):
+        raise ReviewError("the decision sheet was edited after the review was finalized; the "
+                          "frozen record is the original judgment")
+    try:
+        finalized_on = date.fromisoformat(str(frozen.get("finalized_on")))
+    except ValueError:
+        raise ReviewError("the frozen record has no valid finalized_on date") from None
+    report = validate_sheet(read_sheet(sheet_path), load_mapping(mapping_path), finalized_on)
+    if not report.complete:
+        raise ReviewError("the finalized sheet is not a complete valid sheet: "
+                          + "; ".join(report.problems + report.pending))
+    if frozen != _record(report, sheet_path, mapping_path, finalized_on):
+        raise ReviewError("the frozen record does not match the finalized sheet and mapping "
+                          "(a label, reviewer, date, note or decision was altered, missing or "
+                          "duplicated); refusing to compare")
 
 
 # ---- compare: only after the freeze ------------------------------------------------------------
@@ -426,13 +479,12 @@ def compare(frozen_path: Path, sheet_path: Path, mapping_path: Path,
     if not frozen_path.exists():
         raise ReviewError(f"{frozen_path} not found: the blind review is not finalized, so "
                           "proposed labels are not compared (run `bench review finalize`)")
-    frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
-    if frozen.get("mapping_sha256") != _text_digest(mapping_path):
-        raise ReviewError("the id mapping changed after the review was finalized")
-    if sheet_path.exists() and frozen.get("sheet_sha256") != _text_digest(sheet_path):
-        raise ReviewError("the decision sheet was edited after the review was finalized; the "
-                          "frozen record is the original judgment")
-    verify_mapping(load_mapping(mapping_path), cases)
+    try:
+        frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
+    except ValueError:
+        raise ReviewError(f"{frozen_path} is not valid JSON") from None
+    _verify_frozen(frozen, sheet_path, mapping_path)
+    verify_mapping(load_mapping(mapping_path), cases, pin_proposals=True)
     by_id = {c.id: c for c in cases}
     return [Comparison(d["case_id"], CaseType(d["type"]), by_id[d["case_id"]].critical,
                        d["label"], by_id[d["case_id"]].expected.value, d["uncertain"])
