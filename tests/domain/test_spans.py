@@ -65,6 +65,9 @@ def test_spans_overlap_only_within_one_passage_when_they_share_a_sentence():
     assert Span(a, "x", 0, 1).overlaps(Span(a, "y", 1, 2))
     assert not Span(a, "x", 0, 0).overlaps(Span(a, "y", 1, 2))
     assert not Span(a, "x", 0, 1).overlaps(Span(b, "y", 0, 1))
+    assert Span(a, "x", 0, 2).contains(Span(a, "y", 1, 1))
+    assert not Span(a, "x", 0, 1).contains(Span(a, "y", 1, 2))
+    assert not Span(a, "x", 0, 2).contains(Span(b, "y", 1, 1))
 
 
 def test_windows_are_as_wide_as_the_claim_from_two_up_to_four_sentences():

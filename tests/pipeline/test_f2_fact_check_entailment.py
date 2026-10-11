@@ -152,6 +152,16 @@ def test_a_verified_widened_span_reports_its_own_similarity(make_deps):
     assert [t for _, t in numbered(model.seen[0])] == [page]
 
 
+def test_a_window_that_only_partly_covers_another_group_does_not_widen(make_deps):
+    claim = "Claim sentence."
+    page = Passage(observation_id="o", index=0, text="S one. S two. S three.")
+    deps = make_deps(embedder=TableEmbedder(claim, {
+        "S one.": 0.97, "S two. S three.": 0.96, "S one. S two.": 0.95}))
+    s = screen(deps, claim, [page])
+    # Widening "S one." to "S one. S two." would show "S two." twice.
+    assert [span.text for _, span in s.candidates] == ["S one.", "S two. S three."]
+
+
 def test_top_k_is_chosen_by_the_similarity_of_the_spans_that_will_be_judged(make_deps):
     claim = "Claim sentence."
     a = Passage(observation_id="o", index=0, text="Anchor. Context.")

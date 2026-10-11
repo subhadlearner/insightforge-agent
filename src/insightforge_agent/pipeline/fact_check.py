@@ -110,17 +110,16 @@ def screen(deps: Deps, claim: str, passages: list[Passage],
     # gates, so the judge sees the context: "It sold 3.02 million..." with the sentence that
     # names "BYD", or "Ltd. sold..." rejoined with "BYD Co.". Each representative carries its
     # own similarity, and the best `TOP_K` representatives by that similarity are judged.
-    def within(inner: Span, outer: Span) -> bool:
-        return outer.overlaps(inner) and outer.first <= inner.first and inner.last <= outer.last
-
+    # A span widens only when it contains every group it touches, which then become one, so
+    # no sentence is shown twice.
     groups: list[tuple[float, Span]] = []
     for score, span in stated:
-        n = next((i for i, (_, g) in enumerate(groups) if span.overlaps(g)), None)
-        if n is None:
+        hit = [i for i, (_, g) in enumerate(groups) if span.overlaps(g)]
+        if not hit:
             groups.append((score, span))
-        elif within(groups[n][1], span):  # widen that group; fold in any other it covers
-            groups = [(score, span) if i == n else g for i, g in enumerate(groups)
-                      if i == n or not within(g[1], span)]
+        elif all(span.contains(groups[i][1]) for i in hit):
+            groups = [(score, span) if i == hit[0] else g for i, g in enumerate(groups)
+                      if i not in hit[1:]]
     chosen = sorted(groups, key=lambda g: -g[0])[:TOP_K]  # stable: ties keep their order
     return Screened(chosen[0][0], _ref(chosen[0][1]), chosen)
 

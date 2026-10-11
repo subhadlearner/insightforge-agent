@@ -146,6 +146,10 @@ class Span:
             other.passage.observation_id, other.passage.index) and (
             self.first <= other.last and other.first <= self.last)
 
+    def contains(self, other: "Span") -> bool:
+        """Whether every sentence of `other` is in this span (same Passage)."""
+        return self.overlaps(other) and self.first <= other.first and other.last <= self.last
+
 
 MAX_WINDOW_SENTENCES = 4  # the widest window, however many sentences a Claim has
 

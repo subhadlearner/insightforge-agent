@@ -57,6 +57,8 @@ No xfails remain. The "model call" column is pinned by the tests: bge-small pass
 ### Remaining limitations
 
 - **Real-model behaviour is unmeasured.** Every rejection of a wrong-measure or wrong-entity Claim depends on the light model answering as the oracle does. One authorised live validation is the next step.
+- **Widening can cost a place (owner trade-off).** Groups are ranked by the similarity of the span actually judged, so a sentence at 0.99 widened to its window at 0.86 can fall behind three other groups and not be judged. The alternative is to rank groups by their best sentence but judge the window. That needs a separate, explicit ranking score; it was not chosen.
+- **Partial overlaps.** A window that only partly covers another group does not widen anything, so no sentence is shown twice. In return, a pronoun sentence whose subject sits in another group's window is judged without its subject.
 - **Top-3 cut.** If more than 3 groups of overlapping spans pass the gates, only the 3 most similar are judged, so a supporting span ranked fourth is not seen.
 - **Sentence splitting is orthographic.** An abbreviation before a capital ("Co. Ltd.") cuts a sentence, and only a window puts it back together. A stop before a digit ("...in 2024. 2025 was...") does not split, so that span is longer. A Claim of more than four sentences is matched only through four-sentence windows, so it may fail the numeric gate (fail closed).
 - **Token cap.** The entailment call counts against `run_token_cap`. When a cap is configured (none by default), exceeding it during fact-checking fails the Run, as it does in Synthesis, under the existing Run-limit policy.
