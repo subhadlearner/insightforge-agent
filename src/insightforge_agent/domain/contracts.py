@@ -35,21 +35,34 @@ class SubTaskResult(BaseModel):
     status: Literal["succeeded", "failed"]
     source_refs: list[SourceRef] = Field(default_factory=list)
 
+    def passage_scope(self) -> "PassageScope":
+        """Per Source, the exact Passages this Sub-task retrieved (by Observation and index),
+        or None when it reads the whole Source, as for a web page."""
+        return merge_scopes([{r.source_id: set(r.passages) or None} for r in self.source_refs])
+
+
+# Source ID -> the Passages to read, or None for the Source's latest Observation, whole.
+PassageScope = dict[str, "set[PassageRef] | None"]
+
+
+def merge_scopes(scopes) -> PassageScope:
+    """Union of Passage scopes. A Source any scope reads whole is read whole."""
+    out: PassageScope = {}
+    for scope in scopes:
+        for source_id, refs in scope.items():
+            if refs is None or (source_id in out and out[source_id] is None):
+                out[source_id] = None
+            else:
+                out.setdefault(source_id, set()).update(refs)
+    return out
+
 
 class ResearchResults(BaseModel):
     results: list[SubTaskResult]
 
-    def passage_scope(self) -> dict[str, set[int] | None]:
-        """Per Source, the Passage indices any Sub-task retrieved, or None for the whole Source.
-        A Source one Sub-task read whole is read whole."""
-        scope: dict[str, set[int] | None] = {}
-        for r in self.results:
-            for ref in r.source_refs:
-                if not ref.passages or scope.get(ref.source_id, set()) is None:
-                    scope[ref.source_id] = None
-                else:
-                    scope.setdefault(ref.source_id, set()).update(p.index for p in ref.passages)
-        return scope
+    def passage_scope(self) -> "PassageScope":
+        """Per Source, the Passages any Sub-task retrieved, or None for the whole Source."""
+        return merge_scopes(r.passage_scope() for r in self.results)
 
 
 class PassageRef(BaseModel):

@@ -79,7 +79,7 @@ class State(TypedDict, total=False):
     run_id: str
     brief: str
     allowed_types: list[str]
-    has_uploads: bool
+    has_uploads: bool  # documents are an allowed source type, so INGESTING runs
     documents: list[str]  # Source IDs of the ingested uploads
     plan: dict
     repaired: bool
@@ -176,7 +176,11 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
     def ingesting(state: State) -> State:
         enter(state, RunState.INGESTING)
         owner, run_id = state["owner_id"], state["run_id"]
-        documents = ingest_documents(deps, owner, run_id, uploads or [])
+        if not uploads:
+            # Upload bytes are never checkpointed: a Run resumed after a restart cannot ingest.
+            raise RunFailed("the uploaded documents are not available to this process; "
+                            "upload them again in a new Run")
+        documents = ingest_documents(deps, owner, run_id, uploads)
         allowed = state["allowed_types"]
         if not documents:
             allowed = [t for t in allowed if t != "documents"]

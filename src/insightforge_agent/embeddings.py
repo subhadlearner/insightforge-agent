@@ -8,6 +8,7 @@ bag-of-words embedding used where tests need exact, offline vectors."""
 import hashlib
 import math
 import re
+import threading
 from typing import Protocol
 
 _WORD = re.compile(r"[a-z0-9]+")
@@ -40,6 +41,7 @@ class FastEmbedEmbedder:
         self.model_name = model_name
         self._cache_dir = cache_dir
         self._model = None
+        self._lock = threading.Lock()  # parallel Doc Readers must not load the model twice
 
     @property
     def dimensions(self) -> int:
@@ -53,10 +55,11 @@ class FastEmbedEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        if self._model is None:
-            from fastembed import TextEmbedding
+        with self._lock:
+            if self._model is None:
+                from fastembed import TextEmbedding
 
-            self._model = TextEmbedding(self.model_name, cache_dir=self._cache_dir)
+                self._model = TextEmbedding(self.model_name, cache_dir=self._cache_dir)
         return [v.tolist() for v in self._model.embed(texts)]
 
 

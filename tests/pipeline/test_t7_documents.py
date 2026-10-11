@@ -341,3 +341,70 @@ def test_documents_without_the_document_infrastructure_cannot_run(make_deps):
     deps = make_deps()  # no chunker, no doc_chunks index
     with pytest.raises(SubmissionRejected, match="no runnable source type"):
         run_brief(deps, "alice", brief_with([pdf()], web=False), uploads=[pdf()])
+
+
+# --- review regressions -------------------------------------------------------------------
+
+def test_a_run_reads_its_own_observation_when_another_run_uploaded_the_same_file_later(doc_deps):
+    """The same file in two Runs gives one Source with two Observations. A Run must index, read
+    and cite its own Observation, even when another Run's is the Source's latest."""
+    from datetime import UTC, datetime
+
+    later = doc_deps(now=lambda: datetime(2026, 10, 2, tzinfo=UTC))
+    run_b = run_with_document(later)
+    earlier = doc_deps(repos=later.repos, store=later.store, doc_index=later.doc_index,
+                       now=lambda: datetime(2026, 10, 1, tzinfo=UTC))
+    run_a = run_with_document(earlier)
+    assert run_a.state == run_b.state == RunState.COMPLETE
+    (obs_a,) = [e.payload["observation_id"] for e in events(earlier, run_a, "document_ingested")]
+    (obs_b,) = [e.payload["observation_id"] for e in events(later, run_b, "document_ingested")]
+    assert obs_a != obs_b
+    assert {h.passage.observation_id for h in earlier.doc_index.search("alice", run_a.id, "revenue")} == {obs_a}
+    report = earlier.repos.reports.get_for_run("alice", run_a.id)
+    cited = {i["primary"]["observation_id"] for s in report.body["evidence"]["sections"]
+             for i in s["items"]} - {o.id for s in earlier.repos.sources.list_for_run("alice", run_a.id)
+                                     if s.kind == "web"
+                                     for o in earlier.repos.observations.list_for_source("alice", s.id)}
+    assert cited == {obs_a}
+
+
+def test_an_unavailable_vector_store_drops_documents_and_the_run_continues_on_web(doc_deps):
+    class Down(DocChunkIndex):
+        def index(self, *args, **kwargs):
+            raise ConnectionError("qdrant is not running")
+
+    deps = doc_deps(planner_model=fakes.planner(), researcher_model=fakes.researcher(),
+                    doc_index=Down(QdrantClient(":memory:"), HashingEmbedder(), "test-hash", 256))
+    run = run_with_document(deps)
+    assert run.state == RunState.COMPLETE
+    (bad,) = [e.payload for e in events(deps, run, "document_unindexed")]
+    assert "qdrant is not running" in bad["reason"]
+    assert events(deps, run, "documents_unavailable")
+
+
+def test_search_hits_show_the_name_this_run_uploaded_the_file_under(doc_deps):
+    deps = doc_deps()
+    first = run_with_document(deps, uploads=[pdf("q3.pdf")])
+    deps.planner_model, deps.researcher_model = planner(), researchers()
+    renamed = Upload(filename="renamed.pdf", data=pdf("q3.pdf").data)
+    second = run_with_document(deps, uploads=[renamed])
+    assert {h.source_filename for h in deps.doc_index.search("alice", second.id, "revenue")} == {"renamed.pdf"}
+    assert {h.source_filename for h in deps.doc_index.search("alice", first.id, "revenue")} == {"q3.pdf"}
+
+
+def test_a_resumed_run_without_its_uploads_fails_instead_of_dropping_documents(doc_deps):
+    import uuid
+
+    from insightforge_agent.domain.models import Run
+    from insightforge_agent.pipeline.errors import RunFailed
+    from insightforge_agent.pipeline.graph import build_graph, outer_config
+
+    deps = doc_deps()
+    run = Run(id="run_r", owner_id="alice", brief=BRIEF, state=RunState.INGESTING,
+              created_at=deps.now())
+    deps.repos.runs.add(run)
+    thread = f"thread-{uuid.uuid4()}"
+    state = {"thread_id": thread, "owner_id": "alice", "run_id": run.id, "brief": BRIEF,
+             "allowed_types": ["web", "documents"], "has_uploads": True}
+    with pytest.raises(RunFailed, match="upload them again"):
+        build_graph(deps).invoke(state, outer_config(thread))  # no uploads, as after a restart

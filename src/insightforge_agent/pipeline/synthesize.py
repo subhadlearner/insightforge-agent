@@ -27,6 +27,7 @@ from insightforge_agent.domain.contracts import (
     ExtractedFact,
     ExtractionResult,
     PassageRef,
+    PassageScope,
     ResearchResults,
 )
 from insightforge_agent.domain.errors import NotFoundError
@@ -153,18 +154,13 @@ def synthesize(
 ) -> EvidenceBundle:
     by_id: dict[str, SubTask] = {t.id: t for t in plan.sub_tasks}
     sources_of: dict[str, list[str]] = {t.id: [] for t in plan.sub_tasks}
-    # Per Sub-task and Source, the Passage indices a Doc Reader retrieved (None: the whole Source).
-    only: dict[tuple[str, str], set[int] | None] = {}
+    # Per Sub-task: Source ID -> the exact Passages a Doc Reader retrieved (None: the whole Source).
+    scope_of: dict[str, PassageScope] = {}
     for result in research.results:
         if result.status == "succeeded":
             # Deduplicated within a Sub-task only: a Source several Sub-tasks found is read for each.
             sources_of[result.subtask_id] = list(dict.fromkeys(r.source_id for r in result.source_refs))
-            for r in result.source_refs:
-                key = (result.subtask_id, r.source_id)
-                if not r.passages or only.get(key, set()) is None:
-                    only[key] = None
-                else:
-                    only.setdefault(key, set()).update(p.index for p in r.passages)
+            scope_of[result.subtask_id] = result.passage_scope()
 
     contents = {sid: deps.store.read_source(owner_id, sid)
                 for sid in dict.fromkeys(s for ids in sources_of.values() for s in ids)}
@@ -173,12 +169,24 @@ def synthesize(
     fetched_on: dict[str, date] = {
         c.observation.id: c.observation.fetched_at.date()
         for c in contents.values() if c.observation is not None}
+    # Retrieved chunks name their own Observation, which need not be the Source's latest.
+    for scope in scope_of.values():
+        for sid, refs in scope.items():
+            for obs_id in {r.observation_id for r in refs or ()} - source_by_obs.keys():
+                obs = deps.repos.observations.get(owner_id, obs_id)
+                source_by_obs[obs_id], fetched_on[obs_id] = contents[sid].source, obs.fetched_at.date()
+
+    def passages_for(task_id: str, sid: str) -> list[Passage]:
+        refs = scope_of[task_id].get(sid)
+        if refs is None:
+            return contents[sid].passages
+        ordered = sorted(refs, key=lambda r: (r.observation_id, r.index))
+        return [p for r in ordered for p in deps.store.get_passages(owner_id, r.observation_id, [r.index])]
 
     # 1. Draft, one Sub-task at a time.
     drafted: list[_Candidate] = []
     for task in sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id)):
-        passages = [p for sid in sources_of[task.id] for p in contents[sid].passages
-                    if only[(task.id, sid)] is None or p.index in only[(task.id, sid)]]
+        passages = [p for sid in sources_of[task.id] for p in passages_for(task.id, sid)]
         for batch in batch_passages(passages, deps.passage_token_cap):
             drafted += _draft(deps, owner_id, run_id, task, batch)
 

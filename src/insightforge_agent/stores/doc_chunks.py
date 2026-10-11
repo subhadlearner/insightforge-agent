@@ -43,8 +43,12 @@ class DocChunkIndex:
         if self._ready:
             return
         if not self._client.collection_exists(COLLECTION):
-            self._client.create_collection(COLLECTION, vectors_config=models.VectorParams(
-                size=self._dimensions, distance=models.Distance.COSINE))
+            try:
+                self._client.create_collection(COLLECTION, vectors_config=models.VectorParams(
+                    size=self._dimensions, distance=models.Distance.COSINE))
+            except Exception:
+                if not self._client.collection_exists(COLLECTION):
+                    raise  # a real failure, not another process creating it first
             with warnings.catch_warnings():  # in-memory Qdrant (tests) ignores payload indexes
                 warnings.simplefilter("ignore", UserWarning)
                 for field in ("owner_id", "run_id", "embedding_model"):
@@ -62,9 +66,11 @@ class DocChunkIndex:
     def _point_id(owner_id: str, run_id: str, ref: PassageRef) -> str:
         return str(uuid.uuid5(_NAMESPACE, f"{owner_id}|{run_id}|{ref.observation_id}|{ref.index}"))
 
-    def index(self, owner_id: str, run_id: str, source: Source, passages: list[Passage]) -> int:
+    def index(self, owner_id: str, run_id: str, source: Source, passages: list[Passage],
+              filename: str | None = None) -> int:
         """Index a document's chunks for one Run. Idempotent: the same chunk for the same Run
-        keeps one point. Returns the number of chunks indexed."""
+        keeps one point. `filename` is the name this Run uploaded it under (a Source keyed by
+        content keeps the title of its first upload). Returns the number of chunks indexed."""
         self._ensure_collection()
         if not passages:
             return 0
@@ -75,7 +81,7 @@ class DocChunkIndex:
                                                                index=p.index)),
                 vector=list(v),
                 payload={"owner_id": owner_id, "run_id": run_id, "source_id": source.id,
-                         "source_filename": source.title, "page": p.page,
+                         "source_filename": filename or source.title, "page": p.page,
                          "section_heading": p.section_heading, "observation_id": p.observation_id,
                          "passage_index": p.index, "text": p.text,
                          "embedding_model": self._model})
