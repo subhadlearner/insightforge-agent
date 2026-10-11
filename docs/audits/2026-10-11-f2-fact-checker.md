@@ -60,14 +60,23 @@ Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVE
 
 No xfails remain. The "model call" column is pinned by the tests: bge-small passes every wrong-measure and wrong-entity Claim to the judge, so their rejection rests entirely on the entailment call. The numeric gate alone stops wrong years.
 
-### Real-model validation (2026-10-12, owner-authorised, head `9bd27c0`)
+### Real-model validation (2026-10-12, owner-authorised, production code at `9bd27c0`)
 
 `tests/live/test_f2_real_model.py` ran the 16 cases once through the real `fact_check()`, with nothing changed and nothing retried:
 - **Embedder:** `FastEmbedEmbedder("BAAI/bge-small-en-v1.5")` from the local cache.
 - **Judge:** the configured production light model, `build_chat_model("light")` with `LLM_PROVIDER=anthropic`, which is `claude-haiku-5-5`.
 - **Policy:** threshold 0.85, `TOP_K` 3 and the prompt unchanged.
 
-To repeat it: `INSIGHTFORGE_ALLOW_LIVE_TESTS=1 uv run pytest tests/live/test_f2_real_model.py -m live -s`.
+To repeat it with the validated provider: `LLM_PROVIDER=anthropic INSIGHTFORGE_ALLOW_LIVE_TESTS=1 uv run pytest tests/live/test_f2_real_model.py -m live -s`. Without `LLM_PROVIDER=anthropic`, the test judges with whatever provider is configured; the `Settings` default is Gemini, which was not validated.
+
+**Provenance of the run.**
+- **Code.** The production code was `9bd27c0`. The test file was not committed yet: an earlier version of `tests/live/test_f2_real_model.py` produced the run. It was committed as `3716198`, then hardened after review.
+- **What hardening added.** The pass rule now requires:
+  - a usable judgment for every gated call, so a fail-closed `unverified` from an outage cannot count as a rejection;
+  - 0 errors and 0 parse failures;
+  - for a verified Claim, SUPPORTED on the span that states it;
+  - the setup checks.
+- **Recheck.** The JSON record of the paid run was re-checked against the hardened criteria without a new paid call: all 16 pass. Setup was not recorded in that run; it is the same as the offline integration test, which asserts it.
 
 | Case | Expected | Actual | Model called | Judged span | bge-small | Entailment | Result |
 |---|---|---|---|---|---|---|---|
@@ -100,6 +109,7 @@ Each judged span was one span per call, in every case.
 The F2 validation is 16 synthetic cases and one model run. T16's evaluation should measure these on real Reports:
 - **Live pass rate.** The share of sampled Claims verified on real Reports, against the 80% target. That includes how often true Claims are marked `[UNVERIFIED]` because a judge was cautious, and whether the paragraph windows near the threshold (0.864-0.891) hold up on real paraphrases.
 - **Judge consistency.** The same span judged on repeat runs, and wrong-measure or wrong-entity Claims that are subtler than these cases.
+- **Other providers.** Only `claude-haiku-5-5` (Anthropic) was validated. The Gemini default (`gemini-3.5-flash-lite`) and Groq light models were not.
 - **Outages show as unverified.** A provider outage or auth failure marks every gated Claim `unverified` (fail closed by policy) and lowers the pass rate. Watch the `fact_check_entailment_failed` and `fact_check_entailment_skipped` events.
 - **One SUPPORTED wins.** One SUPPORTED span verifies the Claim even when another span in the same call is CONTRADICTED (approved rule). Track how often that happens.
 - **Partial overlaps.** A window that only partly covers another group does not widen anything, so no sentence is shown twice. In return, a pronoun sentence whose subject sits in another group's window is judged without its subject.
