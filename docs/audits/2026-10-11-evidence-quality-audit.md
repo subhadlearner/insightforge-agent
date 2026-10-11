@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | F1 | Web Sources never get a publication date, so credibility is flat, MEDIUM can't be reached and citation dates are blank | **MUST FIX** | High | S (about 1 day) |
 | F2 | The Fact-Checker fails true Claims (and passed one false Claim), so the 80% pass rate is at risk | **MUST FIX** | High | M (1-2 days, plus one authorised live run) |
-| F3 | Five unparseable model replies; the likely cause is the 4,096-token default on the light role | OPTIONAL | Low | XS |
+| F3 | Five unparseable model replies; historical cause indeterminate, diagnostics added, truncation not reproduced | OPTIONAL (**closed** 2026-10-12) | Low | XS |
 | F4 | A merge key with an UNKNOWN period ignores time (5/5 judged PAIR negatives were merged) | OPTIONAL (**closed** 2026-10-12, `p-fm-02` retained) | Medium (false-HIGH risk), low grading impact | S |
 | F5 | 107/176 Evidence candidates are rejected | NO ACTION | Low | - |
 | F6 | No real contradiction was seen in the live run | NO ACTION | Low | - |
@@ -60,17 +60,18 @@
 
 ## F3. Five unparseable model replies (OPTIONAL)
 
-> **Status (2026-10-12): diagnostics added; truncation still unproven.**
-> - `BadModelReply` now records the failure kind (incomplete JSON, malformed JSON or schema), the reply length, a bounded head and tail, the stop reason and the output and reasoning tokens.
-> - Nothing from October 10 beyond the logged first 200 characters survives. Each of the five replies was well-formed JSON for at least 200 characters with exactly one problem after that, which fits truncation, malformed JSON and a one-field schema error alike.
-> - The light role's `max_tokens` is confirmed as 4096 and left unchanged. A one-call drafting probe is proposed and awaits the owner's authorisation.
+> **Status (2026-10-12): CLOSED.**
+> - The five October 10 failures cannot be diagnosed retrospectively because only the first 200 characters of each reply survived.
+> - `BadModelReply` now records bounded failure diagnostics: failure kind, reply length, head/tail, provider stop reason, and output/reasoning token usage when available.
+> - One owner-authorised `claude-haiku-5-5` drafting probe exercised a deliberately dense full production-cap batch on the current light configuration. It parsed successfully and ended normally with `stop_reason=end_turn`, using 3,300 of 4,096 output tokens, including 519 reasoning tokens.
+> - Truncation was therefore **not reproduced** and the current 4,096-token ceiling is not shown to be generally inadequate. The light-role model configuration remains unchanged.
 >
 > Details: `2026-10-12-f3-json-replies.md`.
 
 - **Problem.** 1 extraction batch and 4 drafting batches returned invalid JSON. Each batch was skipped and logged, with no retry (`agents/llm_json.py`).
-- **Evidence.** The light role uses the `ChatAnthropic` default `max_tokens=4096` (checked offline: `ChatAnthropic(model="claude-haiku-5-5").max_tokens == 4096`, langchain-anthropic 1.7.5). Only the writer was raised to 16,000 (`llm.py:31-33`), after the T3 live run found the Writer's JSON cut off at exactly this default. The October 10 run used 34,315 reasoning tokens, and reasoning shares that budget. Truncation is the leading hypothesis but is **not established**: the log keeps only the first 200 characters of each reply.
+- **Evidence.** The light role uses the `ChatAnthropic` default `max_tokens=4096` (checked offline: `ChatAnthropic(model="claude-haiku-5-5").max_tokens == 4096`, langchain-anthropic 1.7.5). Only the writer was raised to 16,000 (`llm.py:31-33`), after the T3 live run found the Writer's JSON cut off at exactly this default. The October 10 run used 34,315 reasoning tokens, and reasoning shares that budget. Nothing beyond the first 200 characters of the five failed replies survives, so their root cause is unknowable. The F3 probe then exercised a deliberately dense full drafting batch at the same 4,096-token ceiling and completed with `end_turn`, valid JSON and 3,300 output tokens (519 reasoning), providing strong evidence against the ceiling being generally inadequate.
 - **Grading impact.** Low. The batches fail safe, and the Report still had 27 Claims. The cost is some lost recall.
-- **Fix.** Log the stop reason and the end of the reply. If that confirms truncation, give the light role the same `max_tokens` setting as the writer.
+- **Fix.** Completed: bounded diagnostics now log the reply ending, failure classification, stop reason and token usage when available. The one-call probe did not reproduce truncation, so no light-role `max_tokens` increase was made.
 - **Effort.** XS.
 
 ## F4. Merging on an UNKNOWN period (OPTIONAL)
