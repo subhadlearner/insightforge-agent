@@ -11,7 +11,7 @@
 | F1 | Web Sources never get a publication date, so credibility is flat, MEDIUM can't be reached and citation dates are blank | **MUST FIX** | High | S (about 1 day) |
 | F2 | The Fact-Checker fails true Claims (and passed one false Claim), so the 80% pass rate is at risk | **MUST FIX** | High | M (1-2 days, plus one authorised live run) |
 | F3 | Five unparseable model replies; the likely cause is the 4,096-token default on the light role | OPTIONAL | Low | XS |
-| F4 | A merge key with an UNKNOWN period ignores time (5/5 judged PAIR negatives were merged) | OPTIONAL | Medium (false-HIGH risk), low grading impact | S |
+| F4 | A merge key with an UNKNOWN period ignores time (5/5 judged PAIR negatives were merged) | OPTIONAL (**closed** 2026-10-12, `p-fm-02` retained) | Medium (false-HIGH risk), low grading impact | S |
 | F5 | 107/176 Evidence candidates are rejected | NO ACTION | Low | - |
 | F6 | No real contradiction was seen in the live run | NO ACTION | Low | - |
 | F7 | Syndicated copies count as independent Sources | NO ACTION | Low | - |
@@ -68,6 +68,14 @@
 
 ## F4. Merging on an UNKNOWN period (OPTIONAL)
 
+> **Status (2026-10-12): CLOSED for the temporal cases, limitation retained for `p-fm-02`.**
+> - **Baseline vs production.** The baseline finding below concerns only the merge **key**. Run through the full production Synthesis path (scripted drafting, semantically correct entailment), `p-ta-02` and `p-ta-03` became one **HIGH** item backed by two differently dated Observations. In `p-ps-01`, `p-ps-04` and `p-fm-02` the literal check prevented false corroboration, but one legitimate fact was silently lost.
+> - **Fixed.** A structured candidate with an UNKNOWN period now merges only with candidates citing exactly the same Observations, so `p-ta-02`, `p-ta-03`, `p-ps-01` and `p-ps-04` are fixed. A model-given period that no cited window states becomes UNKNOWN before Merge, so an invented period cannot merge Observations either.
+> - **Retained.** `p-fm-02` (same name, different company, explicit period) is retained as a known limitation and recommended for the T16 watchlist. Without descriptors in the statements it is still a false HIGH. A single drafted candidate citing two undated Observations can also reach HIGH; it is on the T16 watchlist as well.
+> - **Benchmark.** Baseline `m1.3-3`.
+>
+> Details: `2026-10-12-f4-false-merge.md`.
+
 - **Problem.** `merge_identity` keys a candidate by entity, predicate, scope, period and value. `stated_period` turns any period it cannot read into `UNKNOWN`, and two UNKNOWN periods are equal, so the dates are ignored.
 - **Evidence.** The baseline merged **5 of the 5 judged PAIR negatives** (all `DIFFERENT_FACT`):
   - `p-ta-02`: present tense, published in 2021 and 2025.
@@ -100,6 +108,8 @@
 | **Grounding**: QUOTED_SPAN (literal check) | 3 / 6 | `g-qu-01`, `g-qu-03` wrongly NOT_GROUNDED (recall); 1 correct reject |
 | **Independence** | 4 / 4 | 3/4; 1 false independence (`i-sy-02`, F7) |
 | Not evaluated | - | false-HIGH Confidence, budget cuts (the cases cannot carry them) |
+
+These figures are for baseline `m1.3-2`. At `m1.3-3` (F4) the baseline judges 2 PAIR cases: 1 of 1 judged negative is merged (`p-fm-02`), and 1 of 8 SAME_FACT is merged correctly (`p-pq-03`; `p-ta-01` no longer merges).
 
 The baseline is a floor. Its many NOT_APPLICABLE answers are by design, not defects. Each category has only 2-6 cases, so these figures describe what happened and prove nothing statistically.
 

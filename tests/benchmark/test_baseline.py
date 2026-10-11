@@ -59,6 +59,33 @@ def test_a_different_stated_period_is_a_different_merge_key():
     assert v.status is JudgeStatus.NOT_APPLICABLE and v.diagnostics["merge_key_equal"] is False
 
 
+def test_an_unknown_period_on_both_sides_no_longer_merges():
+    # F4: the two candidates are separate Observations, and nothing dates either of them.
+    v = judge(pair(fields(period="UNKNOWN"), fields(period="this year")))
+    assert v.status is JudgeStatus.NOT_APPLICABLE and v.diagnostics["merge_key_equal"] is False
+    assert v.diagnostics[b.DISPOSITION_KEY] == b.NOT_MERGED
+
+
+# The reviewed PAIR cases whose baseline outcome F4 decides. Before F4 (m1.3-2) all six merged.
+F4_EXPECTED = {
+    "p-ta-02": b.NOT_MERGED, "p-ta-03": b.NOT_MERGED,  # DIFFERENT_FACT: fixed
+    "p-ps-01": b.NOT_MERGED, "p-ps-04": b.NOT_MERGED,  # DIFFERENT_FACT: fixed
+    "p-fm-02": b.MERGED,      # DIFFERENT_FACT, explicit period: retained same-name limitation
+    "p-ta-01": b.NOT_MERGED,  # SAME_FACT with two unreadable periods: recall given up
+}
+
+
+def test_the_reviewed_f4_cases_follow_the_production_merge_rule():
+    from pathlib import Path
+
+    from insightforge_agent.benchmark.cases import load_cases
+
+    path = Path(__file__).resolve().parents[2] / "benchmarks" / "evidence" / "cases.jsonl"
+    by_id = {c.id: c for c in load_cases(path)}
+    got = {cid: judge(by_id[cid]).diagnostics[b.DISPOSITION_KEY] for cid in F4_EXPECTED}
+    assert got == F4_EXPECTED
+
+
 def test_a_pair_without_structured_fields_cannot_form_a_merge_key():
     v = judge(make_case("PAIR", "p"))
     assert v.status is JudgeStatus.NOT_APPLICABLE and "structured" in v.reason
