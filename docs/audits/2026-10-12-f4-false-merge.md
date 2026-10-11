@@ -37,6 +37,8 @@ So the existing checks prevent false corroboration only when the kept statement 
 
 **A candidate citing several Observations** is kept whole. Merge never splits it, and it is judged against all its Passages. It merges with a candidate citing the same set, and not with a subset or superset. Unequal overlapping sets therefore stay separate items. That can duplicate, but never merges falsely.
 
+**An invented period cannot decide Merge** (`_draft`, the owner's review). Before this, `_draft` put the model's normalised period straight into the key, and validation rejected a period the text does not state only after Merge. Two Observations given the same invented `2024` therefore merged into one item, and validation then set it to UNKNOWN, HIGH. Now an explicit period is used in the key only if at least one cited window states it (`period_stated_in`, the same rule as validation, on exactly the text the model was shown; no publication date or other Passage). Otherwise it becomes UNKNOWN before Merge, the provenance rule keeps the Observations apart, and `draft_period_rejected` is logged. The validation check stays as defence in depth. Tests: `test_the_same_invented_period_no_longer_merges_two_observations`, `..._dropped_only_where_the_cited_text_lacks_it`, `..._stated_only_in_an_uncited_passage_does_not_count`. The genuinely stated period control still corroborates to HIGH.
+
 After the change:
 
 | Case | After Merge | Final items | Confidence | Status |
@@ -58,7 +60,6 @@ The `p-ps` fixes depend on the model returning non-canonical wording. If it retu
   No semantic resolver was built. **Recommendation: put it on the T16 watchlist.** A sample Brief about a common company name would show whether this happens in practice.
 - **Undated Observations grouped by the drafting model.** One drafted candidate that itself cites two undated Observations is judged as drafted and can reach HIGH. That is a drafting judgment, not Merge (test `..._merges_only_with_the_same_set`).
 - **Statement-keyed candidates** (no entity, predicate or value) are still keyed by the normalised statement alone. Identical undated wording from two Observations still merges (test `test_unstructured_candidates_are_still_keyed_by_statement_alone`). This is outside the F4 rule as specified.
-- **A model-stated explicit period that the Passage does not state** is rejected to UNKNOWN only at validation, after Merge. So two Observations given the same invented period still merge.
 
 ## 5. Benchmark
 

@@ -187,7 +187,24 @@ def test_a_correct_statement_with_a_fabricated_value_does_not_become_a_conflict(
 def test_a_period_the_passage_does_not_state_is_not_accepted(world):
     item = asof_item(world, stated="2019")  # the Passage says 2025
     assert item.as_of_period == "UNKNOWN" and item.temporally_ambiguous
-    assert world.events("period_rejected")
+    # Since F4 it is rejected before Merge, against the cited window.
+    assert world.events("draft_period_rejected")[0]["period"] == "2019"
+
+
+def test_validation_still_rejects_a_period_only_an_unsupporting_passage_states(world):
+    """Defence in depth: the cited windows state 2019, so the period survives drafting, but the
+    only Passage that states it is not SUPPORTED, so validation rejects it."""
+    world.page("https://a.test/x", "BYD sold 4.27 million vehicles.\n\n"
+               "BYD sold 4.27 million vehicles in 2019, a rival claimed.")
+    plan, research = world.plan(("s1", "a1", 1)), world.research(s1=["https://a.test/x"])
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": "BYD sold 4.27 million vehicles.", "passages": [1, 2],
+                              "as_of_period": "2019"}],
+        entail=lambda ps, u: [{"passage": n, "verdict": "SUPPORTED" if n == 1
+                               else "INSUFFICIENT_EVIDENCE"} for n, _ in ps])
+    (item,) = world.items(world.synth(plan, research))
+    assert item.as_of_period == "UNKNOWN"
+    assert world.events("draft_period_rejected") == [] and world.events("period_rejected")
 
 
 def test_a_fabricated_period_does_not_block_the_observation_date_derivation(world):
@@ -263,7 +280,7 @@ def test_synthesis_clears_a_value_with_the_wrong_magnitude(world):
 
 def test_a_day_precision_period_the_passage_does_not_state_is_rejected(world):
     item = asof_item(world, stated="2025-09-14", body="BYD sold 4.27 million vehicles in September 2025.")
-    assert item.as_of_period == "UNKNOWN" and world.events("period_rejected")
+    assert item.as_of_period == "UNKNOWN" and world.events("draft_period_rejected")
     ok = asof_item(world, stated="2025-09-14",
                    body="BYD sold 4.27 million vehicles on September 14, 2025.")
     assert ok.as_of_period == "2025-09-14"

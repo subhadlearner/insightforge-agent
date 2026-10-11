@@ -121,6 +121,10 @@ class Outcome:
     merged: list[list[str]]  # per candidate reaching validation: the Sources (tags) it cites
     items: list[EvidenceItem]
     tag_of: dict[str, str] = field(default_factory=dict)  # observation id -> page tag
+    events: list = field(default_factory=list)  # (type, payload) logged by the Run
+
+    def logged(self, type_: str) -> list[dict]:
+        return [p for t, p in self.events if t == type_]
 
     def tags(self, item: EvidenceItem) -> list[str]:
         return sorted(self.tag_of[r.observation_id] for r in item.supporting)
@@ -174,7 +178,8 @@ def synth_run(make_deps, monkeypatch, pages: dict[str, tuple[str, str, datetime 
     monkeypatch.setattr(synth, "_validate", spy_validate)
     bundle = synth.synthesize(deps, OWNER, RUN, "brief", plan, research, extraction)
     return Outcome(drafted=drafted, merged=merged,
-                   items=[i for s in bundle.sections for i in s.items], tag_of=tag_of)
+                   items=[i for s in bundle.sections for i in s.items], tag_of=tag_of,
+                   events=[(e.type, e.payload) for e in deps.repos.events.read_after(OWNER, RUN)])
 
 
 def run(case: Case, make_deps, monkeypatch) -> Outcome:
@@ -335,3 +340,40 @@ def test_candidate_ids_are_deterministic_and_carry_provenance_only_when_unknown(
                               for n, _ in ps]
     a, b = ids(explicit)
     assert a == b
+
+
+# ---- a model-supplied period is checked before Merge ----------------------------------------
+
+UNDATED = {"a": ("https://a.example/x", "Orrin Bio has 310 employees.", None),
+           "b": ("https://b.test/y", "Orrin Bio has 310 employees.", None)}
+
+
+def test_the_same_invented_period_no_longer_merges_two_observations(make_deps, monkeypatch):
+    # Neither cited text states 2024: the period is UNKNOWN before Merge, so the Observation
+    # provenance rule keeps the two apart. Before: one item, HIGH.
+    o = synth_run(make_deps, monkeypatch, UNDATED, lambda ps, u: [
+        structured("Orrin Bio has 310 employees.", [n], "2024") for n, _ in ps], supported)
+    assert o.summary() == (2, [["a"], ["b"]], [(["a"], "MEDIUM"), (["b"], "MEDIUM")])
+    assert all(i.as_of_period == "UNKNOWN" for i in o.items)
+    rejected = o.logged("draft_period_rejected")
+    assert [r["period"] for r in rejected] == ["2024", "2024"]
+    assert sorted(r["evidence_id"] for r in rejected) == sorted(c.id for c in o.drafted)
+
+
+def test_an_invented_period_is_dropped_only_where_the_cited_text_lacks_it(make_deps, monkeypatch):
+    pages = {"a": ("https://a.example/x", "Orrin Bio has 310 employees in 2024.", None),
+             "b": ("https://b.test/y", "Orrin Bio has 310 employees.", None)}
+    o = synth_run(make_deps, monkeypatch, pages, lambda ps, u: [
+        structured("Orrin Bio has 310 employees.", [n], "2024") for n, _ in ps], supported)
+    assert o.summary() == (2, [["a"], ["b"]], [(["a"], "MEDIUM"), (["b"], "MEDIUM")])
+    assert sorted(i.as_of_period for i in o.items) == ["2024", "UNKNOWN"]
+    assert len(o.logged("draft_period_rejected")) == 1
+
+
+def test_a_period_stated_only_in_an_uncited_passage_does_not_count(make_deps, monkeypatch):
+    page = {"a": ("https://a.example/x", "Orrin Bio was founded in 2024.\n\n"
+                  "Orrin Bio has 310 employees.", None)}
+    o = synth_run(make_deps, monkeypatch, page, lambda ps, u: [
+        structured("Orrin Bio has 310 employees.", [2], "2024")], supported)
+    (item,) = o.items
+    assert item.as_of_period == "UNKNOWN" and o.logged("draft_period_rejected")
