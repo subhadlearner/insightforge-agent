@@ -4,6 +4,7 @@ Every table carries `owner_id`, and every query filters on it."""
 
 import json
 import sqlite3
+import threading
 from datetime import datetime
 
 from insightforge_agent.domain.contracts import ExtractedFact
@@ -376,6 +377,10 @@ class SqliteRepos:
     def __init__(self, path: str = ":memory:") -> None:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(SCHEMA)
+        # Callers that use this connection from several threads at once (parallel Researcher
+        # tools) serialise their repository calls with this one lock. Re-entrant, because a
+        # SourceStore operation makes several repository calls.
+        self.lock = threading.RLock()
         self.runs = SqliteRunRepository(self._db)
         self.subtasks = SqliteSubTaskRepository(self._db)
         self.sources = SqliteSourceRepository(self._db)

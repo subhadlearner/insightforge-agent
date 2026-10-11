@@ -105,14 +105,15 @@ def summaries_from_log(deps: Deps, owner_id: str, run_id: str) -> dict[str, Sour
     return found
 
 
-def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> set[str]:
-    """Every chunk ID the Doc Reader's search tool returned in this Run, from the Run log."""
-    found: set[str] = set()
+def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
+    """Per Sub-task, the chunk IDs its own Doc Reader searches returned in this Run, from the
+    Run log. A search with no Sub-task authorises nothing."""
+    found: dict[str, set[str]] = {}
     cursor = 0
     while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
         for e in batch:
-            if e.type == DOC_SEARCH_EVENT:
-                found.update(e.payload["chunk_ids"])
+            if e.type == DOC_SEARCH_EVENT and e.payload.get("subtask_id"):
+                found.setdefault(e.payload["subtask_id"], set()).update(e.payload["chunk_ids"])
         cursor = batch[-1].seq
     return found
 
@@ -138,12 +139,13 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 owner_id=owner, run_id=run_id, search=deps.search,
                 fetcher=deps.fetcher, store=deps.store, summarizer=deps.light_model,
                 events=deps.repos.events, now=deps.now,
-                passage_token_cap=deps.passage_token_cap,
+                passage_token_cap=deps.passage_token_cap, lock=deps.repos.lock,
             )
             subagents = [researcher_subagent([web], deps.researcher_model)]
             if "documents" in state.get("allowed_types", []):
                 docs = make_doc_search_tool(owner_id=owner, run_id=run_id, index=deps.doc_index,
-                                            events=deps.repos.events, now=deps.now)
+                                            events=deps.repos.events, now=deps.now,
+                                            lock=deps.repos.lock)
                 subagents.append(doc_reader_subagent([docs], deps.researcher_model))
             holder["planner"] = build_planner(
                 model=deps.planner_model,
@@ -151,11 +153,17 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 checkpointer=deps.checkpointer,
                 guard=ApprovedDispatchGuard(
                     lambda: approved,
-                    lambda sid, why, text: deps.log(owner, run_id, "dispatch_rejected",
-                                                    subtask_id=sid, reason=why, description=text),
+                    lambda sid, why, text: log_locked(owner, run_id, "dispatch_rejected",
+                                                      subtask_id=sid, reason=why,
+                                                      description=text),
                     agent_for=lambda sid: agent_of.get(sid, AGENT_FOR_SOURCE_TYPE["web"])),
             )
         return holder["planner"]
+
+    def log_locked(owner: str, run_id: str, type_: str, **payload) -> None:
+        """A Run-log write from a tool call, which may run beside the Researcher tools."""
+        with deps.repos.lock:
+            deps.log(owner, run_id, type_, **payload)
 
     def listing_of(state: State, ids: list[str]) -> str:
         by_id = {t["id"]: t for t in state["plan"]["sub_tasks"]}
@@ -266,7 +274,8 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         for sid, outcome in outcomes(state).items():
             refs: list[SourceRef] = []
             if outcome.status == "succeeded" and source_type[sid] == "documents":
-                refs = document_refs(owner, outcome.dispatch.result or "", returned, documents)
+                refs = document_refs(owner, outcome.dispatch.result or "",
+                                     returned.get(sid, set()), documents)
             elif outcome.status == "succeeded":
                 for src in source_ids_in(outcome.dispatch.result or ""):
                     ref = summaries.get(src)
@@ -285,8 +294,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
     def document_refs(owner: str, reply: str, returned: set[str],
                       documents: set[str]) -> list[SourceRef]:
-        """The chunks a Doc Reader named that its search really returned, grouped by
-        document. A chunk ID it invented, or one from another Run, is ignored."""
+        """The chunks a Doc Reader named that its own Sub-task's searches really returned,
+        grouped by document. A chunk ID it invented, one returned only to another Sub-task, or
+        one from another Run, is ignored."""
         by_source: dict[str, list] = {}
         for ref in chunk_ids_in(reply):
             if chunk_id(ref) not in returned:

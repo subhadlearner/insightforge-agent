@@ -2,27 +2,30 @@
 
 The tool searches the Run's own uploads in `doc_chunks` (k = 8) and hands the Doc Reader only
 chunk IDs with their Source, file name, page and relevance score, never chunk text. Each search
-is recorded as a durable `doc_search` event so the graph accepts only chunk IDs the tool really
-returned."""
+is recorded as a durable `doc_search` event naming the Sub-task that searched, so the graph
+accepts for a Sub-task only chunk IDs that Sub-task's own searches returned."""
 
 import io
+from contextlib import AbstractContextManager
 import json
 import threading
 from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol
 
+from langchain.tools import ToolRuntime
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool, tool
 
 from insightforge_agent.domain.documents import chunk_id
 from insightforge_agent.domain.models import RunEvent
-from insightforge_agent.domain.plan import DOC_READER
+from insightforge_agent.domain.plan import DOC_READER, dispatched_id
 from insightforge_agent.domain.repositories import RunEventRepository
 from insightforge_agent.stores.doc_chunks import DEFAULT_K, DocChunkIndex
 from insightforge_agent.stores.source_store import PassageDraft
 
-DOC_SEARCH_EVENT = "doc_search"  # durable record of {query, chunk_ids} a search returned
+DOC_SEARCH_EVENT = "doc_search"  # durable record of {subtask_id, query, chunk_ids} a search returned
 UPLOADED_DOCUMENT_CREDIBILITY = 0.7
 
 DOC_READER_PROMPT = """You are a Document Reader. Your task description starts with
@@ -71,14 +74,24 @@ class DoclingChunker:
         from docling_core.transforms.chunker import HierarchicalChunker
 
         try:
-            result = self._converter_once().convert(
-                DocumentStream(name=filename, stream=io.BytesIO(data)), raises_on_error=False)
-        except Exception as e:  # noqa: BLE001 - any parser failure makes the document unreadable
+            drafts = self._read(filename, data, DocumentStream, ConversionStatus, HierarchicalChunker)
+        except ChunkingError:
+            raise
+        except Exception as e:  # noqa: BLE001 - conversion, chunking or metadata: unreadable PDF
+            # KeyboardInterrupt and SystemExit are BaseException, not Exception: they still stop
+            # the process.
             raise ChunkingError(f"{filename}: {type(e).__name__}: {e}") from e
-        if result.status not in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS):
+        if not drafts:
+            raise ChunkingError(f"{filename}: no text found (scanned PDFs are not read)")
+        return drafts
+
+    def _read(self, filename, data, document_stream, status, chunker) -> list[PassageDraft]:
+        result = self._converter_once().convert(
+            document_stream(name=filename, stream=io.BytesIO(data)), raises_on_error=False)
+        if result.status not in (status.SUCCESS, status.PARTIAL_SUCCESS):
             raise ChunkingError(f"{filename}: conversion {result.status.value}")
         drafts = []
-        for c in HierarchicalChunker().chunk(result.document):
+        for c in chunker().chunk(result.document):
             text = " ".join(c.text.split())
             if not text:
                 continue
@@ -86,9 +99,15 @@ class DoclingChunker:
             headings = c.meta.headings or []
             drafts.append(PassageDraft(text, page=pages[0] if pages else None,
                                        section_heading=headings[-1] if headings else None))
-        if not drafts:
-            raise ChunkingError(f"{filename}: no text found (scanned PDFs are not read)")
         return drafts
+
+
+def searching_subtask(messages) -> str | None:
+    """The Sub-task a Doc Reader works on: the SUBTASK_ID of the task description it was given
+    (its first human message), which the dispatch guard has checked is canonical. Never taken
+    from a tool argument the model chose."""
+    first = next((m for m in messages if isinstance(m, HumanMessage)), None)
+    return dispatched_id(str(first.content)) if first is not None else None
 
 
 def make_doc_search_tool(
@@ -98,18 +117,21 @@ def make_doc_search_tool(
     index: DocChunkIndex,
     events: RunEventRepository,
     now: Callable[[], datetime],
+    lock: AbstractContextManager,
     k: int = DEFAULT_K,
 ) -> BaseTool:
-    lock = threading.Lock()  # one SQLite connection is shared by parallel Researchers
+    """`lock` serialises repository writes with every other Researcher tool of the Run (the
+    repositories' shared lock); the vector search itself runs outside it."""
 
     @tool
-    def doc_search(query: str) -> str:
+    def doc_search(query: str, runtime: ToolRuntime) -> str:
         """Search the user's uploaded documents for the query and return the most relevant
         chunks as JSON {chunk_id, source_id, source_filename, page, relevance_score}."""
         hits = index.search(owner_id, run_id, query, k)
+        subtask_id = searching_subtask(runtime.state.get("messages", []))
         with lock:
             events.append(RunEvent(owner_id=owner_id, run_id=run_id, type=DOC_SEARCH_EVENT,
-                                   payload={"query": query[:500],
+                                   payload={"subtask_id": subtask_id, "query": query[:500],
                                             "chunk_ids": [chunk_id(h.passage) for h in hits]},
                                    created_at=now()))
         return json.dumps([{"chunk_id": chunk_id(h.passage), "source_id": h.source_id,

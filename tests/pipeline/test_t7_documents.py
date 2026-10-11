@@ -408,3 +408,127 @@ def test_a_resumed_run_without_its_uploads_fails_instead_of_dropping_documents(d
              "allowed_types": ["web", "documents"], "has_uploads": True}
     with pytest.raises(RunFailed, match="upload them again"):
         build_graph(deps).invoke(state, outer_config(thread))  # no uploads, as after a restart
+
+
+# --- review round 2: Sub-task chunk authorisation -----------------------------------------
+
+def overreaching_reader(owner_of: dict) -> ScriptedChat:
+    """The Doc Reader for s1 names every chunk of the document, including chunks only s2's
+    search returned; s2's reader names just its own hits. Web Sub-tasks behave normally."""
+    def reply(messages) -> AIMessage:
+        system = " ".join(str(m.content) for m in messages if isinstance(m, SystemMessage))
+        last = messages[-1]
+        task = next(str(m.content) for m in messages if isinstance(m, HumanMessage))
+        if "Document Reader" in system and isinstance(last, ToolMessage):
+            hits = json.loads(str(last.content))
+            ids = [h["chunk_id"] for h in hits]
+            if task.startswith("SUBTASK_ID=s1 "):
+                obs = hits[0]["chunk_id"].split(":")[0]
+                ids = [f"{obs}:{i}" for i in range(len(REPORT))]
+                owner_of["s1_named"] = ids
+            return AIMessage(content=f"RESULT: chunks | chunks: {', '.join(ids)}")
+        return researchers().reply(messages)
+    return ScriptedChat(reply=reply)
+
+
+def test_a_subtask_may_return_only_chunks_its_own_searches_returned(doc_deps):
+    named: dict = {}
+    deps = doc_deps(researcher_model=overreaching_reader(named))
+    snapshots = []
+    uploads = [pdf()]
+    run = run_brief(deps, "alice", brief_with(uploads), uploads=uploads, on_state=snapshots.append)
+    assert run.state == RunState.COMPLETE
+
+    searched: dict[str, set[str]] = {}
+    for e in events(deps, run, "doc_search"):
+        searched.setdefault(e.payload["subtask_id"], set()).update(e.payload["chunk_ids"])
+    assert set(searched) == {"s1", "s2"}  # every search names the Sub-task that made it
+    only_s2 = searched["s2"] - searched["s1"]
+    assert only_s2 and only_s2 <= set(named["s1_named"])  # s1 named chunks it was never given
+
+    research = next(s["research"] for s in reversed(snapshots) if "research" in s)
+    accepted = {r["subtask_id"]: {f"{p['observation_id']}:{p['index']}"
+                                  for ref in r["source_refs"] for p in ref["passages"]}
+                for r in research["results"]}
+    assert accepted["s1"] == searched["s1"]  # only s1's own hits survive
+    assert accepted["s1"].isdisjoint(only_s2)
+    assert accepted["s2"] <= searched["s2"]
+
+
+def test_a_search_without_a_subtask_authorises_nothing(doc_deps):
+    from insightforge_agent.pipeline.graph import returned_chunks
+
+    deps = doc_deps()
+    deps.log("alice", "run_x", "doc_search", subtask_id=None, query="q", chunk_ids=["obs_x:1"])
+    deps.log("alice", "run_x", "doc_search", subtask_id="s2", query="q", chunk_ids=["obs_x:2"])
+    assert returned_chunks(deps, "alice", "run_x") == {"s2": {"obs_x:2"}}
+
+
+# --- review round 2: chunk extraction failures are ChunkingError ---------------------------
+
+class _Converted:
+    status = None
+    document = object()
+
+
+def docling_with(monkeypatch, chunker_cls):
+    """A DoclingChunker whose conversion succeeds and whose chunking is `chunker_cls`."""
+    from docling.datamodel.base_models import ConversionStatus
+    from docling_core.transforms import chunker as docling_chunker
+
+    from insightforge_agent.agents.doc_reader import DoclingChunker
+
+    class Converter:
+        def convert(self, *args, **kwargs):
+            result = _Converted()
+            result.status = ConversionStatus.SUCCESS
+            return result
+
+    monkeypatch.setattr(docling_chunker, "HierarchicalChunker", chunker_cls)
+    reader = DoclingChunker()
+    monkeypatch.setattr(reader, "_converter_once", lambda: Converter())
+    return reader
+
+
+class _FailingChunker:
+    def chunk(self, document):
+        raise ValueError("malformed layout tree")
+
+
+class _BadMetadataChunker:
+    def chunk(self, document):
+        class Chunk:
+            text = "Revenue rose."
+            meta = None  # provenance cannot be read
+        return [Chunk()]
+
+
+@pytest.mark.parametrize("chunker_cls, detail", [
+    (_FailingChunker, "ValueError: malformed layout tree"),
+    (_BadMetadataChunker, "AttributeError"),
+])
+def test_chunking_and_metadata_failures_become_chunking_errors(monkeypatch, chunker_cls, detail):
+    reader = docling_with(monkeypatch, chunker_cls)
+    with pytest.raises(ChunkingError, match=detail):
+        reader.chunk("report.pdf", b"%PDF-1.7")
+
+
+def test_an_interrupt_while_chunking_is_not_swallowed(monkeypatch):
+    class Interrupted:
+        def chunk(self, document):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        docling_with(monkeypatch, Interrupted).chunk("report.pdf", b"%PDF-1.7")
+
+
+def test_a_run_continues_on_web_when_chunk_extraction_fails(doc_deps, monkeypatch):
+    deps = doc_deps(planner_model=fakes.planner(), researcher_model=fakes.researcher(),
+                    chunker=docling_with(monkeypatch, _FailingChunker))
+    run = run_with_document(deps)
+    assert run.state == RunState.COMPLETE
+    (bad,) = [e.payload for e in events(deps, run, "document_unreadable")]
+    assert "malformed layout tree" in bad["reason"]
+    assert events(deps, run, "documents_unavailable")
+    report = deps.repos.reports.get_for_run("alice", run.id)
+    assert [c for s in report.body["draft"]["sections"] for c in s["claims"]]  # web Evidence

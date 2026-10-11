@@ -5,6 +5,7 @@ write a one-line summary in its own bounded call, and hands the Researcher only
 `{source_id, title, summary}`. The Researcher model never sees a Source body."""
 
 import json
+from contextlib import AbstractContextManager
 import re
 import threading
 from collections.abc import Callable
@@ -76,8 +77,11 @@ def make_web_search_tool(
     events: RunEventRepository,
     now: Callable[[], datetime],
     passage_token_cap: int,
+    lock: AbstractContextManager | None = None,
 ) -> BaseTool:
-    store_lock = threading.Lock()  # one SQLite connection is shared by parallel Researchers
+    # Repository writes are serialised with every other Researcher tool of the Run through the
+    # repositories' shared lock; fetching, search and the summary call run outside it.
+    store_lock = lock if lock is not None else threading.RLock()
 
     def log(type_: str, **payload) -> None:
         with store_lock:
