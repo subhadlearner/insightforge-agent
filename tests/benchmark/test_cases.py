@@ -136,3 +136,33 @@ def test_the_committed_fixture_file_loads():
     cases = load_cases(fixture)
     assert {c.type for c in cases} == set(CaseType)
     assert len({c.id for c in cases}) == len(cases)
+
+
+# ---- audit fields kept by the M1.5 review integration -----------------------------------------
+
+_ADJ = dict(expected="DIFFERENT_FACT", first_label="CONTRADICTORY", proposed_label="DIFFERENT_FACT")
+
+
+def test_an_adjudicated_reviewed_case_keeps_both_labels_and_its_rationale():
+    case = BenchmarkCase.model_validate(case_dict(**reviewed(**_ADJ,
+                                                             adjudication_note="owner ruling")))
+    assert (case.first_label.value, case.expected.value) == ("CONTRADICTORY", "DIFFERENT_FACT")
+
+
+@pytest.mark.parametrize("overrides", [
+    {**_ADJ},                                                  # differs, no rationale
+    {**_ADJ, "adjudication_note": "  "},                       # blank rationale
+    {"first_label": "SAME_FACT", "adjudication_note": "x"},    # note but labels agree
+    {**_ADJ, "adjudication_note": "x", "first_label": "GROUNDED"},  # wrong type's label
+    {"proposed_label": "NOT_A_LABEL"},
+])
+def test_inconsistent_audit_fields_are_rejected(overrides):
+    with pytest.raises(ValidationError):
+        BenchmarkCase.model_validate(case_dict(**reviewed(**overrides)))
+
+
+def test_a_proposed_label_carries_no_audit_fields():
+    for extra in ({"first_label": "SAME_FACT"}, {"proposed_label": "SAME_FACT"},
+                  {"adjudication_note": "x"}):
+        with pytest.raises(ValidationError):
+            BenchmarkCase.model_validate(case_dict(**extra))
