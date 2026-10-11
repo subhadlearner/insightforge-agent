@@ -11,14 +11,14 @@ Owner-approved mapping (M1.3, issue #31):
   SUPPORT       always NOT_APPLICABLE (support is an LLM entailment verdict); the lexical
                 check and whether T5 would drop the item are recorded.
   GROUND        CLAIM_PASSAGE: the real `fact_check` gates (`screen`). Since F2, support is an
-                entailment verdict: a Claim that a span passes the similarity and numeric gates
-                for -> NOT_APPLICABLE; otherwise the real `fact_check` (unverified ->
-                NOT_GROUNDED). QUOTED_SPAN: a failed literal check -> NOT_GROUNDED; a pass ->
-                NOT_APPLICABLE (T5 has no span-support judgment).
+                entailment verdict: a span passes the similarity and numeric gates ->
+                NOT_APPLICABLE; the gates reject the Claim -> NOT_GROUNDED (production marks
+                it unverified without a model call); a Historical Claim -> NOT_APPLICABLE.
+                QUOTED_SPAN: a failed literal check -> NOT_GROUNDED; a pass -> NOT_APPLICABLE
+                (T5 has no span-support judgment).
   INDEPENDENCE  `sources_independent`: True -> INDEPENDENT, False -> DEPENDENT.
 
-No model, network or fetch is used: the model slots of `Deps` are tripwires. `fact_check` is
-only called when its gates already reject the Claim, so it never reaches the model."""
+No model, network or fetch is used: the model slots of `Deps` are tripwires."""
 
 import hashlib
 from collections.abc import Sequence
@@ -244,34 +244,29 @@ class DeterministicBaseline:
         draft = ReportDraft(title="benchmark", sections=[ReportSection(
             heading="a", claims=[Claim(text=g.claim, evidence_id=item.id, historical=g.historical)])])
         deps = _deps(repos, store)
-        if not g.historical:
-            gates = screen(deps, g.claim, repos.passages.list(OWNER, observation.id))
-            if gates.candidates:
-                return _verdict(case, JudgeStatus.NOT_APPLICABLE, reason=NO_CLAIM_ENTAILMENT,
-                                diagnostics={
-                                    "production_verdict": "needs_entailment",
-                                    "similarity_threshold": SIMILARITY_THRESHOLD,
-                                    "similarity": gates.similarity,
-                                    "candidate_spans": len(gates.candidates),
-                                    "semantic_entailment": False})
-        report = fact_check(deps, OWNER, case.id, draft, bundle)  # rejects without a model
-        v = report.verdicts[0]
+        if g.historical:  # `fact_check` returns before any embedding or model call
+            v = fact_check(deps, OWNER, case.id, draft, bundle).verdicts[0]
+            return _verdict(case, JudgeStatus.NOT_APPLICABLE,
+                            reason="T6 does not check a Historical Claim",
+                            diagnostics={"production_verdict": v.verdict, "check": v.check,
+                                         "production_reason": v.reason,
+                                         "semantic_entailment": False})
+        # The same gates `fact_check` runs; only an entailment call, never made here, verifies.
+        gates = screen(deps, g.claim, repos.passages.list(OWNER, observation.id))
         diagnostics: dict[str, Scalar] = {
-            "production_verdict": v.verdict, "check": v.check,
-            "similarity_threshold": SIMILARITY_THRESHOLD, "semantic_entailment": False,
-            **({"similarity": v.similarity} if v.similarity is not None else {})}
-        if v.verdict == "unchecked":
-            diagnostics["production_reason"] = v.reason
-            return _verdict(case, JudgeStatus.NOT_APPLICABLE, diagnostics=diagnostics,
-                            reason="T6 does not check a Historical Claim")
-        if v.verdict == "verified":  # only an entailment call can verify; the gates said none
-            raise AssertionError(f"the deterministic baseline must not verify a Claim: {v!r}")
-        below = v.similarity is None or v.similarity < SIMILARITY_THRESHOLD
+            "check": "document_passages", "similarity_threshold": SIMILARITY_THRESHOLD,
+            "similarity": gates.similarity, "semantic_entailment": False}
+        if gates.candidates:
+            return _verdict(case, JudgeStatus.NOT_APPLICABLE, reason=NO_CLAIM_ENTAILMENT,
+                            diagnostics={**diagnostics, "production_verdict": "needs_entailment",
+                                         "candidate_spans": len(gates.candidates)})
+        below = gates.similarity < SIMILARITY_THRESHOLD
         return _verdict(
-            case, JudgeStatus.JUDGED, label=GroundLabel.NOT_GROUNDED, diagnostics=diagnostics,
+            case, JudgeStatus.JUDGED, label=GroundLabel.NOT_GROUNDED,
+            diagnostics={**diagnostics, "production_verdict": "unverified"},
             failure=GroundingFailure.UNSUPPORTED_CLAIM if below
             else GroundingFailure.UNSUPPORTED_NUMBER,
-            reason=f"T6 fact-check left the Claim unverified: {v.reason}")
+            reason=f"T6 fact-check left the Claim unverified: {gates.reason}")
 
     # ---- INDEPENDENCE -------------------------------------------------------------------
 

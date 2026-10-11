@@ -107,23 +107,23 @@ MAX_SENTENCE_CHARS = 600  # a longer "sentence" (scraped text without stops) is 
 
 # A word ending a sentence: "." "!" or "?", optionally followed by closing quotes or brackets.
 _STOP = re.compile(r"[.!?][\"'”’)\]]*$")
-# A short capitalised abbreviation ("Co.", "Ltd.", "Inc.", "Dr.") or dotted initials ("U.S.").
-# A stop after one does not end a sentence, so a company name is not cut in two. Orthographic
-# only: a capitalised word of at most four letters, or two or more single letters with stops.
-_ABBREVIATION = re.compile(r"^(?:[A-Z][a-z]{0,3}|(?:[A-Za-z]\.)+[A-Za-z])\.$")
+# The next sentence's first letter, after any opening quotes or brackets.
+_OPENING = re.compile(r"^[\"'“‘(\[]*([^\W\d_])")
 
 
 def sentences_of(text: str) -> list[str]:
     """The sentences of `text`, in order, each at most `MAX_SENTENCE_CHARS` long. A sentence
-    ends at a stop followed by a word that does not start in lower case, unless the stop
-    belongs to a short abbreviation. Deterministic; nothing but whitespace is dropped."""
+    ends at a stop followed by a word whose first letter is upper case, so "approx. 40%" and
+    "vs. 3.02" stay whole. An abbreviation before a capital ("BYD Co. Ltd.") is cut, which the
+    two-sentence windows of `candidate_spans` put back together; no abbreviation list is kept,
+    so "...than Kia. Hyundai..." is split correctly. Deterministic; only whitespace is dropped."""
     sentences, current = [], []
     words = text.split()
     for n, word in enumerate(words):
         current.append(word)
-        following = words[n + 1] if n + 1 < len(words) else ""
-        if (not following or (_STOP.search(word) and not following[0].islower()
-                              and not _ABBREVIATION.match(word))):
+        following = _OPENING.match(words[n + 1]) if n + 1 < len(words) else None
+        if n + 1 == len(words) or (_STOP.search(word) and following
+                                   and following.group(1).isupper()):
             sentences.extend(_pieces(" ".join(current), MAX_SENTENCE_CHARS))
             current = []
     return sentences
@@ -131,11 +131,20 @@ def sentences_of(text: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Span:
-    """A sentence, or two adjacent sentences, of one Passage: what the Fact-Checker compares a
-    Claim with. Temporary like a Window; it still names, and is cited as, its parent Passage."""
+    """One sentence, or a window of adjacent sentences (`first` to `last`, by position), of one
+    Passage: what the Fact-Checker compares a Claim with. Temporary like a Window; it still
+    names, and is cited as, its parent Passage."""
 
     passage: Passage
     text: str
+    first: int = 0
+    last: int = 0
+
+    def overlaps(self, other: "Span") -> bool:
+        """Whether both come from the same Passage and share a sentence."""
+        return (self.passage.observation_id, self.passage.index) == (
+            other.passage.observation_id, other.passage.index) and (
+            self.first <= other.last and other.first <= self.last)
 
 
 MAX_WINDOW_SENTENCES = 4  # the widest window, however many sentences a Claim has
@@ -159,7 +168,7 @@ def candidate_spans(passages: list[Passage], width: int = 2) -> list[Span]:
         for n in range(len(sentences)):
             for k in range(1, width + 1):
                 if n + k <= len(sentences):
-                    spans.append(Span(passage, " ".join(sentences[n:n + k])))
+                    spans.append(Span(passage, " ".join(sentences[n:n + k]), n, n + k - 1))
     return spans
 
 

@@ -27,12 +27,18 @@ def test_sentences_split_at_stops_and_keep_decimals_and_figures_whole():
         "Sales rose!", 'Did "they" fall?', '"No."', "Then 2025."]
 
 
-def test_a_short_abbreviation_or_initials_do_not_end_a_sentence():
-    assert sentences_of("BYD Co. Ltd. sold 4.27 million vehicles. Sales in the U.S. fell.") == [
-        "BYD Co. Ltd. sold 4.27 million vehicles.", "Sales in the U.S. fell."]
-    # An acronym is not an abbreviation, and a lower-case next word continues the sentence.
-    assert sentences_of("Sold by BYD. Then approx. half were hybrids.") == [
-        "Sold by BYD.", "Then approx. half were hybrids."]
+def test_a_sentence_ends_only_before_a_capital_and_no_abbreviation_list_is_kept():
+    # A stop before a lower-case word, a digit or a symbol does not end the sentence.
+    assert sentences_of("Sales rose approx. 40% vs. 3.02 million, est. $5 billion. Then fell.") == [
+        "Sales rose approx. 40% vs. 3.02 million, est. $5 billion.", "Then fell."]
+    assert sentences_of("Sales in the U.S. fell. Sold by BYD. Its rival is Kia. Hyundai grew.") == [
+        "Sales in the U.S. fell.", "Sold by BYD.", "Its rival is Kia.", "Hyundai grew."]
+
+
+def test_a_name_cut_at_an_abbreviation_is_whole_again_in_a_window():
+    text = "BYD Co. Ltd. sold 4.27 million vehicles."
+    assert sentences_of(text) == ["BYD Co.", "Ltd. sold 4.27 million vehicles."]
+    assert text in [s.text for s in candidate_spans([passage(text)])]
 
 
 def test_a_sentence_longer_than_the_cap_is_cut_into_bounded_pieces():
@@ -48,10 +54,17 @@ def test_spans_are_each_sentence_then_its_window_with_the_next_and_name_their_pa
     spans = candidate_spans([first, second])
     s = sentences_of(PARAGRAPH)
     assert spans == [
-        Span(first, s[0]), Span(first, f"{s[0]} {s[1]}"),
-        Span(first, s[1]), Span(first, f"{s[1]} {s[2]}"),
-        Span(first, s[2]),
-        Span(second, "One sentence only.")]
+        Span(first, s[0], 0, 0), Span(first, f"{s[0]} {s[1]}", 0, 1),
+        Span(first, s[1], 1, 1), Span(first, f"{s[1]} {s[2]}", 1, 2),
+        Span(first, s[2], 2, 2),
+        Span(second, "One sentence only.", 0, 0)]
+
+
+def test_spans_overlap_only_within_one_passage_when_they_share_a_sentence():
+    a, b = passage(PARAGRAPH), passage(PARAGRAPH, index=1)
+    assert Span(a, "x", 0, 1).overlaps(Span(a, "y", 1, 2))
+    assert not Span(a, "x", 0, 0).overlaps(Span(a, "y", 1, 2))
+    assert not Span(a, "x", 0, 1).overlaps(Span(b, "y", 0, 1))
 
 
 def test_windows_are_as_wide_as_the_claim_from_two_up_to_four_sentences():

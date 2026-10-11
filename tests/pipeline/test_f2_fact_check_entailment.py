@@ -5,12 +5,16 @@ deterministic `HashingEmbedder`, so the gates are exact. Real-embedder retrieval
 tests/integration/test_f2_fact_check_bge.py."""
 
 import json
+import math
 import re
 
 import pytest
 from langchain_core.messages import AIMessage
 
-from insightforge_agent.pipeline.fact_check import TOP_K, fact_check
+from insightforge_agent.domain.models import Passage
+from insightforge_agent.domain.passages import candidate_spans
+from insightforge_agent.embeddings import HashingEmbedder
+from insightforge_agent.pipeline.fact_check import TOP_K, fact_check, screen
 from tests.pipeline.test_t6_writer_fact_check import SALES, URL, Fetcher, draft_of, evidence
 from tests.scripted import ScriptedChat
 
@@ -85,6 +89,69 @@ def test_a_claim_inside_a_paragraph_is_judged_against_its_sentence_not_the_parag
     assert v.verdict == "verified" and v.similarity == pytest.approx(1.0)
     texts = [t for _, t in numbered(model.seen[0])]
     assert texts[0] == SALES and PARAGRAPH not in texts
+
+
+class TableEmbedder:
+    """The Claim is [1, 0]; a listed span is at the given cosine from it; anything else is 0."""
+
+    def __init__(self, claim: str, scores: dict[str, float]) -> None:
+        self.claim, self.scores, self.embedded = claim, scores, []
+
+    def embed(self, texts):
+        self.embedded.extend(texts)
+        return [[1.0, 0.0] if t == self.claim else
+                [self.scores.get(t, 0.0), math.sqrt(1 - self.scores.get(t, 0.0) ** 2)]
+                for t in texts]
+
+
+def test_a_sentence_and_its_own_windows_cannot_crowd_out_a_supporting_sentence(make_deps):
+    claim = "First part. Second part. Third part."  # three sentences: windows up to three wide
+    near = Passage(observation_id="o", index=0, text="Near miss. Tail one. Tail two.")
+    good = Passage(observation_id="o", index=1, text="Supporting sentence.")
+    deps = make_deps(embedder=TableEmbedder(claim, {
+        "Near miss.": 0.96, "Near miss. Tail one.": 0.955, "Near miss. Tail one. Tail two.": 0.95,
+        "Supporting sentence.": 0.93}))
+    s = screen(deps, claim, [near, good])
+    assert [span.text for _, span in s.candidates] == ["Near miss.", "Supporting sentence."]
+    assert s.candidates[1][1].passage == good
+
+
+def test_the_payload_is_trimmed_to_the_per_call_cap_keeping_the_best_span(make_deps):
+    model = judge("SUPPORTED")
+    deps = make_deps(fetcher=Fetcher({URL: "\n\n".join([SALES] * 5)}), light_model=model,
+                     passage_token_cap=1)
+    _, bundle = evidence(deps, ["\n\n".join([SALES] * 5)])
+    (v,) = fact_check(deps, "alice", "run_1", draft_of([SALES]), bundle).verdicts
+    assert v.verdict == "verified" and len(numbered(model.seen[0])) == 1
+
+
+def test_a_broken_invariant_in_the_model_slot_is_not_swallowed(make_deps):
+    def tripwire(messages):
+        raise AssertionError("must not use a model")
+    with pytest.raises(AssertionError, match="must not use a model"):
+        check(make_deps, ScriptedChat(reply=tripwire))
+
+
+def test_a_source_cited_by_several_claims_has_its_spans_embedded_once(make_deps):
+    class CountingEmbedder(HashingEmbedder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.embedded: list[str] = []
+
+        def embed(self, texts):
+            self.embedded.extend(texts)
+            return super().embed(texts)
+
+    other = "Plug-in hybrids made up about half of those sales."
+    counting = CountingEmbedder()
+    deps = make_deps(fetcher=Fetcher({URL: PARAGRAPH}), embedder=counting,
+                     light_model=judge("SUPPORTED"))
+    _, bundle = evidence(deps, [SALES, other], body=PARAGRAPH)
+    result = fact_check(deps, "alice", "run_1", draft_of([SALES, other]), bundle)
+    assert [v.verdict for v in result.verdicts] == ["verified", "verified"]
+    spans = [s.text for s in candidate_spans(deps.repos.passages.list(
+        "alice", result.verdicts[0].matched.observation_id))]
+    assert all(counting.embedded.count(t) == 1 for t in spans)
 
 
 def test_a_claim_of_several_sentences_is_matched_by_a_window_as_wide(make_deps):

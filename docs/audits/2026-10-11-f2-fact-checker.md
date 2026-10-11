@@ -23,10 +23,10 @@ The owner therefore approved, on 2026-10-12, both options from the decision brie
    - Single-sentence Claims, the normal case, are unaffected.
 2. **Relevance.** The production embedder (bge-small) scores the Claim against every span. Spans under 0.85 are dropped (threshold unchanged).
 3. **Figures.** Spans that do not state every figure or year of the Claim are dropped (numeric check unchanged). With no span left: `unverified`, no model call.
-4. **Support.** The best 3 spans go to **one** light-model entailment call, using Synthesis's prompt and schema (`pipeline/entailment.py`). The Claim is `verified` only if a span is judged SUPPORTED, unambiguously.
+4. **Support.** The best 3 spans that share no sentence go to **one** light-model entailment call, using Synthesis's prompt and schema (`pipeline/entailment.py`), trimmed to the per-call token cap. The Claim is `verified` only if a span is judged SUPPORTED, unambiguously.
 5. **Fail closed.** An exception, invalid JSON, or no usable verdict leaves the Claim `unverified` and logs `fact_check_entailment_failed`. It is never `unchecked`, which the pass rate would leave out.
 
-Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVERIFIED]`, and the re-fetch versus `document_passages` split. Not used: no entity or measure lexicon, no regex reading of meaning, no other embedding model, no new resolver. Sentence splitting is orthographic (stops, case and short abbreviations).
+Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVERIFIED]`, and the re-fetch versus `document_passages` split. Not used: no entity or measure lexicon, no regex reading of meaning, no other embedding model, no new resolver. Sentence splitting is orthographic: a stop before an upper-case letter. There is no abbreviation list.
 
 **Cost.** At most one light call per sampled Claim, none when the gates leave no span: about 5-8 calls for a typical Report.
 
@@ -56,8 +56,9 @@ No xfails remain. The "model call" column is pinned by the tests: bge-small pass
 ### Remaining limitations
 
 - **Real-model behaviour is unmeasured.** Every rejection of a wrong-measure or wrong-entity Claim depends on the light model answering as the oracle does. One authorised live validation is the next step.
-- **Top-3 cut.** If more than 3 spans pass the gates, only the 3 most similar are judged, so a supporting span ranked fourth is not seen. Near-duplicate spans (a sentence and its windows) can fill the 3 slots.
-- **Sentence splitting is orthographic.** A sentence ending in a short capitalised word ("...than Ford. Tesla...") is not split, so the span is longer. A Claim of more than four sentences is matched only through four-sentence windows, so it may fail the numeric gate (fail closed).
+- **Top-3 cut.** If more than 3 non-overlapping spans pass the gates, only the 3 most similar are judged, so a supporting span ranked fourth is not seen.
+- **Sentence splitting is orthographic.** An abbreviation before a capital ("Co. Ltd.") cuts a sentence, and only a window puts it back together. A stop before a digit ("...in 2024. 2025 was...") does not split, so that span is longer. A Claim of more than four sentences is matched only through four-sentence windows, so it may fail the numeric gate (fail closed).
+- **Token cap.** The entailment call counts against `run_token_cap`. When a cap is configured (none by default), exceeding it during fact-checking fails the Run, as it does in Synthesis, under the existing Run-limit policy.
 - **The benchmark baseline cannot verify.** It makes no model call, so a CLAIM_PASSAGE case that passes the gates is now NOT_APPLICABLE (baseline `m1.3-2`); it still uses `HashingEmbedder(256)`, not bge-small.
 
 ## Post-T7 measurement before the fix: production `bge-small` (2026-10-11)

@@ -121,7 +121,7 @@ def test_a_quoted_span_that_passes_the_lexical_check_is_not_applicable():
 def test_a_claim_passing_the_fact_check_gates_is_not_applicable_since_entailment_decides(
         monkeypatch):
     # F2: only the entailment call can verify, and the baseline makes no model call.
-    monkeypatch.setattr(b, "fact_check", lambda *a, **k: pytest.fail("fact_check would ask a model"))
+    monkeypatch.setattr(b, "fact_check", lambda *a, **k: pytest.fail("only for Historical Claims"))
     text = "BYD sold 4.27 million battery electric vehicles in 2025."
     v = judge(ground("CLAIM_PASSAGE", text, text))
     assert v.status is JudgeStatus.NOT_APPLICABLE and v.label is None
