@@ -18,7 +18,7 @@ This shows only that the **keys** collide. It does not show what the full pipeli
 
 ## 2. Production Synthesis behaviour (Phase 1, before any change)
 
-`tests/pipeline/test_f4_false_merge.py` drives the real `synthesize()`. Each case is two web Sources on different domains, credibility 0.9. Drafting is scripted with the reviewed statements and structured fields, and the non-canonical period wording is returned as the model would give it. Entailment is scripted as the semantically correct verdict. Pinned in commit `cbad0a7`:
+`tests/pipeline/test_f4_false_merge.py` drives the real `synthesize()`. Each case is two web Sources on different domains, credibility 0.9. Drafting is scripted with the reviewed statements and structured fields, and the non-canonical period wording is returned as the model would give it. Entailment is scripted as the semantically correct verdict. Pinned in commit `7ebbaaf`:
 
 | Case | Drafted | After Merge | Final items (supporting) | Confidence | Effect |
 |---|---|---|---|---|---|

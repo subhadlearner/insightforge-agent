@@ -105,9 +105,19 @@ P_FM_02_BARE = Case(
     Side(P_FM_02.b.url, P_FM_02.b.passage, "Aldine Capital closed a $400 million fund in 2024.", "2024"))
 
 
+# The real stage functions, captured once so repeated runs in one test never nest the spies.
+_REAL_DRAFT, _REAL_VALIDATE = synth._draft, synth._validate
+
+
+@dataclass(frozen=True)
+class Drafted:
+    id: str
+    refs: tuple[PassageRef, ...]
+
+
 @dataclass
 class Outcome:
-    drafted: list  # the candidates `_draft` returned, in order
+    drafted: list[Drafted]  # what `_draft` returned, in order, before Merge
     merged: list[list[str]]  # per candidate reaching validation: the Sources (tags) it cites
     items: list[EvidenceItem]
     tag_of: dict[str, str] = field(default_factory=dict)  # observation id -> page tag
@@ -148,16 +158,17 @@ def synth_run(make_deps, monkeypatch, pages: dict[str, tuple[str, str, datetime 
     tag_of = {o.id: t for t, o in obs_of.items()}
 
     drafted, merged = [], []
-    real_draft, real_validate = synth._draft, synth._validate
 
     def spy_draft(*a, **k):
-        out = real_draft(*a, **k)
-        drafted.extend(out)
+        out = _REAL_DRAFT(*a, **k)
+        # Snapshot: Merge later extends the first candidate's refs in place.
+        drafted.extend(Drafted(c.id, tuple(c.refs)) for c in out)
         return out
 
-    def spy_validate(deps_, owner, run_id, c, *rest):
+    def spy_validate(*a, **k):
+        c = k["c"] if "c" in k else a[3]
         merged.append(sorted(tag_of[r.observation_id] for r in c.refs))
-        return real_validate(deps_, owner, run_id, c, *rest)
+        return _REAL_VALIDATE(*a, **k)
 
     monkeypatch.setattr(synth, "_draft", spy_draft)
     monkeypatch.setattr(synth, "_validate", spy_validate)

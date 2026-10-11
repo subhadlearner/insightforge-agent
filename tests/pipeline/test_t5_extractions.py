@@ -32,7 +32,7 @@ from insightforge_agent.pipeline.synthesize import merge_identity
           scope="global", asof="2025"),
      "byd sold things", "ev_ab8c41bc63a9ca28"),
 ])
-def test_merge_identity_is_unchanged(fields, identity, evidence_id):
+def test_merge_identity_golden_values(fields, identity, evidence_id):
     asof = fields.pop("asof")
     got = merge_identity(**fields, period=stated_period(asof), observations=["obs_1"])
     assert got == identity
