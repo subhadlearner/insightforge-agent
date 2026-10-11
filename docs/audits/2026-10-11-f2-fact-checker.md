@@ -23,8 +23,8 @@ The owner therefore approved, on 2026-10-12, both options from the decision brie
    - Single-sentence Claims, the normal case, are unaffected.
 2. **Relevance.** The production embedder (bge-small) scores the Claim against every span. Spans under 0.85 are dropped (threshold unchanged).
 3. **Figures.** Spans that do not state every figure or year of the Claim are dropped (numeric check unchanged). With no span left: `unverified`, no model call.
-4. **Support.** The best 3 spans that share no sentence go to **one** light-model entailment call, using Synthesis's prompt and schema (`pipeline/entailment.py`), trimmed to the per-call token cap. The Claim is `verified` only if a span is judged SUPPORTED, unambiguously.
-5. **Fail closed.** An exception, invalid JSON, or no usable verdict leaves the Claim `unverified` and logs `fact_check_entailment_failed`. It is never `unchecked`, which the pass rate would leave out.
+4. **Support.** The best 3 spans that share no sentence go to **one** light-model entailment call, using Synthesis's prompt and schema (`pipeline/entailment.py`). The whole request is held within `passage_token_cap` by dropping the weakest spans; if even the best one alone does not fit, no call is made and the Claim is `unverified`. The Claim is `verified` only if a span is judged SUPPORTED, unambiguously.
+5. **Fail closed.** Any ordinary exception from the model path (`AssertionError` included), invalid JSON, or no usable verdict leaves the Claim `unverified` and logs `fact_check_entailment_failed`. Only `KeyboardInterrupt` and `SystemExit` propagate. It is never `unchecked`, which the pass rate would leave out.
 
 Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVERIFIED]`, and the re-fetch versus `document_passages` split. Not used: no entity or measure lexicon, no regex reading of meaning, no other embedding model, no new resolver. Sentence splitting is orthographic: a stop before an upper-case letter. There is no abbreviation list.
 

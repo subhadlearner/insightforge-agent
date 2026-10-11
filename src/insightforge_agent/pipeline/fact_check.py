@@ -116,20 +116,26 @@ def _entailed(deps: Deps, owner_id: str, run_id: str, statement: str,
               candidates: list[tuple[float, Span]],
               **where) -> tuple[tuple[float, Span] | None, str]:
     """Step 4: the best candidate judged SUPPORTED, or None and the reason none is. The
-    payload is held to the per-call cap by dropping the weakest candidates (the best one is
-    always sent). `where` names the Claim in the logged events."""
+    request is held to the per-call cap by dropping the weakest candidates; if even the best
+    one alone does not fit, no call is made. `where` names the Claim in the logged events."""
     def payload(cands: list[tuple[float, Span]]) -> str:
         return f"Statement: {statement}\n\n" + render_batch(
             [Window(span.passage, span.text) for _, span in cands])
 
-    while len(candidates) > 1 and estimate_tokens(payload(candidates)) > deps.passage_token_cap:
+    def size(cands: list[tuple[float, Span]]) -> int:  # the whole request, system prompt included
+        return estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(payload(cands))
+
+    while len(candidates) > 1 and size(candidates) > deps.passage_token_cap:
         candidates = candidates[:-1]
-    user = payload(candidates)
+    user, tokens = payload(candidates), size(candidates)
+    if tokens > deps.passage_token_cap:  # never exceed the cap: fail closed without a call
+        deps.log(owner_id, run_id, "fact_check_entailment_skipped", **where, tokens=tokens,
+                 passage_token_cap=deps.passage_token_cap)
+        return None, (f"the entailment request ({tokens} tokens) exceeds the per-call cap of "
+                      f"{deps.passage_token_cap}")
     deps.spend(owner_id, run_id, ENTAIL_SYSTEM, user)
     try:
         reply = ask_json(deps.light_model, ENTAIL_SYSTEM, user, EntailmentVerdicts)
-    except AssertionError:  # a broken invariant (a test tripwire), not a model failure
-        raise
     except Exception as e:  # noqa: BLE001 - fail closed: without a judgment nothing is supported
         deps.log(owner_id, run_id, "fact_check_entailment_failed", **where,
                  error=f"{type(e).__name__}: {e}"[:300])

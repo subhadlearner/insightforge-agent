@@ -13,7 +13,9 @@ from langchain_core.messages import AIMessage
 
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.passages import candidate_spans
+from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import HashingEmbedder
+from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM
 from insightforge_agent.pipeline.fact_check import TOP_K, fact_check, screen
 from tests.pipeline.test_t6_writer_fact_check import SALES, URL, Fetcher, draft_of, evidence
 from tests.scripted import ScriptedChat
@@ -116,20 +118,57 @@ def test_a_sentence_and_its_own_windows_cannot_crowd_out_a_supporting_sentence(m
     assert s.candidates[1][1].passage == good
 
 
-def test_the_payload_is_trimmed_to_the_per_call_cap_keeping_the_best_span(make_deps):
-    model = judge("SUPPORTED")
-    deps = make_deps(fetcher=Fetcher({URL: "\n\n".join([SALES] * 5)}), light_model=model,
-                     passage_token_cap=1)
-    _, bundle = evidence(deps, ["\n\n".join([SALES] * 5)])
+def request_tokens(messages) -> int:
+    return sum(estimate_tokens(str(m.content)) for m in messages)
+
+
+def capped(make_deps, model, cap: int):
+    page = "\n\n".join([SALES] * 5)  # five identical Passages: three candidates qualify
+    deps = make_deps(fetcher=Fetcher({URL: page}), light_model=model, passage_token_cap=cap)
+    _, bundle = evidence(deps, [page])
     (v,) = fact_check(deps, "alice", "run_1", draft_of([SALES]), bundle).verdicts
+    return v, deps
+
+
+def test_weaker_candidates_are_dropped_until_the_request_fits_the_cap(make_deps):
+    one = estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(f"Statement: {SALES}\n\n[1] {SALES}")
+    model = judge("SUPPORTED")
+    v, _ = capped(make_deps, model, cap=one)
     assert v.verdict == "verified" and len(numbered(model.seen[0])) == 1
+    assert request_tokens(model.seen[0]) <= one
 
 
-def test_a_broken_invariant_in_the_model_slot_is_not_swallowed(make_deps):
-    def tripwire(messages):
-        raise AssertionError("must not use a model")
-    with pytest.raises(AssertionError, match="must not use a model"):
-        check(make_deps, ScriptedChat(reply=tripwire))
+def test_no_call_and_unverified_when_even_the_best_candidate_exceeds_the_cap(make_deps):
+    model = judge("SUPPORTED")
+    v, deps = capped(make_deps, model, cap=1)
+    assert model.seen == []
+    assert v.verdict == "unverified" and "exceeds the per-call cap of 1" in v.reason
+    (skipped,) = events(deps, "fact_check_entailment_skipped")
+    assert skipped["passage_token_cap"] == 1 and skipped["tokens"] > 1
+
+
+def test_every_request_at_the_default_cap_fits_it(make_deps):
+    model = judge("SUPPORTED")
+    v, deps, _ = check(make_deps, model, page="\n\n".join([PARAGRAPH] * 4))
+    assert v.verdict == "verified" and len(numbered(model.seen[0])) == TOP_K
+    assert request_tokens(model.seen[0]) <= deps.passage_token_cap
+
+
+def test_an_assertion_error_from_the_model_fails_closed_like_any_exception(make_deps):
+    def broken(messages):
+        raise AssertionError("library invariant failed")
+    v, deps, result = check(make_deps, ScriptedChat(reply=broken))
+    assert v.verdict == "unverified" and "AssertionError" in v.reason
+    assert result.summary["unchecked"] == 0 and result.summary["pass_rate"] == 0.0
+    (failed,) = events(deps, "fact_check_entailment_failed")
+    assert "library invariant failed" in failed["error"]
+
+
+def test_an_interrupt_is_not_caught(make_deps):
+    def interrupted(messages):
+        raise KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        check(make_deps, ScriptedChat(reply=interrupted))
 
 
 def test_a_source_cited_by_several_claims_has_its_spans_embedded_once(make_deps):
