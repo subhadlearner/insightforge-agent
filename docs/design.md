@@ -306,7 +306,7 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Embedding** (`pipeline/fact_check.Vectors`): each distinct text is embedded once per fact-check, so a Source cited by several sampled Claims is not embedded again.
 - **Cost.** At most one light call per sampled Claim, and none when no span passes the gates: about 5-8 calls for a typical Report (20% of Claims, minimum 5).
 - **Benchmark baseline.** It makes no model call, so a CLAIM_PASSAGE case whose spans pass the gates is now NOT_APPLICABLE (as SUPPORT is); one the gates reject is still NOT_GROUNDED, from the real gates (`fact_check.screen`) (`benchmark/baseline.py`, version `m1.3-2`).
-- **Tests.** `tests/domain/test_spans.py`, `tests/pipeline/test_f2_fact_check_entailment.py` (scripted judge, in CI) and `tests/integration/test_f2_fact_check_bge.py` (real bge-small retrieval with an oracle judge; `-m integration`).
+- **Tests.** `tests/domain/test_spans.py`, `tests/pipeline/test_f2_fact_check_entailment.py` (scripted judge, in CI) and `tests/integration/test_f2_fact_check_bge.py` (real bge-small retrieval with an oracle judge; `-m integration`). `tests/live/test_f2_real_model.py` (paid; `-m live` plus `INSIGHTFORGE_ALLOW_LIVE_TESTS=1`) runs the same 16 cases with the production light model; it passed 16/16 with `claude-haiku-5-5` on 2026-10-12, and F2 is closed.
 
 ### T7 notes: Document ingestion and Doc Reader
 

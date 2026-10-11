@@ -2,9 +2,11 @@
 
 Follows audit finding F2 (`2026-10-11-evidence-quality-audit.md`). The original policy (ledger row 13, T6): cosine similarity >= 0.85 between the Claim and the best re-fetched Passage, every figure of the Claim stated in that Passage (`unsupported_numbers`), otherwise `unverified`.
 
-## Status: implemented, pending one real-model validation (2026-10-12)
+## Status: CLOSED (2026-10-12), real-model validation passed 16/16
 
-**The owner approved a change to the verification policy, and it is implemented. F2 is not closed:** the entailment step is tested only with scripted judges. The owner will decide separately whether to authorise one small real light-model validation.
+**The owner approved a change to the verification policy, and it is implemented.**
+- **Validation.** The owner-authorised validation with the production light model, `claude-haiku-5-5` (Anthropic), passed all 16 F2 cases on a single run with no retries (section "Real-model validation" below).
+- **Not covered.** Remaining limits go to the T16 evaluation watchlist at the end of this section.
 
 **Why the policy changed instead of the threshold.** Measured with the production `bge-small` embedder (section below), no similarity threshold separates correct Claims from wrong ones:
 
@@ -36,7 +38,7 @@ Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVE
 
 ### Final regression matrix (real bge-small retrieval, scripted oracle judge)
 
-`tests/integration/test_f2_fact_check_bge.py`, offline, `-m integration`. Retrieval, gates and plumbing are real; the judge is an oracle that says SUPPORTED only for a span containing the sentence that states the Claim. So a correct Claim verifies only if bge-small retrieved that sentence, and a wrong one is rejected because the judge rejects it. **Whether a real light model judges as the oracle does is the open validation.**
+`tests/integration/test_f2_fact_check_bge.py`, offline, `-m integration`. Retrieval, gates and plumbing are real; the judge is an oracle that says SUPPORTED only for a span containing the sentence that states the Claim. So a correct Claim verifies only if bge-small retrieved that sentence, and a wrong one is rejected because the judge rejects it. The real light model's judgments on the same cases are in the next section.
 
 | Case | Judged span (its own score) | Gates | Model call | Verdict | Before F2 |
 |---|---|---|---|---|---|
@@ -58,14 +60,58 @@ Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVE
 
 No xfails remain. The "model call" column is pinned by the tests: bge-small passes every wrong-measure and wrong-entity Claim to the judge, so their rejection rests entirely on the entailment call. The numeric gate alone stops wrong years.
 
-### Remaining limitations
+### Real-model validation (2026-10-12, owner-authorised, head `9bd27c0`)
 
-- **Real-model behaviour is unmeasured.** Every rejection of a wrong-measure or wrong-entity Claim depends on the light model answering as the oracle does. One authorised live validation is the next step.
+`tests/live/test_f2_real_model.py` ran the 16 cases once through the real `fact_check()`, with nothing changed and nothing retried:
+- **Embedder:** `FastEmbedEmbedder("BAAI/bge-small-en-v1.5")` from the local cache.
+- **Judge:** the configured production light model, `build_chat_model("light")` with `LLM_PROVIDER=anthropic`, which is `claude-haiku-5-5`.
+- **Policy:** threshold 0.85, `TOP_K` 3 and the prompt unchanged.
+
+To repeat it: `INSIGHTFORGE_ALLOW_LIVE_TESTS=1 uv run pytest tests/live/test_f2_real_model.py -m live -s`.
+
+| Case | Expected | Actual | Model called | Judged span | bge-small | Entailment | Result |
+|---|---|---|---|---|---|---|---|
+| g-qu-02, gigawatt-hours vs GWh | verified | verified | yes | "Battery output hit 4.27 GWh at Tessera Energy's Nevada plant." | 0.871 | SUPPORTED | pass |
+| Writer paraphrase, one sentence | verified | verified | yes | "BYD sold 4.27 million vehicles in 2025, up from 3.02 million in 2024." | 0.961 | SUPPORTED | pass |
+| General Motors vs GM | verified | verified | yes | "GM delivered 2.7 million vehicles in the US in 2025." | 0.987 | SUPPORTED | pass |
+| GM vs General Motors | verified | verified | yes | "General Motors delivered 2.7 million vehicles in the US in 2025." | 0.987 | SUPPORTED | pass |
+| BYD vs BYD Co. Ltd. | verified | verified | yes | "BYD Co. Ltd. sold 4.27 million vehicles in 2025, up from 3.02 million in 2024." | 0.990 | SUPPORTED | pass |
+| Word-for-word Claim in paragraph | verified | verified | yes | first sentence + "Plug-in hybrids made up about half of those sales, ..." | 0.891 | SUPPORTED | pass |
+| Writer paraphrase in paragraph | verified | verified | yes | (same window) | 0.864 | SUPPORTED | pass |
+| Light paraphrase in paragraph | verified | verified | yes | (same window) | 0.868 | SUPPORTED | pass |
+| Subject in the previous sentence | verified | verified | yes | "BYD is a Chinese automaker. It sold 3.02 million vehicles in 2023." | 0.877 | SUPPORTED | pass |
+| Wrong year, one sentence | unverified | unverified | **no** (numeric gate: "2023") | - | 0.987 | - | pass |
+| Wrong year, paragraph | unverified | unverified | **no** (numeric gate: "2023") | - | 0.987 | - | pass |
+| g-ma-02, R&D $90M (revenue is $90M) | unverified | unverified | yes | "Orrin Bio's revenue was $90 million; its R&D spend was $40 million." | 0.948 | CONTRADICTED | pass |
+| Wrong measure ("exported"), one sentence | unverified | unverified | yes | "BYD sold 4.27 million vehicles in 2025, up from 3.02 million in 2024." | 0.963 | INSUFFICIENT_EVIDENCE | pass |
+| Wrong measure, paragraph | unverified | unverified | yes | (the same first sentence) | 0.963 | INSUFFICIENT_EVIDENCE | pass |
+| Wrong entity ("Tesla"), one sentence | unverified | unverified | yes | (the same first sentence) | 0.857 | INSUFFICIENT_EVIDENCE | pass |
+| Wrong entity, paragraph | unverified | unverified | yes | (the same first sentence) | 0.857 | INSUFFICIENT_EVIDENCE | pass |
+
+**Totals:**
+- **Calls and errors:** 14 light-model calls (the two wrong-year cases made none, as designed), 0 provider errors and 0 parse failures.
+- **Tokens:** 4,017 input and 3,707 output. The output includes Haiku 5.5's default thinking, about 265 tokens a call.
+- **Cost:** about $0.0023 at $0.10 / $0.50 per million input / output tokens.
+
+Each judged span was one span per call, in every case.
+
+### T16 evaluation watchlist (remaining limitations)
+
+The F2 validation is 16 synthetic cases and one model run. T16's evaluation should measure these on real Reports:
+- **Live pass rate.** The share of sampled Claims verified on real Reports, against the 80% target. That includes how often true Claims are marked `[UNVERIFIED]` because a judge was cautious, and whether the paragraph windows near the threshold (0.864-0.891) hold up on real paraphrases.
+- **Judge consistency.** The same span judged on repeat runs, and wrong-measure or wrong-entity Claims that are subtler than these cases.
+- **Outages show as unverified.** A provider outage or auth failure marks every gated Claim `unverified` (fail closed by policy) and lowers the pass rate. Watch the `fact_check_entailment_failed` and `fact_check_entailment_skipped` events.
+- **One SUPPORTED wins.** One SUPPORTED span verifies the Claim even when another span in the same call is CONTRADICTED (approved rule). Track how often that happens.
 - **Partial overlaps.** A window that only partly covers another group does not widen anything, so no sentence is shown twice. In return, a pronoun sentence whose subject sits in another group's window is judged without its subject.
 - **Top-3 cut.** If more than 3 groups of overlapping spans pass the gates, only the 3 most similar are judged, so a supporting span ranked fourth is not seen.
 - **Sentence splitting is orthographic.** An abbreviation before a capital ("Co. Ltd.") cuts a sentence, and only a window puts it back together. A stop before a digit ("...in 2024. 2025 was...") does not split, so that span is longer. A Claim of more than four sentences is matched only through four-sentence windows, so it may fail the numeric gate (fail closed).
 - **Token cap.** The entailment call counts against `run_token_cap`. When a cap is configured (none by default), exceeding it during fact-checking fails the Run, as it does in Synthesis, under the existing Run-limit policy.
 - **The benchmark baseline cannot verify.** It makes no model call, so a CLAIM_PASSAGE case that passes the gates is now NOT_APPLICABLE (baseline `m1.3-2`); it still uses `HashingEmbedder(256)`, not bge-small.
+- **Cost and latency.**
+  - A Claim citing a large uploaded PDF embeds every sentence and window of the document.
+  - Entailment calls run one after another: about 5-8 per Report.
+  - A widened span can exceed a small, non-default `passage_token_cap` when its anchor would fit; the Claim then fails closed.
+- **Two splitters.** The Writer (`pipeline/write.py`) and the Fact-Checker split sentences differently. A sentence starting with a digit or a lower-case word ("iPhone") is joined to the one before it.
 
 ## Post-T7 measurement before the fix: production `bge-small` (2026-10-11)
 
