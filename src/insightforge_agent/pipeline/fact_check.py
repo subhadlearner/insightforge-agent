@@ -73,9 +73,9 @@ class _Group(NamedTuple):
 class Screened:
     """The deterministic part of a verdict (steps 1-3). `candidates` are the spans, in group
     rank order, that the entailment call judges, each with the similarity computed for that
-    exact span (never the group's rank);
-    when there are none, `reason` says why. `similarity` and `matched` describe the best
-    candidate, else the best span the gates rejected."""
+    exact span (never the group's rank); when there are none, `reason` says why.
+    `similarity` and `matched` describe the first (highest-ranked) candidate, with its own
+    similarity, else the best span the gates rejected."""
 
     similarity: float
     matched: PassageRef | None
