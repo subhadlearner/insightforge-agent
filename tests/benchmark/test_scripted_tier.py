@@ -6,7 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from insightforge_agent.agents.llm_json import BadModelReply, ask_json
-from insightforge_agent.pipeline.synthesize import _Verdicts
+from insightforge_agent.pipeline.entailment import EntailmentVerdicts
 from tests.pipeline.test_extraction_synthesis import (  # noqa: F401 - `world` is a fixture
     all_supported,
     draft_all,
@@ -28,9 +28,9 @@ def model(*replies: str) -> ScriptedChat:
 # ---- parsing and invalid output --------------------------------------------------------------
 
 def test_a_valid_reply_parses_and_a_fenced_one_too():
-    assert ask_json(model(REPLY), "s", "u", _Verdicts).verdicts[0].verdict == "SUPPORTED"
+    assert ask_json(model(REPLY), "s", "u", EntailmentVerdicts).verdicts[0].verdict == "SUPPORTED"
     fenced = f"```json\n{REPLY}\n```"
-    assert ask_json(model(fenced), "s", "u", _Verdicts).verdicts[0].passage == 1
+    assert ask_json(model(fenced), "s", "u", EntailmentVerdicts).verdicts[0].passage == 1
 
 
 @pytest.mark.parametrize("reply", [
@@ -38,15 +38,15 @@ def test_a_valid_reply_parses_and_a_fenced_one_too():
     '{"verdicts": [{"passage": 1, "verdict": "MAYBE"}]}',
 ])
 def test_an_invalid_reply_raises_bad_model_reply(reply):
-    with pytest.raises(BadModelReply, match="_Verdicts"):
-        ask_json(model(reply), "s", "u", _Verdicts)
+    with pytest.raises(BadModelReply, match="EntailmentVerdicts"):
+        ask_json(model(reply), "s", "u", EntailmentVerdicts)
 
 
 def test_a_scripted_model_called_more_often_than_scripted_fails_loudly():
     chat = model(REPLY)
-    ask_json(chat, "s", "u", _Verdicts)
+    ask_json(chat, "s", "u", EntailmentVerdicts)
     with pytest.raises(AssertionError, match="more times than scripted"):
-        ask_json(chat, "s", "u", _Verdicts)
+        ask_json(chat, "s", "u", EntailmentVerdicts)
 
 
 # ---- failure handling in the production stage ------------------------------------------------

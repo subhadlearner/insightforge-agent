@@ -1,13 +1,25 @@
 """FACT_CHECKING: sample Claims, re-fetch their Sources and give each sampled Claim a verdict.
 
 Design.md section 7. Re-fetching a web Source stores a new Observation with its own Passages;
-the original Observation, its Passages and the Claim's citation are never touched. The verdict
-takes the maximum similarity between the Claim and any Passage of the re-fetch, and a numeric
-Claim also needs its figures stated in the Passage that matched best. No model is called."""
+the original Observation, its Passages and the Claim's citation are never touched.
+
+Verification (F2, owner-approved; docs/audits/2026-10-11-f2-fact-checker.md):
+1. Spans: each sentence of the re-fetched (or stored document) Passages, and each window of
+   adjacent sentences: two, or as many as the Claim has, up to four (`candidate_spans`,
+   `window_width`). A span is cited as its parent Passage.
+2. Relevance: the embedder scores the Claim against every span; spans under the similarity
+   threshold are dropped.
+3. Figures: a span that does not state every figure of the Claim is dropped.
+4. Support: one light-model entailment call judges the best `TOP_K` remaining spans. The Claim
+   is verified only if a span is judged SUPPORTED. No span left, or a failed or unusable reply,
+   leaves it unverified (fail closed: never unchecked, which the pass rate leaves out)."""
 
 import math
 import random
+from collections import Counter
+from dataclasses import dataclass
 
+from insightforge_agent.agents.llm_json import ask_json
 from insightforge_agent.domain.contracts import (
     UNVERIFIED_MARK,
     ClaimVerdict,
@@ -17,9 +29,13 @@ from insightforge_agent.domain.contracts import (
     VerifiedReport,
 )
 from insightforge_agent.domain.models import Passage, Source
+from insightforge_agent.domain.passages import Span, candidate_spans, window_width
 from insightforge_agent.domain.quantities import unsupported_numbers
 from insightforge_agent.embeddings import cosine
 from insightforge_agent.pipeline.deps import Deps
+from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM, EntailmentVerdicts
+
+TOP_K = 3  # spans judged by the one entailment call per Claim
 
 
 def sample_size(claims: int, rate: float, minimum: int) -> int:
@@ -33,13 +49,68 @@ def sample_positions(run_id: str, claims: int, rate: float, minimum: int) -> lis
     return sorted(chosen)
 
 
-def _best_match(deps: Deps, claim: str, passages: list[Passage]) -> tuple[float, Passage | None]:
-    if not passages:
-        return 0.0, None
-    vectors = deps.embedder.embed([claim] + [p.text for p in passages])
+def _ref(span: Span) -> PassageRef:
+    return PassageRef(observation_id=span.passage.observation_id, index=span.passage.index)
+
+
+@dataclass(frozen=True)
+class Screened:
+    """The deterministic part of a verdict (steps 1-3). `candidates` are the spans, best first,
+    that the entailment call judges; when there are none, `reason` says why. `similarity` and
+    `matched` describe the best candidate, else the best span the gates rejected."""
+
+    similarity: float
+    matched: PassageRef | None
+    candidates: list[tuple[float, Span]]
+    reason: str = ""
+
+
+def screen(deps: Deps, claim: str, passages: list[Passage]) -> Screened:
+    spans = candidate_spans(passages, window_width(claim))
+    if not spans:
+        return Screened(0.0, None, [], "the Source has no Passages")
+    vectors = deps.embedder.embed([claim] + [s.text for s in spans])
     scores = [cosine(vectors[0], v) for v in vectors[1:]]
-    best = max(range(len(passages)), key=lambda i: (scores[i], -i))
-    return scores[best], passages[best]
+    ranked = sorted(zip(scores, range(len(spans)), spans), key=lambda x: (-x[0], x[1]))
+    similar = [(score, span) for score, _, span in ranked if score >= deps.similarity_threshold]
+    if not similar:
+        best, _, span = ranked[0]
+        return Screened(best, _ref(span), [], "no Passage is similar enough to the Claim")
+    stated = [(score, span) for score, span in similar if not unsupported_numbers(claim, span.text)]
+    if not stated:
+        best, span = similar[0]
+        missing = sorted(unsupported_numbers(claim, span.text))
+        return Screened(best, _ref(span), [], f"the matched Passage does not state {missing}")
+    return Screened(stated[0][0], _ref(stated[0][1]), stated[:TOP_K])
+
+
+def _entailed(deps: Deps, owner_id: str, run_id: str, statement: str,
+              candidates: list[tuple[float, Span]], **where) -> tuple[Span | None, str]:
+    """Step 4: the best span judged SUPPORTED, or None and the reason none is. `where` names
+    the Claim in the logged events."""
+    numbered = "\n\n".join(f"[{n}] {span.text}" for n, (_, span) in enumerate(candidates, start=1))
+    user = f"Statement: {statement}\n\n{numbered}"
+    deps.spend(owner_id, run_id, ENTAIL_SYSTEM, user)
+    try:
+        reply = ask_json(deps.light_model, ENTAIL_SYSTEM, user, EntailmentVerdicts)
+    except Exception as e:  # noqa: BLE001 - fail closed: without a judgment nothing is supported
+        deps.log(owner_id, run_id, "fact_check_entailment_failed", **where,
+                 error=f"{type(e).__name__}: {e}"[:300])
+        return None, f"the entailment check failed ({type(e).__name__})"
+    judged: dict[int, set[str]] = {}
+    for v in reply.verdicts:
+        if 1 <= v.passage <= len(candidates):
+            judged.setdefault(v.passage, set()).add(v.verdict)
+    deps.log(owner_id, run_id, "fact_check_entailment", **where, candidates=len(candidates),
+             verdicts={str(n): sorted(vs) for n, vs in sorted(judged.items())})
+    # Only an unambiguous SUPPORTED counts: a span also judged otherwise does not support.
+    supported = [n for n in sorted(judged) if judged[n] == {"SUPPORTED"}]
+    if supported:
+        return candidates[supported[0] - 1][1], ""
+    if not judged:
+        return None, "the entailment reply judged none of the candidate spans"
+    counts = Counter(verdict for vs in judged.values() for verdict in vs)
+    return None, f"no candidate span was judged SUPPORTED ({dict(sorted(counts.items()))})"
 
 
 class _Refetcher:
@@ -74,8 +145,8 @@ class _Refetcher:
 
 
 def _verdict(
-    deps: Deps, refetch: _Refetcher, owner_id: str, section: int, index: int, text: str,
-    historical: bool, evidence_id: str, original: PassageRef,
+    deps: Deps, refetch: _Refetcher, owner_id: str, run_id: str, section: int, index: int,
+    text: str, historical: bool, evidence_id: str, original: PassageRef,
 ) -> ClaimVerdict:
     base = dict(section=section, claim=index, evidence_id=evidence_id, original=original)
     if historical:
@@ -93,21 +164,18 @@ def _verdict(
         if passages is None:
             return ClaimVerdict(**base, verdict="unchecked", check=check,
                                 reason="the Source could not be re-fetched")
-    similarity, matched = _best_match(deps, text, passages)
-    if matched is None:
-        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=0.0,
-                            reason="the Source has no Passages")
-    ref = PassageRef(observation_id=matched.observation_id, index=matched.index)
-    if similarity < deps.similarity_threshold:
-        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=similarity,
-                            matched=ref, reason="no Passage is similar enough to the Claim")
-    missing = unsupported_numbers(text, matched.text)
-    if missing:
-        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=similarity,
-                            matched=ref,
-                            reason=f"the matched Passage does not state {sorted(missing)}")
+    s = screen(deps, text, passages)
+    if not s.candidates:  # no model call
+        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
+                            matched=s.matched, reason=s.reason)
+    supported, reason = _entailed(deps, owner_id, run_id, text, s.candidates,
+                                  section=section, claim=index)
+    if supported is None:
+        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
+                            matched=s.matched, reason=reason)
+    similarity = next(score for score, span in s.candidates if span is supported)
     return ClaimVerdict(**base, verdict="verified", check=check, similarity=similarity,
-                        matched=ref)
+                        matched=_ref(supported))
 
 
 def summarise(total: int, verdicts: list[ClaimVerdict], threshold: float) -> dict:
@@ -129,7 +197,7 @@ def fact_check(
     claims = [(si, ci, c) for si, s in enumerate(draft.sections) for ci, c in enumerate(s.claims)]
     refetch = _Refetcher(deps, owner_id, run_id)
     verdicts = [
-        _verdict(deps, refetch, owner_id, si, ci, c.text, c.historical, c.evidence_id,
+        _verdict(deps, refetch, owner_id, run_id, si, ci, c.text, c.historical, c.evidence_id,
                  items[c.evidence_id].primary)
         for si, ci, c in (claims[p] for p in sample_positions(
             run_id, len(claims), deps.fact_check_rate, deps.fact_check_minimum))

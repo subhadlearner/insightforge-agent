@@ -103,6 +103,66 @@ def batch_passages(
     return batches
 
 
+MAX_SENTENCE_CHARS = 600  # a longer "sentence" (scraped text without stops) is cut into pieces
+
+# A word ending a sentence: "." "!" or "?", optionally followed by closing quotes or brackets.
+_STOP = re.compile(r"[.!?][\"'”’)\]]*$")
+# A short capitalised abbreviation ("Co.", "Ltd.", "Inc.", "Dr.") or dotted initials ("U.S.").
+# A stop after one does not end a sentence, so a company name is not cut in two. Orthographic
+# only: a capitalised word of at most four letters, or two or more single letters with stops.
+_ABBREVIATION = re.compile(r"^(?:[A-Z][a-z]{0,3}|(?:[A-Za-z]\.)+[A-Za-z])\.$")
+
+
+def sentences_of(text: str) -> list[str]:
+    """The sentences of `text`, in order, each at most `MAX_SENTENCE_CHARS` long. A sentence
+    ends at a stop followed by a word that does not start in lower case, unless the stop
+    belongs to a short abbreviation. Deterministic; nothing but whitespace is dropped."""
+    sentences, current = [], []
+    words = text.split()
+    for n, word in enumerate(words):
+        current.append(word)
+        following = words[n + 1] if n + 1 < len(words) else ""
+        if (not following or (_STOP.search(word) and not following[0].islower()
+                              and not _ABBREVIATION.match(word))):
+            sentences.extend(_pieces(" ".join(current), MAX_SENTENCE_CHARS))
+            current = []
+    return sentences
+
+
+@dataclass(frozen=True)
+class Span:
+    """A sentence, or two adjacent sentences, of one Passage: what the Fact-Checker compares a
+    Claim with. Temporary like a Window; it still names, and is cited as, its parent Passage."""
+
+    passage: Passage
+    text: str
+
+
+MAX_WINDOW_SENTENCES = 4  # the widest window, however many sentences a Claim has
+
+
+def window_width(statement: str) -> int:
+    """Windows as wide as the statement, so a Claim of several sentences can match the
+    Passage text that states it: at least 2 sentences, at most `MAX_WINDOW_SENTENCES`."""
+    return min(MAX_WINDOW_SENTENCES, max(2, len(sentences_of(statement))))
+
+
+def candidate_spans(passages: list[Passage], width: int = 2) -> list[Span]:
+    """Every sentence of every Passage, each followed by its windows with the next sentences
+    (2 up to `width` sentences in all), so a statement split across a sentence boundary can
+    still be matched. A Passage of n sentences gives fewer than n * width spans, each at most
+    `width` bounded sentences, in a fixed order."""
+    width = max(1, min(width, MAX_WINDOW_SENTENCES))
+    spans = []
+    for passage in passages:
+        sentences = sentences_of(passage.text)
+        for n in range(len(sentences)):
+            for k in range(1, width + 1):
+                if n + k <= len(sentences):
+                    spans.append(Span(passage, " ".join(sentences[n:n + k])))
+    return spans
+
+
 _SPACE_CURRENCY = re.compile(r"([$€£])\s*(\d[\d,]*(?:\.\d+)?)")
 _CURRENCY = {"$": "dollar", "€": "euro", "£": "pound"}
 _VALUE_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?|[^\W\d_]+|%")

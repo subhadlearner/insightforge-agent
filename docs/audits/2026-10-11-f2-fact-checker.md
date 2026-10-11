@@ -1,10 +1,68 @@
 # F2: Fact-Checker accuracy
 
-Follows audit finding F2 (`2026-10-11-evidence-quality-audit.md`). Policy under test (ledger row 13, T6): cosine similarity >= 0.85 between the Claim and the best re-fetched Passage, every figure of the Claim stated in that Passage (`unsupported_numbers`), otherwise `unverified`.
+Follows audit finding F2 (`2026-10-11-evidence-quality-audit.md`). The original policy (ledger row 13, T6): cosine similarity >= 0.85 between the Claim and the best re-fetched Passage, every figure of the Claim stated in that Passage (`unsupported_numbers`), otherwise `unverified`.
 
-## Post-T7 result: production `bge-small` (2026-10-11)
+## Status: implemented, pending one real-model validation (2026-10-12)
 
-**Outcome: the semantic embedder does not satisfy F2 on its own. Owner decision required; no production code changed.**
+**The owner approved a change to the verification policy, and it is implemented. F2 is not closed:** the entailment step is tested only with scripted judges. The owner will decide separately whether to authorise one small real light-model validation.
+
+**Why the policy changed instead of the threshold.** Measured with the production `bge-small` embedder (section below), no similarity threshold separates correct Claims from wrong ones:
+
+| Claim against "BYD sold 4.27 million vehicles in 2025, up from 3.02 million in 2024." (or its own Passage) | bge-small | Should be |
+|---|---|---|
+| Correct Writer paraphrase | 0.961 | verified |
+| Wrong measure ("exported" for "sold") | **0.963** | unverified |
+| g-ma-02, R&D spend $90M against "revenue $90M; R&D $40M" | **0.948** | unverified |
+
+The owner therefore approved, on 2026-10-12, both options from the decision brief below: (b) matching per sentence and (a) an entailment judgment after the deterministic gates. Similarity is now a relevance filter, not the final criterion.
+
+**Approved pipeline** (`pipeline/fact_check.py`, design.md section 7 and F2 notes, ledger row 13):
+1. **Spans.** The same Passages as before (re-fetched web, or stored document chunks), cut into every sentence plus every two-sentence window (`domain/passages.candidate_spans`). Each span keeps its parent Passage, which stays the citation.
+   - One extension beyond the brief: for a Claim of more than two sentences, windows are as wide as the Claim, up to four sentences (`window_width`).
+   - Why: with two-sentence windows only, a three-sentence Claim can never find all its figures in one span. The T7 real-PDF integration test showed this; its Claims are whole chunks, and under the old whole-Passage rule they verified.
+   - Single-sentence Claims, the normal case, are unaffected.
+2. **Relevance.** The production embedder (bge-small) scores the Claim against every span. Spans under 0.85 are dropped (threshold unchanged).
+3. **Figures.** Spans that do not state every figure or year of the Claim are dropped (numeric check unchanged). With no span left: `unverified`, no model call.
+4. **Support.** The best 3 spans go to **one** light-model entailment call, using Synthesis's prompt and schema (`pipeline/entailment.py`). The Claim is `verified` only if a span is judged SUPPORTED, unambiguously.
+5. **Fail closed.** An exception, invalid JSON, or no usable verdict leaves the Claim `unverified` and logs `fact_check_entailment_failed`. It is never `unchecked`, which the pass rate would leave out.
+
+Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVERIFIED]`, and the re-fetch versus `document_passages` split. Not used: no entity or measure lexicon, no regex reading of meaning, no other embedding model, no new resolver. Sentence splitting is orthographic (stops, case and short abbreviations).
+
+**Cost.** At most one light call per sampled Claim, none when the gates leave no span: about 5-8 calls for a typical Report.
+
+### Final regression matrix (real bge-small retrieval, scripted oracle judge)
+
+`tests/integration/test_f2_fact_check_bge.py`, offline, `-m integration`. Retrieval, gates and plumbing are real; the judge is an oracle that says SUPPORTED only for a span containing the sentence that states the Claim. So a correct Claim verifies only if bge-small retrieved that sentence, and a wrong one is rejected because the judge rejects it. **Whether a real light model judges as the oracle does is the open validation.**
+
+| Case | Best span | Gates | Model call | Verdict | Before F2 |
+|---|---|---|---|---|---|
+| g-qu-02, gigawatt-hours vs GWh | 0.871 | pass | 1 | verified | verified |
+| Writer paraphrase, one sentence | 0.961 | pass | 1 | verified | verified |
+| General Motors vs GM / GM vs General Motors | 0.987 / 0.987 | pass | 1 | verified | verified |
+| BYD vs BYD Co. Ltd. | 0.990 | pass | 1 | verified | verified |
+| Word-for-word Claim, 3-sentence paragraph | 1.000 | pass | 1 | **verified** | unverified (0.842) |
+| Writer paraphrase, same paragraph | 0.961 | pass | 1 | **verified** | unverified (0.814) |
+| Light paraphrase, same paragraph | 0.971 | pass | 1 | **verified** | unverified (0.828) |
+| Wrong year, one sentence | 0.987 | numeric gate ("2023") | 0 | unverified | unverified |
+| Wrong year, paragraph | 0.987 | numeric gate ("2023") | 0 | unverified | unverified (0.834) |
+| g-ma-02, wrong measure, right number | 0.948 | pass | 1 | **unverified** (judge) | verified |
+| Wrong measure ("exported"), one sentence | 0.963 | pass | 1 | **unverified** (judge) | verified |
+| Wrong measure, paragraph | 0.963 | pass | 1 | unverified (judge) | unverified (0.800, dilution only) |
+| Wrong entity ("Tesla"), one sentence | 0.857 | pass | 1 | **unverified** (judge) | verified |
+| Wrong entity, paragraph | 0.857 | pass | 1 | unverified (judge) | unverified (0.746, dilution only) |
+
+No xfails remain. The "model call" column is pinned by the tests: bge-small passes every wrong-measure and wrong-entity Claim to the judge, so their rejection rests entirely on the entailment call. The numeric gate alone stops wrong years.
+
+### Remaining limitations
+
+- **Real-model behaviour is unmeasured.** Every rejection of a wrong-measure or wrong-entity Claim depends on the light model answering as the oracle does. One authorised live validation is the next step.
+- **Top-3 cut.** If more than 3 spans pass the gates, only the 3 most similar are judged, so a supporting span ranked fourth is not seen. Near-duplicate spans (a sentence and its windows) can fill the 3 slots.
+- **Sentence splitting is orthographic.** A sentence ending in a short capitalised word ("...than Ford. Tesla...") is not split, so the span is longer. A Claim of more than four sentences is matched only through four-sentence windows, so it may fail the numeric gate (fail closed).
+- **The benchmark baseline cannot verify.** It makes no model call, so a CLAIM_PASSAGE case that passes the gates is now NOT_APPLICABLE (baseline `m1.3-2`); it still uses `HashingEmbedder(256)`, not bge-small.
+
+## Post-T7 measurement before the fix: production `bge-small` (2026-10-11)
+
+**Outcome then: the semantic embedder did not satisfy F2 on its own. This section is the evidence for the owner's decision; the "Verdict now" column describes the old policy.**
 
 Measured offline through the real `fact_check()` with `FastEmbedEmbedder("BAAI/bge-small-en-v1.5")` from the local cache, threshold 0.85, numeric check unchanged (`tests/integration/test_f2_fact_check_bge.py`, `uv run pytest -m integration`). Each page is one paragraph, so one Passage. Hashing figures are from the pre-T7 investigation below.
 
@@ -47,25 +105,25 @@ Hashing figures in brackets were measured per sentence in the pre-T7 probe, whic
 
 **Does a light-model entailment check appear necessary? Yes**, for wrong-measure Claims. No similarity score separates them: the wrong Claims score as high as or higher than correct ones (0.948-0.963 against 0.961 for the paraphrase). The Writer has no measure check, so nothing upstream catches them either. For wrong entities the need is weaker because of the Writer rule above. An entailment judgment on the matched Passage (or sentence), after the 0.85 gate, would reject all three. On its own it does not fix point 2: Claims under 0.85 never reach it, so per-sentence matching would still be needed for Claims inside longer paragraphs, and per-sentence matching is only safe with the entailment step behind it.
 
-### Owner decisions
+### Owner decisions (options as presented; (a) and (b) approved 2026-10-12)
 
-- **(a) Entailment step.** After the similarity gate and numeric check, a light-model call ("does this Passage state this Claim?") on the matched text, reusing T5's `ENTAIL_SYSTEM` / `ask_json` path. Changes ledger row 13 and T6's "no model is called", and adds one paid light call per sampled Claim (about 6-8 per Report). Architecturally acceptable, not implemented.
-- **(b) Per-sentence matching** of the Claim within each re-fetched Passage, threshold kept at 0.85. Fixes the paragraph cases (verbatim reaches 1.000 per sentence). Only with (a): alone it verifies the wrong-measure and wrong-entity Claims everywhere.
-- **(c) Accept current behaviour** and record the known limits: true Claims in long paragraphs are under-verified (lowers the pass rate), and wrong-measure or wrong-entity Claims against short Passages are over-verified.
+- **(a) Entailment step.** After the similarity gate and numeric check, a light-model call ("does this Passage state this Claim?") on the matched text, reusing T5's `ENTAIL_SYSTEM` / `ask_json` path. Changes ledger row 13 and T6's "no model is called", and adds one paid light call per sampled Claim (about 5-8 per Report). **Approved and implemented.**
+- **(b) Per-sentence matching** of the Claim within each re-fetched Passage, threshold kept at 0.85. Fixes the paragraph cases (verbatim reaches 1.000 per sentence). Only with (a): alone it verifies the wrong-measure and wrong-entity Claims everywhere. **Approved and implemented** (sentences plus two-sentence windows).
+- **(c) Accept current behaviour.** Not chosen.
 
 ## Tests
 
-`tests/integration/test_f2_fact_check_bge.py`, in the `integration` tier (real model from the local cache; run `uv run insightforge-agent models download` once). That tier is excluded from the default run and from CI, like the other real-model tests. Every case prints its verdict, similarity, threshold, reason, Claim and Passage: `-rP` shows them for passing cases, `--runxfail` for the known failures. Every bge-small figure in the table above comes from those runs.
-
-- Pass: 5 correct Claims verified, 4 unsupported Claims rejected.
-- `xfail(strict=True, raises=AssertionError)`: 3 correct Claims in a paragraph, 3 wrong-measure or wrong-entity Claims. A fix that makes one pass fails the suite until its marker is removed. Setup problems raise `RuntimeError`, so they cannot be mistaken for the expected failure.
-
-Coverage notes:
-- **CI.** CI does not run this file. The numeric check is still covered there with the hashing embedder (`test_numeric_claim_needs_its_number_in_the_matched_passage`).
-- **Margin.** The wrong-year-in-paragraph guard passes at 0.834, 0.016 under the threshold.
+- `tests/domain/test_spans.py`: sentence splitting and spans are deterministic and bounded. That is 2n - 1 spans per Passage for a short Claim, windows at most 4 sentences, and each sentence at most 600 characters.
+- `tests/pipeline/test_f2_fact_check_entailment.py` (default run and CI; scripted judge, hashing embedder):
+  - no model call when no span clears 0.85, or when the numeric gate rejects every candidate;
+  - one call, at most 3 spans, judges every candidate;
+  - any SUPPORTED span verifies, and the match is its parent Passage;
+  - CONTRADICTED only, INSUFFICIENT_EVIDENCE only, a malformed reply, a model exception, or omitted, out-of-range or ambiguous verdicts all give `unverified`, never `unchecked`.
+- `tests/integration/test_f2_fact_check_bge.py` (`-m integration`, real bge-small from the local cache; run `uv run insightforge-agent models download` once). It has the 15 F2 cases in the matrix above. `-rP` prints each case's spans, scores, model calls and verdict. A setup problem raises `RuntimeError`, never a verdict assertion.
+- **CI** does not run the integration tier. The gates and the entailment logic are covered there with the hashing embedder and scripted judges.
 - **Model name.** The `embedder` fixture (`tests/integration/conftest.py`) names `BAAI/bge-small-en-v1.5` directly. That equals `Settings.embedding_model` today, but this file would not follow a change of configured model.
 
-The pre-T7 file `tests/pipeline/test_f2_fact_check_regression.py` (branch `f2-fact-checker-investigation`, `ab35d25`) is not carried forward: it ran on `HashingEmbedder`, the `Deps` default for tests, which is no longer the production embedder. Its cases are all in the new file. The benchmark baseline (`src/insightforge_agent/benchmark/baseline.py`) still pins `HashingEmbedder(256)` by design (M1.3), so its CLAIM_PASSAGE scores do not reflect production; its comment calling that "the production default" is now out of date (not changed here).
+The pre-T7 file `tests/pipeline/test_f2_fact_check_regression.py` (branch `f2-fact-checker-investigation`, `ab35d25`) is not carried forward: it ran on `HashingEmbedder`, which is no longer the production embedder. Its cases are all in the integration file.
 
 ## Pre-T7 investigation (hashing embedder, `ab35d25`)
 
