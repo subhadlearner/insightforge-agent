@@ -162,20 +162,44 @@ def test_a_window_that_only_partly_covers_another_group_does_not_widen(make_deps
     assert [span.text for _, span in s.candidates] == ["S one.", "S two. S three."]
 
 
-def test_top_k_is_chosen_by_the_similarity_of_the_spans_that_will_be_judged(make_deps):
+ANCHOR_SCORES = {"Anchor.": 0.99, "Anchor. Context.": 0.86,
+                 "Bee.": 0.95, "Cee.": 0.93, "Dee.": 0.91}
+ANCHOR_PAGE = "Anchor. Context.\n\nBee.\n\nCee.\n\nDee."  # four Passages
+
+
+def test_a_widened_group_keeps_the_rank_of_its_best_sentence(make_deps):
     claim = "Claim sentence."
-    a = Passage(observation_id="o", index=0, text="Anchor. Context.")
-    b, c, d = (Passage(observation_id="o", index=i, text=t)
-               for i, t in [(1, "Bee."), (2, "Cee."), (3, "Dee.")])
-    scores = {"Anchor.": 0.99, "Anchor. Context.": 0.86, "Bee.": 0.95, "Cee.": 0.93, "Dee.": 0.91}
-    deps = make_deps(embedder=TableEmbedder(claim, scores))
-    s = screen(deps, claim, [a, b, c, d])
-    # The best anchor is widened to a window at 0.86, which ranks below the other three.
+    passages = [Passage(observation_id="o", index=i, text=t)
+                for i, t in enumerate(ANCHOR_PAGE.split("\n\n"))]
+    deps = make_deps(embedder=TableEmbedder(claim, ANCHOR_SCORES))
+    s = screen(deps, claim, passages)
+    # Ranked by 0.99 (the anchor), judged as the window, reported at the window's own 0.86.
     assert [(score, span.text) for score, span in s.candidates] == [
-        (pytest.approx(0.95), "Bee."), (pytest.approx(0.93), "Cee."),
-        (pytest.approx(0.91), "Dee.")]
-    assert s.similarity == pytest.approx(0.95) and s.matched.index == 1
-    assert all(score == pytest.approx(scores[span.text]) for score, span in s.candidates)
+        (pytest.approx(0.86), "Anchor. Context."),
+        (pytest.approx(0.95), "Bee."), (pytest.approx(0.93), "Cee.")]
+    assert s.similarity == pytest.approx(0.86) and s.matched.index == 0
+    assert all(score == pytest.approx(ANCHOR_SCORES[span.text]) for score, span in s.candidates)
+
+
+def test_the_judge_sees_the_widened_window_and_the_verdict_reports_its_similarity(make_deps):
+    claim = "Claim sentence."
+    model = judge("SUPPORTED", "INSUFFICIENT_EVIDENCE")
+    deps = make_deps(fetcher=Fetcher({URL: ANCHOR_PAGE}), light_model=model,
+                     embedder=TableEmbedder(claim, ANCHOR_SCORES))
+    _, bundle = evidence(deps, [ANCHOR_PAGE])
+    (v,) = fact_check(deps, "alice", "run_1", draft_of([claim]), bundle).verdicts
+    assert [t for _, t in numbered(model.seen[0])] == ["Anchor. Context.", "Bee.", "Cee."]
+    assert v.verdict == "verified" and v.similarity == pytest.approx(0.86)  # not 0.99
+    assert v.matched.index == 0
+
+
+def test_a_window_below_the_threshold_is_not_made_eligible_by_its_anchor(make_deps):
+    claim = "Claim sentence."
+    page = Passage(observation_id="o", index=0, text="Anchor. Context.")
+    deps = make_deps(embedder=TableEmbedder(claim, {"Anchor.": 0.99, "Anchor. Context.": 0.80}))
+    s = screen(deps, claim, [page])
+    assert [(score, span.text) for score, span in s.candidates] == [
+        (pytest.approx(0.99), "Anchor.")]
 
 
 def test_a_window_covering_two_chosen_spans_takes_one_place(make_deps):

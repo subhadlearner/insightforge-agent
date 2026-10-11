@@ -18,6 +18,7 @@ import math
 import random
 from collections import Counter
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from insightforge_agent.agents.llm_json import ask_json
 from insightforge_agent.domain.contracts import (
@@ -60,10 +61,19 @@ def _ref(span: Span) -> PassageRef:
     return PassageRef(observation_id=span.passage.observation_id, index=span.passage.index)
 
 
+class _Group(NamedTuple):
+    """Overlapping candidate spans that take one place in the entailment call."""
+
+    rank: float  # the best similarity that established the group: decides TOP_K, nothing else
+    similarity: float  # the similarity of `span` itself: what a verdict reports
+    span: Span  # the representative: what the judge sees
+
+
 @dataclass(frozen=True)
 class Screened:
-    """The deterministic part of a verdict (steps 1-3). `candidates` are the spans, best first,
-    that the entailment call judges, each with the similarity computed for that exact span;
+    """The deterministic part of a verdict (steps 1-3). `candidates` are the spans, in group
+    rank order, that the entailment call judges, each with the similarity computed for that
+    exact span (never the group's rank);
     when there are none, `reason` says why. `similarity` and `matched` describe the best
     candidate, else the best span the gates rejected."""
 
@@ -106,22 +116,23 @@ def screen(deps: Deps, claim: str, passages: list[Passage],
         return Screened(best, _ref(span), [], f"the matched Passage does not state {missing}")
     # One place per group of overlapping spans, so a sentence and its own windows cannot fill
     # every place and keep a supporting sentence elsewhere from the judge. A group is
-    # represented by the widest span that contains its first (best) span and also passes the
+    # represented by the widest span that contains its first (best) span and also passes both
     # gates, so the judge sees the context: "It sold 3.02 million..." with the sentence that
-    # names "BYD", or "Ltd. sold..." rejoined with "BYD Co.". Each representative carries its
-    # own similarity, and the best `TOP_K` representatives by that similarity are judged.
-    # A span widens only when it contains every group it touches, which then become one, so
-    # no sentence is shown twice.
-    groups: list[tuple[float, Span]] = []
+    # names "BYD", or "Ltd. sold..." rejoined with "BYD Co.". A span widens only when it
+    # contains every group it touches, which then become one, so no sentence is shown twice.
+    # Widening never lowers a group's place: groups enter TOP_K by `rank`, while the judge
+    # sees `span` and verdicts report `similarity`, both of the representative itself.
+    groups: list[_Group] = []
     for score, span in stated:
-        hit = [i for i, (_, g) in enumerate(groups) if span.overlaps(g)]
+        hit = [i for i, g in enumerate(groups) if span.overlaps(g.span)]
         if not hit:
-            groups.append((score, span))
-        elif all(span.contains(groups[i][1]) for i in hit):
-            groups = [(score, span) if i == hit[0] else g for i, g in enumerate(groups)
+            groups.append(_Group(rank=score, similarity=score, span=span))
+        elif all(span.contains(groups[i].span) for i in hit):
+            merged = _Group(rank=max(groups[i].rank for i in hit), similarity=score, span=span)
+            groups = [merged if i == hit[0] else g for i, g in enumerate(groups)
                       if i not in hit[1:]]
-    chosen = sorted(groups, key=lambda g: -g[0])[:TOP_K]  # stable: ties keep their order
-    return Screened(chosen[0][0], _ref(chosen[0][1]), chosen)
+    chosen = [(g.similarity, g.span) for g in sorted(groups, key=lambda g: -g.rank)[:TOP_K]]
+    return Screened(chosen[0][0], _ref(chosen[0][1]), chosen)  # stable sort: ties keep order
 
 
 def _entailed(deps: Deps, owner_id: str, run_id: str, statement: str,
