@@ -93,10 +93,15 @@ Example rendered line (under 1,000 characters for ordinary text; escapes in the 
 `_Drafts: incomplete_json, 1 problem(s) [json_invalid: Invalid JSON: EOF while parsing a string at line 1 column 9876]; stop_reason=max_tokens; output_tokens=4096 (reasoning 3100); max_tokens=4096; 9876 chars; head='...'; tail='...'`
 
 - **`incomplete_json` is a syntactic finding only.** Truncation is shown by `stop_reason=max_tokens`, or `MAX_TOKENS` / `length` from other providers.
-- **Bounded.** The full reply is never kept. The diagnostic is built outside the `except` block, so no chained `ValidationError` (which holds the input) stays reachable from the exception. A test checks that `__cause__` and `__context__` are `None`.
-- **Provider-neutral.** It reads only `response_metadata`, `usage_metadata` and `getattr(model, "max_tokens")`. No provider import.
+- **Bounded.** The full reply is never kept.
+  - The exception is raised outside the `except` block, so no chained `ValidationError` (which holds the input) is reachable from it.
+  - The reply is dropped from `ask_json`'s locals before the raise, so the traceback's frame does not keep it either.
+  - Tests check `__cause__`, `__context__` and the frame's locals.
+- **Provider-neutral.** `provider_report(message)` reads only `response_metadata` and `usage_metadata`; the ceiling comes from `getattr(model, "max_tokens")`. No provider import. The live probe reuses `provider_report` and `reply_ends`, so it reads the metadata exactly as the diagnostic does.
+- **Pydantic dependency.** `incomplete_json` relies on pydantic-core's "EOF while parsing" wording. The tests pin it, so a wording change fails them rather than silently reclassifying.
+- **Known edge.** A reply cut inside its closing code fence is classified `invalid_json`, because the partial fence is not stripped. The stop reason still shows the cut.
 - **Writer.** It feeds the error back to the model on a retry, so it now uses `e.brief`, the old message byte for byte. Its prompt is unchanged (test: `test_writer_retry_prompt_keeps_the_short_bad_json_message`).
-- **Fact-Checker.** It logs `f"{type(e).__name__}: {e}"[:300]`. The classification, error, stop reason and tokens come first in the rendered line, so in the usual case that cut keeps them and drops only the head and tail.
+- **Fact-Checker.** It logs `f"{type(e).__name__}: {e}"[:300]`. The classification, error, stop reason and tokens come first in the rendered line, so in the usual case that cut keeps them and drops only the head and tail. The Fact-Checker was not changed, so its log lines are the one place where the head and tail are usually lost. It is outside the five F3 failures.
 - Successful replies and fenced JSON parse exactly as before. No retry was added.
 
 Tests: `tests/test_llm_json.py`, which includes the installed `ChatAnthropic` driven offline, and `tests/benchmark/test_scripted_tier.py`, which checks the Draft and Extraction failure events.
@@ -106,7 +111,7 @@ Tests: `tests/test_llm_json.py`, which includes the installed `ChatAnthropic` dr
 The historical evidence is **inconclusive**. Truncation is neither proven nor disproven, so no configuration change is proposed yet.
 
 **Proposed probe:** `tests/live/test_f3_json_probe.py`.
-- **Calls:** exactly **one** paid `claude-haiku-5-5` call on the current light configuration (`build_chat_model("light")`, `max_tokens=4096`).
+- **Calls:** exactly **one** paid `claude-haiku-5-5` call on the current light configuration (`build_chat_model("light")`, `max_tokens=4096`). The one change is that the Anthropic SDK's own automatic retries (default 2, on 429, 5xx and timeouts) are turned off (`max_retries=0`), so one call is one request. An offline test checks this on the SDK client itself.
 - **What it runs:** the drafting call exactly as `_draft` makes it. That is `DRAFT_SYSTEM` (unchanged since the failing run), the `Sub-task: ...` message over `render_batch`, and `ask_json(..., _Drafts)`.
 - **Its batch:** one full batch from `batch_passages` at the production cap. That is 8 Passages and 96 distinct figures about fictional companies, about 2,750 estimated tokens.
 - **Excluded:** web search, Planner, Researcher, Writer and Report.

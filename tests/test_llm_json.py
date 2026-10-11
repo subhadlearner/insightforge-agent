@@ -103,6 +103,15 @@ def test_no_reference_to_the_full_reply_survives_on_the_exception():
     assert e.__cause__ is None and e.__context__ is None
     assert all(len(str(v)) < len(text) for v in vars(e).values())
     assert all(len(str(v)) < 1000 for v in vars(e.diagnostic).values())
+    tb, frames = e.__traceback__, []
+    while tb is not None:
+        frames.append(tb.tb_frame)
+        tb = tb.tb_next
+    assert "ask_json" in [f.f_code.co_name for f in frames]
+    # `model` is excluded: the scripted stand-in keeps its own script; a provider model does not.
+    held = [k for f in frames if f.f_code.co_name == "ask_json"
+            for k, v in f.f_locals.items() if k != "model" and len(str(v)) >= len(text) - 10]
+    assert held == []  # the traceback's ask_json frame no longer holds the reply
 
 
 def test_a_short_reply_is_shown_once_not_twice():
@@ -148,7 +157,8 @@ def test_output_tokens_without_a_reasoning_breakdown():
     assert "output_tokens=7;" in str(e)
 
 
-def test_the_configured_output_ceiling_is_recorded_when_the_model_exposes_one():
+def test_a_model_without_an_output_ceiling_records_none():
+    """The ceiling itself is recorded by the installed-ChatAnthropic test below."""
     model = chat("nope")
     assert getattr(model, "max_tokens", None) is None
     with pytest.raises(BadModelReply) as info:
@@ -207,6 +217,15 @@ def test_the_f3_probe_fills_exactly_one_full_drafting_batch():
     assert 0.9 * cap < estimate_tokens(render_batch(batch)) <= cap
     assert len(batch_passages(probe_passages(), cap)) > 1  # the cap, not the text, ended it
     assert all(w.text == w.passage.text for w in batch)  # whole Passages, no windows
+
+
+def test_the_f3_probe_model_is_the_light_model_with_sdk_retries_off():
+    from tests.live.test_f3_json_probe import probe_model
+
+    model = probe_model(Settings(llm_provider="anthropic", anthropic_api_key="x",
+                                 tavily_api_key="t"))
+    assert (model.model, model.max_tokens, model.max_retries) == ("claude-haiku-5-5", 4096, 0)
+    assert model._client.max_retries == 0  # the SDK client, not just the field
 
 
 # ---- the Writer's model-facing feedback is unchanged ------------------------------------------

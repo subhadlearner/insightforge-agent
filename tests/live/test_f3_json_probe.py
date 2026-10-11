@@ -12,7 +12,7 @@ message over `render_batch`, parsed by `ask_json` into `_Drafts`. The batch is o
 `batch_passages` at the configured `passage_token_cap`, filled with fixed, fact-dense synthetic
 passages (fictional companies), so it is a worst case for reply length, not a replay: the
 October 10 inputs did not survive. No web search, Planner, Researcher, Writer or Report.
-Nothing is retried, whatever the outcome. The record (stop reason, output and reasoning tokens,
+Nothing is retried, whatever the outcome: the SDK's own retries are off too. The record (stop reason, output and reasoning tokens,
 reply length, parse outcome, bounded head and tail) is printed; the probe asserts only its own
 set-up and the call count, never the outcome."""
 
@@ -22,7 +22,12 @@ import os
 import pytest
 from langchain_core.callbacks import BaseCallbackHandler
 
-from insightforge_agent.agents.llm_json import HEAD_CHARS, TAIL_CHARS, BadModelReply, ask_json
+from insightforge_agent.agents.llm_json import (
+    BadModelReply,
+    ask_json,
+    provider_report,
+    reply_ends,
+)
 from insightforge_agent.config import Settings
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.passages import batch_passages, render_batch
@@ -59,6 +64,13 @@ def probe_batch(token_cap: int):
     return batch_passages(probe_passages(), token_cap)[0]
 
 
+def probe_model(settings: Settings):
+    """The production light model with only the SDK's own retries (default 2, on 429/5xx and
+    timeouts) turned off, so one call is one paid request. Copied before its client exists:
+    a copy made later would keep the cached client and its retries."""
+    return build_chat_model("light", settings).model_copy(update={"max_retries": 0})
+
+
 class Recorder(BaseCallbackHandler):
     """What the provider returned for each call, read the way ask_json's diagnostic reads it."""
 
@@ -70,13 +82,9 @@ class Recorder(BaseCallbackHandler):
 
     def on_llm_end(self, response, **kwargs):
         m = response.generations[0][0].message
-        usage = dict(m.usage_metadata or {})
-        meta = m.response_metadata or {}
-        self.calls[-1].update(
-            stop_reason=meta.get("stop_reason") or meta.get("finish_reason"),
-            output_tokens=usage.get("output_tokens"), input_tokens=usage.get("input_tokens"),
-            reasoning_tokens=(usage.get("output_token_details") or {}).get("reasoning"),
-            length=len(m.text), head=m.text[:HEAD_CHARS], tail=m.text[-TAIL_CHARS:])
+        head, tail = reply_ends(m.text)
+        self.calls[-1].update(provider_report(m)._asdict(), length=len(m.text), head=head,
+                              tail=tail, input_tokens=(m.usage_metadata or {}).get("input_tokens"))
 
     def on_llm_error(self, error, **kwargs):
         self.calls[-1]["error"] = f"{type(error).__name__}: {error}"[:300]
@@ -84,8 +92,9 @@ class Recorder(BaseCallbackHandler):
 
 def test_f3_one_full_drafting_batch_on_the_light_model():
     settings = Settings()
-    light = build_chat_model("light", settings)
+    light = probe_model(settings)
     assert settings.llm_provider == "anthropic" and light.model == "claude-haiku-5-5"
+    assert light._client.max_retries == 0
     batch = probe_batch(settings.passage_token_cap)
     numbered = render_batch(batch)
     assert estimate_tokens(numbered) > 0.9 * settings.passage_token_cap  # a full batch
