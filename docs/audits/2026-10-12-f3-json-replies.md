@@ -1,8 +1,8 @@
 # F3: unparseable light-model JSON replies (2026-10-12)
 
-**Scope:** audit finding F3 (`2026-10-11-evidence-quality-audit.md`). Branch `f3-json-reply-diagnostics` from `61e66b9`. No paid or live call was made. No model configuration, prompt, batching or retry behaviour was changed. T8 and F5-F7 are out of scope.
+**Scope:** audit finding F3 (`2026-10-11-evidence-quality-audit.md`). The diagnostic work started from `61e66b9` and is present on `main` at `0d5f48c`. One owner-authorised paid live probe was run after the diagnostics were in place. No model configuration, prompt, batching or production retry behaviour was changed. T8 and F5-F7 are out of scope.
 
-**Result:** truncation is **still unproven**. Nothing that survives can tell truncation from malformed JSON or a one-field schema error. The diagnostics are now in place to tell them apart. A one-call live probe is proposed in section 6 and has **not** been run.
+**Result:** **CLOSED.** The historical cause of the five October 10 failures remains unknowable, but truncation was not reproduced. A deliberately fact-dense full drafting batch completed successfully with `stop_reason=end_turn` at 3,300 of 4,096 output tokens, including 519 reasoning tokens. That is strong evidence against the current light-role ceiling being generally inadequate. Diagnostics now make any recurrence diagnosable, so no `max_tokens` change is warranted.
 
 ## 1. Historical facts
 
@@ -106,26 +106,30 @@ Example rendered line (under 1,000 characters for ordinary text; escapes in the 
 
 Tests: `tests/test_llm_json.py`, which includes the installed `ChatAnthropic` driven offline, and `tests/benchmark/test_scripted_tier.py`, which checks the Draft and Extraction failure events.
 
-## 6. Decision gate and proposed live probe (not run)
+## 6. Live probe and closure
 
-The historical evidence is **inconclusive**. Truncation is neither proven nor disproven, so no configuration change is proposed yet.
+The historical evidence remained inconclusive, so the owner authorised exactly one paid diagnostic call using the current Anthropic light-role configuration.
 
-**Proposed probe:** `tests/live/test_f3_json_probe.py`.
-- **Calls:** exactly **one** paid `claude-haiku-5-5` call on the current light configuration (`build_chat_model("light")`, `max_tokens=4096`). The one change is that the Anthropic SDK's own automatic retries (default 2, on 429, 5xx and timeouts) are turned off (`max_retries=0`), so one call is one request. An offline test checks this on the SDK client itself.
-- **What it runs:** the drafting call exactly as `_draft` makes it. That is `DRAFT_SYSTEM` (unchanged since the failing run), the `Sub-task: ...` message over `render_batch`, and `ask_json(..., _Drafts)`.
-- **Its batch:** one full batch from `batch_passages` at the production cap. That is 8 Passages and 96 distinct figures about fictional companies, about 2,750 estimated tokens.
-- **Excluded:** web search, Planner, Researcher, Writer and Report.
-- **What it records:** the stop reason, output and reasoning tokens, reply length, whether it parsed (item count, or the new diagnostic), and a bounded head and tail.
-- **Retries and assertions:** none, whatever the result. It asserts only its own set-up and the call count.
-- **How it runs:** it needs `INSIGHTFORGE_ALLOW_LIVE_TESTS=1` and `-m live`.
-- **Scope:** about 3,000 input tokens and at most 4,096 output tokens.
-- **Why drafting:** it accounts for 4 of the 5 failures, and its prompt is the one that failed. The Extraction prompt has changed since.
+**Probe:** `tests/live/test_f3_json_probe.py`
 
-The batch is deliberately a **worst case for reply length**, because the real inputs are lost. That makes the result one-sided:
-- **`stop_reason=max_tokens`** shows that a full drafting batch on the current light ceiling *can* be cut off. That is the mechanism the hypothesis needs, though it does not prove that each of the five historical replies was cut.
-- **`end_turn` well under 4,096 output tokens** on this worst case is strong evidence against truncation at the current cap.
-- **`end_turn` close to the ceiling** is inconclusive. It would be reported as such and not retried.
+- **Model:** `claude-haiku-5-5`
+- **Calls:** exactly 1 paid request; Anthropic SDK retries disabled with `max_retries=0`
+- **Configuration:** current production light role, `max_tokens=4096`, no explicit thinking setting
+- **Path exercised:** the Synthesis drafting call as `_draft` makes it: unchanged `DRAFT_SYSTEM`, `render_batch`, and `ask_json(..., _Drafts)`
+- **Batch:** 8 fact-dense fictional Passages, 2,747 estimated Passage tokens at the production `passage_token_cap=3000`
+- **Excluded:** web search, Planner, Researcher, Writer and Report
+- **Actual input tokens:** 4,350
+- **Actual output tokens:** 3,300
+- **Reasoning tokens:** 519, included in the 3,300 output tokens
+- **Reply length:** 6,709 characters
+- **Stop reason:** `end_turn`
+- **Parse result:** success, 17 drafted items
+- **Retries:** 0
 
-**Zero-cost alternative.** The next live Run the owner authorises anyway records the stop reason and tokens for any failed batch, on real pages.
+The deliberately dense full-size drafting response therefore completed normally with 796 output tokens of headroom. This does **not** establish what caused the five historical failures, because their full replies and provider metadata were never retained. It is, however, strong evidence against the present 4,096-token ceiling being a generally inadequate limit for production-size drafting batches.
 
-**Remediation, not pre-approved.** If truncation is demonstrated, the smallest remedy is an explicit `max_tokens` for the Anthropic light role in `llm.py`. 16,000, as for the Writer, is the obvious candidate. The value is the owner's decision on the evidence. Thinking, prompts, retries, batching and Gemini/Groq settings stay as they are.
+**Decision:** do not raise the Anthropic light-role `max_tokens` on the available evidence. Keep the current model configuration unchanged.
+
+The production improvement retained from F3 is bounded failure diagnostics. Future malformed replies now record enough information to distinguish incomplete JSON, other invalid JSON and schema validation failures, together with response length, bounded head/tail, provider stop reason and output/reasoning token usage when available.
+
+**F3 closure:** historical root cause indeterminate; truncation not reproduced; diagnostics added; no model-configuration change.
