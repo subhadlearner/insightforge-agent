@@ -103,12 +103,23 @@ def screen(deps: Deps, claim: str, passages: list[Passage],
         best, span = similar[0]
         missing = sorted(unsupported_numbers(claim, span.text))
         return Screened(best, _ref(span), [], f"the matched Passage does not state {missing}")
-    # The best spans that share no sentence: a sentence and its own windows would otherwise
-    # fill every place and keep a supporting sentence elsewhere from the judge.
+    # One place per group of overlapping spans, so a sentence and its own windows cannot fill
+    # every place and keep a supporting sentence elsewhere from the judge. A wider span that
+    # contains the chosen one and also passes the gates takes its place (keeping its rank and
+    # score), so the judge sees the context: "It sold 3.02 million..." with the sentence that
+    # names "BYD", or "Ltd. sold..." rejoined with "BYD Co.".
+    def within(inner: Span, outer: Span) -> bool:
+        return outer.overlaps(inner) and outer.first <= inner.first and inner.last <= outer.last
+
     chosen: list[tuple[float, Span]] = []
     for score, span in stated:
-        if len(chosen) < TOP_K and not any(span.overlaps(c) for _, c in chosen):
-            chosen.append((score, span))
+        n = next((i for i, (_, c) in enumerate(chosen) if span.overlaps(c)), None)
+        if n is None:
+            if len(chosen) < TOP_K:
+                chosen.append((score, span))
+        elif within(chosen[n][1], span):  # widen that place; fold in any other it covers
+            chosen = [(chosen[n][0], span) if i == n else c for i, c in enumerate(chosen)
+                      if i == n or not within(c[1], span)]
     return Screened(chosen[0][0], _ref(chosen[0][1]), chosen)
 
 
@@ -122,8 +133,10 @@ def _entailed(deps: Deps, owner_id: str, run_id: str, statement: str,
         return f"Statement: {statement}\n\n" + render_batch(
             [Window(span.passage, span.text) for _, span in cands])
 
+    system_tokens = estimate_tokens(ENTAIL_SYSTEM)
+
     def size(cands: list[tuple[float, Span]]) -> int:  # the whole request, system prompt included
-        return estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(payload(cands))
+        return system_tokens + estimate_tokens(payload(cands))
 
     while len(candidates) > 1 and size(candidates) > deps.passage_token_cap:
         candidates = candidates[:-1]
@@ -208,11 +221,8 @@ def _verdict(
             return ClaimVerdict(**base, verdict="unchecked", check=check,
                                 reason="the Source could not be re-fetched")
     s = screen(deps, text, passages, vectors)
-    if not s.candidates:  # no model call
-        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
-                            matched=s.matched, reason=s.reason)
-    supported, reason = _entailed(deps, owner_id, run_id, text, s.candidates,
-                                  section=section, claim=index)
+    supported, reason = (None, s.reason) if not s.candidates else _entailed(  # no call if none
+        deps, owner_id, run_id, text, s.candidates, section=section, claim=index)
     if supported is None:
         return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
                             matched=s.matched, reason=reason)
@@ -240,8 +250,8 @@ def fact_check(
     claims = [(si, ci, c) for si, s in enumerate(draft.sections) for ci, c in enumerate(s.claims)]
     refetch, vectors = _Refetcher(deps, owner_id, run_id), Vectors(deps)
     verdicts = [
-        _verdict(deps, refetch, vectors, owner_id, run_id, si, ci, c.text, c.historical, c.evidence_id,
-                 items[c.evidence_id].primary)
+        _verdict(deps, refetch, vectors, owner_id, run_id, si, ci, c.text, c.historical,
+                 c.evidence_id, items[c.evidence_id].primary)
         for si, ci, c in (claims[p] for p in sample_positions(
             run_id, len(claims), deps.fact_check_rate, deps.fact_check_minimum))
     ]

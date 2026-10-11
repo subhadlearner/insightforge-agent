@@ -23,7 +23,7 @@ The owner therefore approved, on 2026-10-12, both options from the decision brie
    - Single-sentence Claims, the normal case, are unaffected.
 2. **Relevance.** The production embedder (bge-small) scores the Claim against every span. Spans under 0.85 are dropped (threshold unchanged).
 3. **Figures.** Spans that do not state every figure or year of the Claim are dropped (numeric check unchanged). With no span left: `unverified`, no model call.
-4. **Support.** The best 3 spans that share no sentence go to **one** light-model entailment call, using Synthesis's prompt and schema (`pipeline/entailment.py`). The whole request is held within `passage_token_cap` by dropping the weakest spans; if even the best one alone does not fit, no call is made and the Claim is `unverified`. The Claim is `verified` only if a span is judged SUPPORTED, unambiguously.
+4. **Support.** The best 3 spans go to **one** light-model entailment call. Overlapping spans share one place, widened to the largest of them that passes the gates, so a sentence keeps its subject. The call uses Synthesis's prompt and schema (`pipeline/entailment.py`). The whole request is held within `passage_token_cap` by dropping the weakest spans; if even the best one alone does not fit, no call is made and the Claim is `unverified`. The Claim is `verified` only if a span is judged SUPPORTED, unambiguously.
 5. **Fail closed.** Any ordinary exception from the model path (`AssertionError` included), invalid JSON, or no usable verdict leaves the Claim `unverified` and logs `fact_check_entailment_failed`. Only `KeyboardInterrupt` and `SystemExit` propagate. It is never `unchecked`, which the pass rate would leave out.
 
 Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVERIFIED]`, and the re-fetch versus `document_passages` split. Not used: no entity or measure lexicon, no regex reading of meaning, no other embedding model, no new resolver. Sentence splitting is orthographic: a stop before an upper-case letter. There is no abbreviation list.
@@ -43,6 +43,7 @@ Unchanged: bge-small, 0.85, the numeric check, sampling (20%, minimum 5), `[UNVE
 | Word-for-word Claim, 3-sentence paragraph | 1.000 | pass | 1 | **verified** | unverified (0.842) |
 | Writer paraphrase, same paragraph | 0.961 | pass | 1 | **verified** | unverified (0.814) |
 | Light paraphrase, same paragraph | 0.971 | pass | 1 | **verified** | unverified (0.828) |
+| Subject in the previous sentence ("BYD is a Chinese automaker. It sold 3.02 million vehicles in 2023.") | 0.916 (window) | pass | 1 | verified | (added after review) |
 | Wrong year, one sentence | 0.987 | numeric gate ("2023") | 0 | unverified | unverified |
 | Wrong year, paragraph | 0.987 | numeric gate ("2023") | 0 | unverified | unverified (0.834) |
 | g-ma-02, wrong measure, right number | 0.948 | pass | 1 | **unverified** (judge) | verified |
@@ -56,7 +57,7 @@ No xfails remain. The "model call" column is pinned by the tests: bge-small pass
 ### Remaining limitations
 
 - **Real-model behaviour is unmeasured.** Every rejection of a wrong-measure or wrong-entity Claim depends on the light model answering as the oracle does. One authorised live validation is the next step.
-- **Top-3 cut.** If more than 3 non-overlapping spans pass the gates, only the 3 most similar are judged, so a supporting span ranked fourth is not seen.
+- **Top-3 cut.** If more than 3 groups of overlapping spans pass the gates, only the 3 most similar are judged, so a supporting span ranked fourth is not seen.
 - **Sentence splitting is orthographic.** An abbreviation before a capital ("Co. Ltd.") cuts a sentence, and only a window puts it back together. A stop before a digit ("...in 2024. 2025 was...") does not split, so that span is longer. A Claim of more than four sentences is matched only through four-sentence windows, so it may fail the numeric gate (fail closed).
 - **Token cap.** The entailment call counts against `run_token_cap`. When a cap is configured (none by default), exceeding it during fact-checking fails the Run, as it does in Synthesis, under the existing Run-limit policy.
 - **The benchmark baseline cannot verify.** It makes no model call, so a CLAIM_PASSAGE case that passes the gates is now NOT_APPLICABLE (baseline `m1.3-2`); it still uses `HashingEmbedder(256)`, not bge-small.
@@ -120,7 +121,7 @@ Hashing figures in brackets were measured per sentence in the pre-T7 probe, whic
   - one call, at most 3 spans, judges every candidate;
   - any SUPPORTED span verifies, and the match is its parent Passage;
   - CONTRADICTED only, INSUFFICIENT_EVIDENCE only, a malformed reply, a model exception, or omitted, out-of-range or ambiguous verdicts all give `unverified`, never `unchecked`.
-- `tests/integration/test_f2_fact_check_bge.py` (`-m integration`, real bge-small from the local cache; run `uv run insightforge-agent models download` once). It has the 15 F2 cases in the matrix above. `-rP` prints each case's spans, scores, model calls and verdict. A setup problem raises `RuntimeError`, never a verdict assertion.
+- `tests/integration/test_f2_fact_check_bge.py` (`-m integration`, real bge-small from the local cache; run `uv run insightforge-agent models download` once). It has the 16 F2 cases in the matrix above (15 from the brief, plus a subject-in-the-previous-sentence case added after review). `-rP` prints each case's spans, scores, model calls and verdict. A setup problem raises `RuntimeError`, never a verdict assertion.
 - **CI** does not run the integration tier. The gates and the entailment logic are covered there with the hashing embedder and scripted judges.
 - **Model name.** The `embedder` fixture (`tests/integration/conftest.py`) names `BAAI/bge-small-en-v1.5` directly. That equals `Settings.embedding_model` today, but this file would not follow a change of configured model.
 

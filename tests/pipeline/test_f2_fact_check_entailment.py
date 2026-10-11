@@ -90,7 +90,8 @@ def test_a_claim_inside_a_paragraph_is_judged_against_its_sentence_not_the_parag
     v, _, _ = check(make_deps, model, page=PARAGRAPH)
     assert v.verdict == "verified" and v.similarity == pytest.approx(1.0)
     texts = [t for _, t in numbered(model.seen[0])]
-    assert texts[0] == SALES and PARAGRAPH not in texts
+    # The sentence, widened to the window with its neighbour; never the whole paragraph.
+    assert texts == [f"{SALES} Plug-in hybrids made up about half of those sales."]
 
 
 class TableEmbedder:
@@ -114,8 +115,32 @@ def test_a_sentence_and_its_own_windows_cannot_crowd_out_a_supporting_sentence(m
         "Near miss.": 0.96, "Near miss. Tail one.": 0.955, "Near miss. Tail one. Tail two.": 0.95,
         "Supporting sentence.": 0.93}))
     s = screen(deps, claim, [near, good])
-    assert [span.text for _, span in s.candidates] == ["Near miss.", "Supporting sentence."]
+    # The near miss and its windows share one place (widened to the window that passes the
+    # gates, keeping the best score); the supporting sentence keeps its own.
+    assert [(score, span.text) for score, span in s.candidates] == [
+        (pytest.approx(0.96), "Near miss. Tail one. Tail two."),
+        (pytest.approx(0.93), "Supporting sentence.")]
     assert s.candidates[1][1].passage == good
+
+
+def test_a_sentence_without_its_subject_is_widened_to_the_window_that_names_it(make_deps):
+    claim = "BYD sold 3.02 million vehicles in 2023."
+    page = Passage(observation_id="o", index=0,
+                   text="BYD is a Chinese automaker. It sold 3.02 million vehicles in 2023.")
+    deps = make_deps(embedder=TableEmbedder(claim, {
+        "It sold 3.02 million vehicles in 2023.": 0.95, page.text: 0.90}))
+    s = screen(deps, claim, [page])
+    assert [(score, span.text) for score, span in s.candidates] == [
+        (pytest.approx(0.95), page.text)]
+
+
+def test_a_window_covering_two_chosen_spans_takes_one_place(make_deps):
+    claim = "Sales rose. Costs held. Prices fell."  # three sentences: three-sentence windows
+    page = Passage(observation_id="o", index=0, text="Sales rose. Margins held. Prices fell.")
+    deps = make_deps(embedder=TableEmbedder(claim, {
+        "Sales rose.": 0.97, "Prices fell.": 0.96, page.text: 0.90}))
+    s = screen(deps, claim, [page])
+    assert [span.text for _, span in s.candidates] == [page.text]
 
 
 def request_tokens(messages) -> int:

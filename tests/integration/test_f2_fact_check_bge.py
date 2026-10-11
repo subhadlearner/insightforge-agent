@@ -37,6 +37,7 @@ GMA_02 = "Orrin Bio's revenue was $90 million; its R&D spend was $40 million."
 GM = "GM delivered 2.7 million vehicles in the US in 2025."
 GENERAL_MOTORS = "General Motors delivered 2.7 million vehicles in the US in 2025."
 GWH = "Battery output hit 4.27 GWh at Tessera Energy's Nevada plant."
+PRONOUN = "BYD is a Chinese automaker. It sold 3.02 million vehicles in 2023."
 
 
 def oracle(support: str | None) -> ScriptedChat:
@@ -87,6 +88,8 @@ CASES = [
                  id="writer-paraphrase-in-paragraph"),
     pytest.param("BYD sold 4.27 million vehicles in 2025.", PARAGRAPH, SALES, "verified", True,
                  id="light-paraphrase-in-paragraph"),
+    pytest.param("BYD sold 3.02 million vehicles in 2023.", PRONOUN, PRONOUN, "verified", True,
+                 id="subject-in-previous-sentence"),
     pytest.param(WRONG_YEAR, SALES, None, "unverified", False,
                  id="wrong-year-one-sentence-passage"),
     pytest.param(WRONG_YEAR, PARAGRAPH, None, "unverified", False, id="wrong-year-in-paragraph"),
