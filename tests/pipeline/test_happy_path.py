@@ -213,7 +213,8 @@ def test_pipeline_continues_from_the_checkpoint_without_in_memory_summaries(make
     assert restarted.repos.runs.get("alice", run.id).state == RunState.COMPLETE
     assert len(restarted.repos.reports.list_for_owner("alice")) == 1
     research = deps.checkpointer.get_tuple(config).checkpoint["channel_values"]["research"]
-    assert all(set(ref) == {"source_id", "title", "summary"}
+    # References only: a web Source carries no chunk list (T7 adds `passages` for documents).
+    assert all(set(ref) == {"source_id", "title", "summary", "passages"} and ref["passages"] == []
                for r in research["results"] for ref in r["source_refs"])
 
 

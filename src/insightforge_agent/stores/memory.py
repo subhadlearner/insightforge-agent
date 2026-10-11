@@ -1,5 +1,7 @@
 """In-memory fakes of every repository. Used by default tests: no keys, no Docker."""
 
+import threading
+
 from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.passages import check_passages
@@ -199,3 +201,4 @@ class MemoryRepos:
         self.reports = MemoryReportRepository()
         self.events = MemoryRunEventRepository()
         self.entities = MemoryEntityRepository()
+        self.lock = threading.RLock()  # same contract as SqliteRepos.lock

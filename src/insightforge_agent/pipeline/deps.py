@@ -14,12 +14,14 @@ from insightforge_agent.domain.models import RunEvent
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import Embedder, HashingEmbedder
 from insightforge_agent.pipeline.errors import RunFailed
+from insightforge_agent.stores.doc_chunks import DocChunkIndex
 from insightforge_agent.stores.source_store import SourceStore
 
 
 @dataclass
 class Deps:
-    repos: Any  # MemoryRepos or SqliteRepos
+    repos: Any  # MemoryRepos or SqliteRepos; must expose `lock`, the one lock that serialises
+    # repository calls from parallel Researcher tools on a shared connection
     store: SourceStore
     planner_model: BaseChatModel
     writer_model: BaseChatModel
@@ -40,6 +42,9 @@ class Deps:
     fact_check_minimum: int = 5
     similarity_threshold: float = 0.85
     recursion_limit: int = 60
+    # Uploaded documents (T7). Without both, the documents source type cannot be researched.
+    doc_index: DocChunkIndex | None = None
+    chunker: Any = None  # agents.doc_reader.DocumentChunker
 
     _spent: dict[tuple[str, str], int] = field(default_factory=dict, repr=False)
 

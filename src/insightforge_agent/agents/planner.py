@@ -27,14 +27,15 @@ covering exactly one Aspect, every Aspect covered, each with a concrete search q
 time horizon in months and a priority (1 is most important). Use only the allowed source
 types. Do NOT call `task` in this phase.
 Phase RESEARCH: the user message starts with RESEARCH. Call `write_todos` with one todo per
-approved Sub-task, then call the `task` tool once per Sub-task with subagent_type
-"researcher". Each task description MUST be exactly "SUBTASK_ID=<id> <query>": the id, one
+approved Sub-task, then call the `task` tool once per Sub-task with the subagent_type the
+RESEARCH message names for it ("researcher" for web Sub-tasks, "doc_reader" for documents
+Sub-tasks). Each task description MUST be exactly "SUBTASK_ID=<id> <query>": the id, one
 space, then the Sub-task query copied verbatim. Add nothing else (no full stop after the id, no
 rephrasing, no extra instructions, no source type or time horizon, no reply format; the
 Researcher already knows them). A description that differs by a single character is refused.
 Issue all `task` calls in a single turn. Do not change the approved Sub-tasks.
 Phase REPAIR: the user message starts with REPAIR and lists missing Sub-tasks. Dispatch
-`task` only for those, with the same description format. Do not replan."""
+`task` only for those, with the same description format and subagent_type. Do not replan."""
 
 
 @tool
@@ -51,10 +52,12 @@ class ApprovedDispatchGuard(AgentMiddleware):
     reaches a Researcher; the Planner gets a REJECTED reply and `on_reject` logs it."""
 
     def __init__(self, approved: Callable[[], dict[str, str]],
-                 on_reject: Callable[[str, str, str], None]) -> None:
+                 on_reject: Callable[[str, str, str], None],
+                 agent_for: Callable[[str], str] = lambda _sid: RESEARCHER) -> None:
         super().__init__()
         self._approved = approved
         self._on_reject = on_reject
+        self._agent_for = agent_for  # the one subagent an approved Sub-task may go to
 
     def wrap_tool_call(self, request, handler):
         call = request.tool_call
@@ -69,8 +72,8 @@ class ApprovedDispatchGuard(AgentMiddleware):
             reason = f"{sid} is not an approved Sub-task"
         elif description.strip() != canonical_description(sid, approved[sid]):
             reason = f"{sid} does not carry exactly its approved scope"
-        elif call["args"].get("subagent_type") != RESEARCHER:
-            reason = f"{sid} is not dispatched to the {RESEARCHER} agent"
+        elif call["args"].get("subagent_type") != (agent := self._agent_for(sid)):
+            reason = f"{sid} is not dispatched to the {agent} agent"
         else:
             return handler(request)
         self._on_reject(sid or "", reason, description[:500])

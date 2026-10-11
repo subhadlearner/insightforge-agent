@@ -7,7 +7,12 @@ over raw text from several Sources at once."""
 from pydantic import BaseModel, Field
 
 from insightforge_agent.agents.llm_json import BadModelReply, ask_json
-from insightforge_agent.domain.contracts import ExtractedFact, ExtractionResult, PassageRef
+from insightforge_agent.domain.contracts import (
+    ExtractedFact,
+    ExtractionResult,
+    PassageRef,
+    PassageScope,
+)
 from insightforge_agent.domain.extraction import detect_conflicts
 from insightforge_agent.domain.ids import derive_fact_id
 from insightforge_agent.domain.passages import Window, batch_passages, render_batch, value_in_text
@@ -16,7 +21,7 @@ from insightforge_agent.pipeline.deps import Deps
 
 MAX_STATEMENT_CHARS = 600  # a statement is one sentence; a pasted page is not
 
-SYSTEM = """You extract facts from numbered passages of one web page. Reply with JSON only:
+SYSTEM = """You extract facts from numbered passages of one source (a web page or a document). Reply with JSON only:
 {"facts": [{"passage_index": <int>, "statement": "<one self-contained sentence the passage
 states, keeping every number and name exactly as written>", "entities": ["<named entity>"],
 "entity": "<the subject the fact is about>", "predicate": "<short snake_case relation, such as
@@ -46,52 +51,66 @@ def _index_label(position: int, window: Window) -> str:
     return str(window.passage.index)
 
 
-def extract(deps: Deps, owner_id: str, run_id: str, source_ids: list[str]) -> ExtractionResult:
+def extract(
+    deps: Deps, owner_id: str, run_id: str, source_ids: list[str],
+    scope: PassageScope | None = None,
+) -> ExtractionResult:
+    """`scope` limits a Source to the exact Passages a Doc Reader retrieved (by Observation
+    and index); a Source mapped to None, or absent, is read whole from its latest Observation."""
+    scope = scope or {}
     facts: list[ExtractedFact] = []
     entities: dict[str, None] = {}
     for sid in source_ids:
         contents = deps.store.read_source(owner_id, sid)
         if contents.observation is None:
             continue
-        obs_id = contents.observation.id
-        by_index = {p.index: p for p in contents.passages}
+        wanted = scope.get(sid)
+        if wanted is None:
+            groups = [(contents.observation.id, contents.passages)]
+        else:
+            by_obs: dict[str, list[int]] = {}
+            for ref in sorted(wanted, key=lambda r: (r.observation_id, r.index)):
+                by_obs.setdefault(ref.observation_id, []).append(ref.index)
+            groups = [(o, deps.store.get_passages(owner_id, o, idx)) for o, idx in by_obs.items()]
         from_source: dict[str, ExtractedFact] = {}
-        for batch in batch_passages(contents.passages, deps.passage_token_cap, _index_label):
-            known = {w.passage.index for w in batch}
-            numbered = render_batch(batch, _index_label)
-            user = f"Page title: {contents.source.title}\n\n{numbered}"
-            deps.spend(owner_id, run_id, SYSTEM, user)
-            try:
-                reply = ask_json(deps.light_model, SYSTEM, user, _Facts)
-            except BadModelReply as e:
-                deps.log(owner_id, run_id, "extraction_batch_failed", source_id=sid, detail=str(e))
-                continue
-            for f in reply.facts:
-                if (f.passage_index not in known or not f.statement.strip()
-                        or len(f.statement) > MAX_STATEMENT_CHARS):
-                    deps.log(owner_id, run_id, "extraction_fact_dropped", source_id=sid,
-                             passage_index=f.passage_index)
+        for obs_id, passages in groups:
+            by_index = {p.index: p for p in passages}
+            for batch in batch_passages(passages, deps.passage_token_cap, _index_label):
+                known = {w.passage.index for w in batch}
+                numbered = render_batch(batch, _index_label)
+                user = f"Source title: {contents.source.title}\n\n{numbered}"
+                deps.spend(owner_id, run_id, SYSTEM, user)
+                try:
+                    reply = ask_json(deps.light_model, SYSTEM, user, _Facts)
+                except BadModelReply as e:
+                    deps.log(owner_id, run_id, "extraction_batch_failed", source_id=sid, detail=str(e))
                     continue
-                statement = f.statement.strip()
-                text = by_index[f.passage_index].text
-                predicate, value = f.predicate.strip(), f.value.strip()
-                if value and not value_in_text(value, text):
-                    # A structured value the Passage does not state must not decide a conflict.
-                    deps.log(owner_id, run_id, "extraction_value_rejected", source_id=sid,
-                             passage_index=f.passage_index, value=value)
-                    predicate, value = "", ""
-                period = stated_period(f.period)
-                if period != UNKNOWN and not period_stated_in(period, text):
-                    deps.log(owner_id, run_id, "extraction_period_rejected", source_id=sid,
-                             passage_index=f.passage_index, period=period)
-                    period = UNKNOWN
-                fact = ExtractedFact(
-                    id=derive_fact_id(sid, obs_id, f.passage_index, statement),
-                    source_id=sid, passage=PassageRef(observation_id=obs_id, index=f.passage_index),
-                    statement=statement, entities=f.entities, entity=f.entity.strip(),
-                    predicate=predicate, value=value, scope=f.scope.strip(), period=period,
-                )
-                from_source.setdefault(fact.id, fact)
+                for f in reply.facts:
+                    if (f.passage_index not in known or not f.statement.strip()
+                            or len(f.statement) > MAX_STATEMENT_CHARS):
+                        deps.log(owner_id, run_id, "extraction_fact_dropped", source_id=sid,
+                                 passage_index=f.passage_index)
+                        continue
+                    statement = f.statement.strip()
+                    text = by_index[f.passage_index].text
+                    predicate, value = f.predicate.strip(), f.value.strip()
+                    if value and not value_in_text(value, text):
+                        # A structured value the Passage does not state must not decide a conflict.
+                        deps.log(owner_id, run_id, "extraction_value_rejected", source_id=sid,
+                                 passage_index=f.passage_index, value=value)
+                        predicate, value = "", ""
+                    period = stated_period(f.period)
+                    if period != UNKNOWN and not period_stated_in(period, text):
+                        deps.log(owner_id, run_id, "extraction_period_rejected", source_id=sid,
+                                 passage_index=f.passage_index, period=period)
+                        period = UNKNOWN
+                    fact = ExtractedFact(
+                        id=derive_fact_id(sid, obs_id, f.passage_index, statement),
+                        source_id=sid, passage=PassageRef(observation_id=obs_id, index=f.passage_index),
+                        statement=statement, entities=f.entities, entity=f.entity.strip(),
+                        predicate=predicate, value=value, scope=f.scope.strip(), period=period,
+                    )
+                    from_source.setdefault(fact.id, fact)
         deps.repos.entities.upsert_facts(owner_id, run_id, list(from_source.values()))
         facts.extend(from_source.values())
         for fact in from_source.values():

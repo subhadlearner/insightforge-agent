@@ -20,3 +20,18 @@ ends with a PASS/FAIL list and exits non-zero if any expectation fails.
 
 Only the model is scripted (`src/insightforge_agent/demo.py`); every decision shown is made by
 the production pipeline.
+
+## Uploaded documents (T7)
+
+PDF uploads are chunked by Docling and searched semantically in Qdrant with a local embedding
+model (`BAAI/bge-small-en-v1.5` via fastembed). No API key is needed for either. Fetch the model
+files once, then start Qdrant:
+
+```
+uv run insightforge-agent models download
+docker compose up -d qdrant
+```
+
+`QDRANT_URL` defaults to `http://localhost:6335` (`:memory:` runs Qdrant in-process). The sample
+document brief is `samples/briefs/document-annual-report.yml`. Integration tests with the real
+models run offline from the local cache: `uv run pytest -m integration`.

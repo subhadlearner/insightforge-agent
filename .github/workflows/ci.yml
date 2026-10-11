@@ -26,5 +26,5 @@ jobs:
         run: uv run pytest -m replay
       - name: Tier 3, scripted provider responses
         run: uv run pytest -m scripted
-      - name: Everything else offline (live tests are excluded by default)
-        run: uv run pytest -m "not baseline and not replay and not scripted and not live"
+      - name: Everything else offline (live and integration tests are excluded)
+        run: uv run pytest -m "not baseline and not replay and not scripted and not live and not integration"

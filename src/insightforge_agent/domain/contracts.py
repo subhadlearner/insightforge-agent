@@ -25,6 +25,9 @@ class SourceRef(BaseModel):
     source_id: str
     title: str
     summary: str
+    # The chunks a Doc Reader retrieved (references only, never text). Empty means the whole
+    # Source, as for a fetched web page.
+    passages: list["PassageRef"] = Field(default_factory=list)
 
 
 class SubTaskResult(BaseModel):
@@ -32,9 +35,34 @@ class SubTaskResult(BaseModel):
     status: Literal["succeeded", "failed"]
     source_refs: list[SourceRef] = Field(default_factory=list)
 
+    def passage_scope(self) -> "PassageScope":
+        """Per Source, the exact Passages this Sub-task retrieved (by Observation and index),
+        or None when it reads the whole Source, as for a web page."""
+        return merge_scopes([{r.source_id: set(r.passages) or None} for r in self.source_refs])
+
+
+# Source ID -> the Passages to read, or None for the Source's latest Observation, whole.
+PassageScope = dict[str, "set[PassageRef] | None"]
+
+
+def merge_scopes(scopes) -> PassageScope:
+    """Union of Passage scopes. A Source any scope reads whole is read whole."""
+    out: PassageScope = {}
+    for scope in scopes:
+        for source_id, refs in scope.items():
+            if refs is None or (source_id in out and out[source_id] is None):
+                out[source_id] = None
+            else:
+                out.setdefault(source_id, set()).update(refs)
+    return out
+
 
 class ResearchResults(BaseModel):
     results: list[SubTaskResult]
+
+    def passage_scope(self) -> "PassageScope":
+        """Per Source, the Passages any Sub-task retrieved, or None for the whole Source."""
+        return merge_scopes(r.passage_scope() for r in self.results)
 
 
 class PassageRef(BaseModel):
@@ -42,6 +70,11 @@ class PassageRef(BaseModel):
 
     observation_id: str
     index: int
+
+
+SourceRef.model_rebuild()
+SubTaskResult.model_rebuild()
+ResearchResults.model_rebuild()
 
 
 class ExtractedFact(BaseModel):
