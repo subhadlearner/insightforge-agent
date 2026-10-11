@@ -187,13 +187,16 @@ def build_items(cases: Sequence[BenchmarkCase]) -> list[ReviewItem]:
             for n, case in enumerate(ordered, start=1)]
 
 
-def render_packet(items: Sequence[ReviewItem]) -> str:
+def render_packet(items: Sequence[ReviewItem], title: str = "Owner blind review packet",
+                  intro: str | None = None) -> str:
+    if intro is None:
+        intro = (f"{len(items)} items. Record each label in `{REVIEW_DIR.as_posix()}/{SHEET_FILE}`, "
+                 "not here. This packet shows no proposed label, rationale, category or flag; "
+                 "do not look them up before you finish.")
     head = [
-        "# Owner blind review packet",
+        f"# {title}",
         "",
-        f"{len(items)} items. Record each label in `{REVIEW_DIR.as_posix()}/{SHEET_FILE}`, "
-        "not here. This packet shows no proposed label, rationale, category or flag; "
-        "do not look them up before you finish.",
+        intro,
         "",
         "## Labeling rubric",
         "",
@@ -287,11 +290,12 @@ def load_mapping(path: Path) -> list[MapEntry]:
 
 
 def verify_mapping(mapping: Sequence[MapEntry], cases: Sequence[BenchmarkCase],
-                   pin_proposals: bool = False) -> None:
+                   pin_proposals: bool = False, allow_subset: bool = False) -> None:
     """The packet the owner read must still describe the cases on disk. With `pin_proposals`
     the whole proposed record (including expected labels) must also be unchanged since
     preparation; finalize and compare require it, so a proposal edited after the blind review
-    cannot be compared as if it were the original."""
+    cannot be compared as if it were the original. `allow_subset` is for a sample packet that
+    covers only some cases."""
     by_id = {c.id: c for c in cases}
     problems = []
     for entry in mapping:
@@ -306,7 +310,7 @@ def verify_mapping(mapping: Sequence[MapEntry], cases: Sequence[BenchmarkCase],
             problems.append(f"{entry.review_id}: the proposed record of {entry.case_id} changed "
                             "(or was never pinned) since preparation")
     extra = sorted(set(by_id) - {e.case_id for e in mapping})
-    if extra:
+    if extra and not allow_subset:
         problems.append(f"{len(extra)} case(s) are not in the packet")
     if problems:
         raise ReviewError("the packet is out of date with the case file: " + "; ".join(problems))

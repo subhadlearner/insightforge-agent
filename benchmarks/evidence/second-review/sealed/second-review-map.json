@@ -1,0 +1,135 @@
+{
+  "format": 1,
+  "kind": "second-review-map",
+  "note": "Sealed from the second reviewer: it names the cases and their strata. Contains no owner label.",
+  "seed": "insightforge-m1.5-second-review-v1",
+  "selection_rules": "1. Each case is labelled positive (the owner's ORIGINAL frozen label is the type's positive class) or negative. 2. Per judgment type the allocation is fixed; it is split as evenly as possible between positive and negative (positive gets the smaller half), moving the shortfall to the other stratum if one is too small. 3. Within a stratum, critical cases come first, then cases ordered by sha256(seed + case id); the first k are taken. 4. Nothing else is read: no adjudication, no proposed-label disagreement, no baseline prediction. 5. Reviewer order is sha256(seed + 'order:' + case id), independent of stratum.",
+  "allocation": {
+    "PAIR": 4,
+    "SUPPORT": 2,
+    "GROUND": 2,
+    "INDEPENDENCE": 2
+  },
+  "strata": {
+    "PAIR": {
+      "positive": 2,
+      "negative": 2
+    },
+    "SUPPORT": {
+      "positive": 1,
+      "negative": 1
+    },
+    "GROUND": {
+      "positive": 1,
+      "negative": 1
+    },
+    "INDEPENDENCE": {
+      "positive": 1,
+      "negative": 1
+    }
+  },
+  "owner_frozen_sha256": "81fbfed9baaf86fd5be717c58dcbf03d2f1aaaac135d753172dc18f61a7ed69b",
+  "owner_mapping_sha256": "08c12abd0fbff3d8dfe543aceb1df02ef21ea6bf9b99099fc23c7ce9723fbdc1",
+  "items": [
+    {
+      "review_id": "S001",
+      "case_id": "p-al-04",
+      "type": "PAIR",
+      "content_sha256": "c6d07650450eeaa3539a4d4ca856272f63ec2175d220188bb6a10719d247b562",
+      "proposal_sha256": "206ccea95c4314429d955d6d83605bc7c3370dc001cb57d5e7d01d2b9ea2648e",
+      "owner_review_id": "R033",
+      "stratum": "positive",
+      "critical": false
+    },
+    {
+      "review_id": "S002",
+      "case_id": "i-gi-02",
+      "type": "INDEPENDENCE",
+      "content_sha256": "edb224aa539f3658f19bd2b12e7e2275e8b301b68e2b669991cf0fd0049208ca",
+      "proposal_sha256": "281999a2f004f892d085274739494eb5daca879f679009c22b8ee1f79620c966",
+      "owner_review_id": "R010",
+      "stratum": "positive",
+      "critical": false
+    },
+    {
+      "review_id": "S003",
+      "case_id": "s-pc-01",
+      "type": "SUPPORT",
+      "content_sha256": "07e39af6af77afadc6c19dca816cb5f3eceb8e64cf843f86c2f5ba00fd81c73b",
+      "proposal_sha256": "34be760130bc889cfeba7605deec7a6db8a43f0ac23d514a85df2204f1912bd6",
+      "owner_review_id": "R025",
+      "stratum": "positive",
+      "critical": false
+    },
+    {
+      "review_id": "S004",
+      "case_id": "i-sy-02",
+      "type": "INDEPENDENCE",
+      "content_sha256": "f3653dea42bac7208e8e3d682311a695ba1acec9adfec683bbe3c4fc25791b2a",
+      "proposal_sha256": "f55030041f6d644a364ae11775928c7aeabdcc09333ee970d92e162bfac07799",
+      "owner_review_id": "R008",
+      "stratum": "negative",
+      "critical": true
+    },
+    {
+      "review_id": "S005",
+      "case_id": "g-wi-01",
+      "type": "GROUND",
+      "content_sha256": "7141cbd29f4df8976b06082ac6a33352bb9a9a6fc1783138d9364d2a77965d71",
+      "proposal_sha256": "e07cb89a21c53d225635f239f7f1056c10518c05a40c4e239d913566b271ebec",
+      "owner_review_id": "R011",
+      "stratum": "negative",
+      "critical": false
+    },
+    {
+      "review_id": "S006",
+      "case_id": "p-fm-05",
+      "type": "PAIR",
+      "content_sha256": "786e4176697952554084333b05b5e3327ea81a4c83a8be3e0d7c4e08e2d3c420",
+      "proposal_sha256": "920b8276a64c0e6dda6102690981ce05e30a8acead4563658e37ff6e4acabc8e",
+      "owner_review_id": "R031",
+      "stratum": "negative",
+      "critical": true
+    },
+    {
+      "review_id": "S007",
+      "case_id": "p-pq-01",
+      "type": "PAIR",
+      "content_sha256": "f92d76ea719546a96a0bbfa73d4f87a659732e60dba5899b3b6b8f64be936525",
+      "proposal_sha256": "60b1483eb830f7255b3719f8aa65ffa3f0414059983a583b642736e8b35ae04a",
+      "owner_review_id": "R032",
+      "stratum": "positive",
+      "critical": false
+    },
+    {
+      "review_id": "S008",
+      "case_id": "p-ps-04",
+      "type": "PAIR",
+      "content_sha256": "be714ce381dd81b4009c5943f726ed2a315e294c9562caea052a5ca07b8ca213",
+      "proposal_sha256": "0d3b367094edcc2d6e571add3f7c9d5304f1681b14561649e9ced4cee4eaa5ac",
+      "owner_review_id": "R030",
+      "stratum": "negative",
+      "critical": true
+    },
+    {
+      "review_id": "S009",
+      "case_id": "s-fh-01",
+      "type": "SUPPORT",
+      "content_sha256": "70642fea2878d089a6f57122e7030956c9ed17a06f777f6fa7174f4ad7d2e316",
+      "proposal_sha256": "fe6c5a27685ade36873319fce792e3bf1906fe1b91c9cb34d7d7f1a64f3dd386",
+      "owner_review_id": "R004",
+      "stratum": "negative",
+      "critical": true
+    },
+    {
+      "review_id": "S010",
+      "case_id": "g-qu-03",
+      "type": "GROUND",
+      "content_sha256": "87093dcf590dab0d59a61338a073cb738f94cd207045c7b22024804ae6ad7f51",
+      "proposal_sha256": "825980099b0360f2edfa9cd443ff09ebc2c47be285b3e3fbea1757ae02020765",
+      "owner_review_id": "R047",
+      "stratum": "positive",
+      "critical": false
+    }
+  ]
+}

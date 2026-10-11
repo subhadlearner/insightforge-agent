@@ -14,7 +14,7 @@ from insightforge_agent.benchmark.baseline import run_baseline
 from insightforge_agent.benchmark.cases import CaseFileError, InputAccess, load_cases
 from insightforge_agent.benchmark.costs import CostError, Ledger, parse_money
 from insightforge_agent.benchmark.recording import RecordingError, RecordingStore
-from insightforge_agent.benchmark import review
+from insightforge_agent.benchmark import review, second_review
 from insightforge_agent.benchmark.report import build_report, render_text, to_dict
 
 DEFAULT_CASES = Path("benchmarks/evidence/cases.jsonl")
@@ -65,11 +65,17 @@ def _parser() -> argparse.ArgumentParser:
     for name, text in (("prepare", "write the blind packet, blank sheet and sealed id mapping"),
                        ("validate", "check the filled decision sheet"),
                        ("finalize", "freeze the owner's blind judgments (no overwrite)"),
-                       ("compare", "after finalize only: show owner vs proposed labels")):
+                       ("compare", "after finalize only: show owner vs proposed labels"),
+                       ("second-prepare", "draw the second-review sample from the owner's "
+                                          "frozen review and write the blind materials"),
+                       ("second-validate", "check the returned second-review sheet"),
+                       ("second-finalize", "freeze the second reviewer's judgments (no overwrite)"),
+                       ("second-verify", "check a frozen second review is unmodified")):
         cmd = rsub.add_parser(name, help=text)
         cmd.add_argument("--cases", type=Path, default=DEFAULT_CASES)
         cmd.add_argument("--dir", type=Path, default=review.REVIEW_DIR, dest="review_dir")
-        if name == "validate":
+        cmd.add_argument("--second-dir", type=Path, default=second_review.SECOND_DIR)
+        if name in ("validate", "second-validate"):
             cmd.add_argument("--allow-incomplete", action="store_true",
                              help="work in progress: report unlabelled rows without failing")
         if name == "compare":
@@ -159,6 +165,8 @@ def _review(args) -> int:
         print(f"error: case file not found: {args.cases}")
         return 2
     cases = load_cases(args.cases)
+    if args.review_command.startswith("second-"):
+        return _second(args, cases)
     if args.review_command == "prepare":
         for path in review.prepare(cases, base):
             print(f"wrote {path}")
@@ -189,3 +197,34 @@ def _review(args) -> int:
     review.finalize(report, sheet, mapping_path, frozen, date.today())
     print(f"froze {len(report.decisions)} blind judgments in {frozen}. Do not edit {sheet} now.")
     return 0
+
+
+def _second(args, cases) -> int:
+    owner_dir, second_dir = args.review_dir, args.second_dir
+    if args.review_command == "second-prepare":
+        for path in second_review.prepare_second(cases, owner_dir, second_dir):
+            print(f"wrote {path}")
+        print("Send the reviewer ONLY "
+              f"{second_dir / second_review.PACKET_FILE} and {second_dir / second_review.SHEET_FILE}.")
+        return 0
+    if args.review_command == "second-verify":
+        frozen = second_review.verify_second(second_dir, owner_dir, cases)
+        print(f"{second_dir / second_review.FROZEN_FILE}: unmodified, "
+              f"{len(frozen['decisions'])} decisions, gap "
+              f"{frozen['interval_days_min']}-{frozen['interval_days_max']} day(s), "
+              f"{frozen['under_preferred_gap']} under the preferred "
+              f"{frozen['preferred_gap_days']}")
+        return 0
+    if args.review_command == "second-finalize":
+        path = second_review.finalize_second(second_dir, owner_dir, cases, date.today())
+        print(f"froze the second review in {path}. Do not edit the sheet now.")
+        return 0
+    report = second_review.validate_second_sheet(second_dir, owner_dir, cases, date.today())
+    for problem in report.problems:
+        print(f"  {problem}")
+    print(f"{second_dir / second_review.SHEET_FILE}: {len(report.decisions)} labelled, "
+          f"{len(report.pending)} not yet labelled, {len(report.problems)} problem(s)")
+    ok = not report.problems and (args.allow_incomplete or not report.pending)
+    print("OK" if ok and report.complete else "OK so far (incomplete)" if ok
+          else "NOT READY: fix the above")
+    return 0 if ok else 1

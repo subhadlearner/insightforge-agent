@@ -34,6 +34,8 @@ A small import command (`bench review apply`) will read the frozen record and wr
 
 ## 3. Second review (blind, ~20%)
 
+Preparation, collection and freezing are implemented: see [second-review.md](second-review.md). The agreement report below is not.
+
 - **Sample:** about 10 cases, drawn with a fixed seed after the owner is frozen, stratified across the four judgment types and across positive and negative owner labels, with the critical cases preferred where a stratum allows. Never chosen by looking at disagreements.
 - **Blind:** a second packet built by the same code with its own neutral ids and ordering; it shows no label from the owner or the proposal. A different person; if it is the same person as the owner the tool rejects it (the schema already requires `second_reviewer != reviewer`).
 - **Gap:** preferably at least 7 days after the owner's `reviewed_on`. The report records the actual interval in days, computed from the two real dates (`second_reviewed_at - reviewed_at`), and says so when it is under 7.
