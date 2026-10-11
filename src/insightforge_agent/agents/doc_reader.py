@@ -70,11 +70,8 @@ class DoclingChunker:
             return self._converter
 
     def chunk(self, filename: str, data: bytes) -> list[PassageDraft]:
-        from docling.datamodel.base_models import ConversionStatus, DocumentStream
-        from docling_core.transforms.chunker import HierarchicalChunker
-
         try:
-            drafts = self._read(filename, data, DocumentStream, ConversionStatus, HierarchicalChunker)
+            drafts = self._read(filename, data)
         except ChunkingError:
             raise
         except Exception as e:  # noqa: BLE001 - conversion, chunking or metadata: unreadable PDF
@@ -85,13 +82,16 @@ class DoclingChunker:
             raise ChunkingError(f"{filename}: no text found (scanned PDFs are not read)")
         return drafts
 
-    def _read(self, filename, data, document_stream, status, chunker) -> list[PassageDraft]:
+    def _read(self, filename: str, data: bytes) -> list[PassageDraft]:
+        from docling.datamodel.base_models import ConversionStatus, DocumentStream
+        from docling_core.transforms.chunker import HierarchicalChunker
+
         result = self._converter_once().convert(
-            document_stream(name=filename, stream=io.BytesIO(data)), raises_on_error=False)
-        if result.status not in (status.SUCCESS, status.PARTIAL_SUCCESS):
+            DocumentStream(name=filename, stream=io.BytesIO(data)), raises_on_error=False)
+        if result.status not in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS):
             raise ChunkingError(f"{filename}: conversion {result.status.value}")
         drafts = []
-        for c in chunker().chunk(result.document):
+        for c in HierarchicalChunker().chunk(result.document):
             text = " ".join(c.text.split())
             if not text:
                 continue
@@ -103,11 +103,15 @@ class DoclingChunker:
 
 
 def searching_subtask(messages) -> str | None:
-    """The Sub-task a Doc Reader works on: the SUBTASK_ID of the task description it was given
-    (its first human message), which the dispatch guard has checked is canonical. Never taken
-    from a tool argument the model chose."""
-    first = next((m for m in messages if isinstance(m, HumanMessage)), None)
-    return dispatched_id(str(first.content)) if first is not None else None
+    """The Sub-task a Doc Reader works on: the SUBTASK_ID of the task description it was given,
+    which the dispatch guard has checked is canonical. Never taken from a tool argument the
+    model chose. The first human message that carries one wins, so a message placed before the
+    task description cannot hide it. None when no message carries one; the graph then logs the
+    Doc Reader's chunks as rejected rather than dropping them silently."""
+    for m in messages:
+        if isinstance(m, HumanMessage) and (sid := dispatched_id(str(m.content))):
+            return sid
+    return None
 
 
 def make_doc_search_tool(

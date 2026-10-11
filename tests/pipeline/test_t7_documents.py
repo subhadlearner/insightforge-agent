@@ -453,6 +453,17 @@ def test_a_subtask_may_return_only_chunks_its_own_searches_returned(doc_deps):
     assert accepted["s1"] == searched["s1"]  # only s1's own hits survive
     assert accepted["s1"].isdisjoint(only_s2)
     assert accepted["s2"] <= searched["s2"]
+    (rejected,) = [e.payload for e in events(deps, run, "document_chunks_rejected")]
+    assert rejected["subtask_id"] == "s1" and set(rejected["chunk_ids"]) >= only_s2
+
+
+def test_the_searching_subtask_comes_from_the_task_description_only():
+    from insightforge_agent.agents.doc_reader import searching_subtask
+
+    task = HumanMessage("SUBTASK_ID=s2 research pipeline")
+    assert searching_subtask([task, AIMessage("x")]) == "s2"
+    assert searching_subtask([HumanMessage("Summary of earlier turns"), task]) == "s2"
+    assert searching_subtask([HumanMessage("no id here")]) is None
 
 
 def test_a_search_without_a_subtask_authorises_nothing(doc_deps):

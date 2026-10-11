@@ -190,7 +190,7 @@ def test_the_researcher_stores_the_date_and_score_and_only_the_credible_recent_s
     tool = make_web_search_tool(
         owner_id="alice", run_id="r", search=_Web(), fetcher=_Web(), store=deps.store,
         summarizer=FakeListChatModel(responses=["summary"] * 4), events=deps.repos.events,
-        now=lambda: NOW, passage_token_cap=deps.passage_token_cap)
+        now=lambda: NOW, passage_token_cap=deps.passage_token_cap, lock=deps.repos.lock)
     refs = json.loads(tool.invoke({"query": "BYD sales"}))
     sources = {s.locator: s for s in (deps.repos.sources.get("alice", r["source_id"]) for r in refs)}
     press, blog = sources["https://www.reuters.com/byd"], sources["https://blog.example.com/byd"]

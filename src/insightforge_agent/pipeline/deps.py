@@ -20,7 +20,8 @@ from insightforge_agent.stores.source_store import SourceStore
 
 @dataclass
 class Deps:
-    repos: Any  # MemoryRepos or SqliteRepos
+    repos: Any  # MemoryRepos or SqliteRepos; must expose `lock`, the one lock that serialises
+    # repository calls from parallel Researcher tools on a shared connection
     store: SourceStore
     planner_model: BaseChatModel
     writer_model: BaseChatModel

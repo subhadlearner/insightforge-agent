@@ -274,8 +274,14 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         for sid, outcome in outcomes(state).items():
             refs: list[SourceRef] = []
             if outcome.status == "succeeded" and source_type[sid] == "documents":
-                refs = document_refs(owner, outcome.dispatch.result or "",
-                                     returned.get(sid, set()), documents)
+                reply = outcome.dispatch.result or ""
+                refs = document_refs(owner, reply, returned.get(sid, set()), documents)
+                kept = {chunk_id(p) for r in refs for p in r.passages}
+                rejected = [c for c in map(chunk_id, chunk_ids_in(reply)) if c not in kept]
+                if rejected:
+                    deps.log(owner, run_id, "document_chunks_rejected", subtask_id=sid,
+                             chunk_ids=rejected[:50], count=len(rejected),
+                             reason="not returned by this Sub-task's own searches in this Run")
             elif outcome.status == "succeeded":
                 for src in source_ids_in(outcome.dispatch.result or ""):
                     ref = summaries.get(src)

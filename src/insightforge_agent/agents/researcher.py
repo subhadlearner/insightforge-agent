@@ -7,7 +7,6 @@ write a one-line summary in its own bounded call, and hands the Researcher only
 import json
 from contextlib import AbstractContextManager
 import re
-import threading
 from collections.abc import Callable
 from datetime import datetime
 
@@ -77,11 +76,12 @@ def make_web_search_tool(
     events: RunEventRepository,
     now: Callable[[], datetime],
     passage_token_cap: int,
-    lock: AbstractContextManager | None = None,
+    lock: AbstractContextManager,
 ) -> BaseTool:
     # Repository writes are serialised with every other Researcher tool of the Run through the
-    # repositories' shared lock; fetching, search and the summary call run outside it.
-    store_lock = lock if lock is not None else threading.RLock()
+    # repositories' shared lock (required: a private one would not protect the shared
+    # connection); fetching, search and the summary call run outside it.
+    store_lock = lock
 
     def log(type_: str, **payload) -> None:
         with store_lock:

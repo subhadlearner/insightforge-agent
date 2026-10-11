@@ -15,7 +15,7 @@ def test_the_researcher_subagent_has_its_own_tools_and_is_not_forked(make_deps):
     tool = make_web_search_tool(
         owner_id="alice", run_id="r", search=deps.search, fetcher=deps.fetcher, store=deps.store,
         summarizer=deps.light_model, events=deps.repos.events, now=deps.now,
-        passage_token_cap=deps.passage_token_cap)
+        passage_token_cap=deps.passage_token_cap, lock=deps.repos.lock)
     definition = researcher_subagent([tool], deps.researcher_model)
     assert [t.name for t in definition["tools"]] == ["web_search"]
     assert definition["model"] is deps.researcher_model
