@@ -5,6 +5,7 @@ deterministic logic. Paid or local inference is M2 and needs separate owner auth
 import argparse
 import json
 from collections import Counter
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from insightforge_agent.benchmark.baseline import run_baseline
 from insightforge_agent.benchmark.cases import CaseFileError, InputAccess, load_cases
 from insightforge_agent.benchmark.costs import CostError, Ledger, parse_money
 from insightforge_agent.benchmark.recording import RecordingError, RecordingStore
+from insightforge_agent.benchmark import review
 from insightforge_agent.benchmark.report import build_report, render_text, to_dict
 
 DEFAULT_CASES = Path("benchmarks/evidence/cases.jsonl")
@@ -56,6 +58,23 @@ def _parser() -> argparse.ArgumentParser:
     ledger.add_argument("--ledger", type=Path, required=True)
     ledger.add_argument("--approved-budget", type=parse_money,
                         help="a number only; this is NOT owner authorisation")
+
+    rev = sub.add_parser("review", help="offline owner label review (issue #34); see "
+                                        "docs/benchmark/owner-review.md")
+    rsub = rev.add_subparsers(dest="review_command", required=True)
+    for name, text in (("prepare", "write the blind packet, blank sheet and sealed id mapping"),
+                       ("validate", "check the filled decision sheet"),
+                       ("finalize", "freeze the owner's blind judgments (no overwrite)"),
+                       ("compare", "after finalize only: show owner vs proposed labels")):
+        cmd = rsub.add_parser(name, help=text)
+        cmd.add_argument("--cases", type=Path, default=DEFAULT_CASES)
+        cmd.add_argument("--dir", type=Path, default=review.REVIEW_DIR, dest="review_dir")
+        if name == "validate":
+            cmd.add_argument("--allow-incomplete", action="store_true",
+                             help="work in progress: report unlabelled rows without failing")
+        if name == "compare":
+            cmd.add_argument("--out", type=Path, help="also write the comparison as JSON "
+                                                      "(a new file; never overwrites)")
     return parser
 
 
@@ -64,6 +83,8 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "ledger":
             return _ledger(args)
+        if args.command == "review":
+            return _review(args)
         if not args.cases.exists():
             print(f"error: case file not found: {args.cases}")
             return 2
@@ -78,7 +99,7 @@ def main(argv: list[str]) -> int:
         for problem in exc.problems:
             print(f"  {problem}")
         return 1
-    except (CostError, RecordingError) as exc:
+    except (CostError, RecordingError, review.ReviewError) as exc:
         print(f"error: {exc}")
         return 1
 
@@ -127,4 +148,44 @@ def _ledger(args) -> int:
               "has been checked, and no run can start from it.")
         if remaining < Decimal(0):
             print("  the committed amount already exceeds this number")
+    return 0
+
+
+def _review(args) -> int:
+    base = args.review_dir
+    sheet, mapping_path = base / review.SHEET_FILE, base / review.MAPPING_FILE
+    frozen = base / review.FROZEN_FILE
+    if not args.cases.exists():
+        print(f"error: case file not found: {args.cases}")
+        return 2
+    cases = load_cases(args.cases)
+    if args.review_command == "prepare":
+        for path in review.prepare(cases, base):
+            print(f"wrote {path}")
+        print(f"{len(cases)} items. Next: open {base / review.PACKET_FILE} and fill in {sheet}.")
+        return 0
+    if args.review_command == "compare":
+        rows = review.compare(frozen, sheet, mapping_path, cases)
+        print(review.render_comparison(rows))
+        if args.out:
+            review._create(args.out, review.comparison_json(rows))
+            print(f"wrote {args.out}")
+        return 0
+    mapping = review.load_mapping(mapping_path)
+    review.verify_mapping(mapping, cases)
+    report = review.validate_sheet(review.read_sheet(sheet), mapping, date.today())
+    for problem in report.problems:
+        print(f"  {problem}")
+    print(f"{sheet}: {len(report.decisions)} labelled, {len(report.pending)} not yet labelled, "
+          f"{len(report.problems)} problem(s), "
+          f"{sum(d.uncertain for d in report.decisions)} marked uncertain")
+    if report.pending:
+        print("  not yet labelled: " + ", ".join(sorted(report.pending)))
+    if args.review_command == "validate":
+        ok = not report.problems and (args.allow_incomplete or not report.pending)
+        print("OK" if ok and report.complete else
+              "OK so far (incomplete)" if ok else "NOT READY: fix the above")
+        return 0 if ok else 1
+    review.finalize(report, sheet, mapping_path, frozen, date.today())
+    print(f"froze {len(report.decisions)} blind judgments in {frozen}. Do not edit {sheet} now.")
     return 0
