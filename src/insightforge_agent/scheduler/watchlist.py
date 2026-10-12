@@ -81,7 +81,7 @@ class WatchlistScheduler:
                 if job.id.startswith("watchlist:") and job.id not in live:
                     self.scheduler.remove_job(job.id)
             for item in items:
-                self.initialize(item.owner_id, item.id)
+                self._initialize_quietly(item.owner_id, item.id)
                 self.sync(repo.skip_missed(item.owner_id, item.id, self.deps.now()))
 
     def tick(self, owner_id, item_id, revision):
@@ -94,7 +94,7 @@ class WatchlistScheduler:
                 if item is None:
                     return None
                 # Recover a completion interrupted before Baseline initialization.
-                self.initialize(owner_id, item_id)
+                self._initialize_quietly(owner_id, item_id)
                 run = self.research.submit(
                     owner_id, item.as_brief(), watchlist_item_id=item_id
                 )
@@ -115,10 +115,20 @@ class WatchlistScheduler:
     def completed(self, run):
         """Outside the research graph, including after clarification resumption/recovery."""
         if run.state == RunState.COMPLETE and run.watchlist_item_id:
-            try:
-                self.initialize(run.owner_id, run.watchlist_item_id)
-            except NotFoundError:
-                pass  # deletion does not cancel an already admitted Run
+            self._initialize_quietly(run.owner_id, run.watchlist_item_id)
+
+    def _initialize_quietly(self, owner_id, item_id):
+        try:
+            return self.initialize(owner_id, item_id)
+        except NotFoundError:
+            return None  # deletion does not cancel an already admitted Run
+        except Exception:
+            # Post-processing failure must not disable future research or process startup.
+            # Keep the first-success input unchanged; the next tick/startup retries it.
+            logger.exception(
+                "Baseline initialization deferred for %s/%s", owner_id, item_id
+            )
+            return None
 
     def initialize(self, owner_id, item_id):
         """Persist the earliest successful Run's current Claim/Evidence state exactly once.

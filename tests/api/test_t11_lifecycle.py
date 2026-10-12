@@ -341,3 +341,33 @@ def test_real_apscheduler_discards_misfire_without_run_or_counter(tmp_path):
         assert scheduler.get_job(job_id("alice", item.id)).next_run_time > datetime.now(
             UTC
         )
+
+
+def test_baseline_processing_failure_does_not_block_next_run_or_change_outcomes(
+    tmp_path, monkeypatch
+):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=2)
+        schedules = app.runtime.watchlists.schedules
+        initialize = schedules.initialize
+
+        def unavailable(*_):
+            raise RuntimeError("injected Baseline persistence outage")
+
+        monkeypatch.setattr(schedules, "initialize", unavailable)
+        first = tick(app, clock, item)
+        assert app.wait(first.id).state == RunState.COMPLETE
+        wait_until(lambda: app.runtime.executor.in_flight == 0)
+        assert app.runtime.repos.watchlists.baseline("alice", item.id) is None
+        second = tick(app, clock, item)
+        assert app.wait(second.id).state == RunState.COMPLETE
+        wait_until(lambda: app.runtime.executor.in_flight == 0)
+        assert app.runtime.repos.watchlists.counts("alice", item.id) == (2, 2, 0)
+        # Recovery still initializes from the FIRST success, not the most recent Report.
+        monkeypatch.setattr(schedules, "initialize", initialize)
+        schedules.recover()
+        assert (
+            app.runtime.repos.watchlists.baseline("alice", item.id).initializing_run_id
+            == first.id
+        )

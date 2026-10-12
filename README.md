@@ -68,3 +68,35 @@ docker compose up -d qdrant
 `QDRANT_URL` defaults to `http://localhost:6335` (`:memory:` runs Qdrant in-process). The sample
 document brief is `samples/briefs/document-annual-report.yml`. Integration tests with the real
 models run offline from the local cache: `uv run pytest -m integration`.
+
+### Watchlist API (T11)
+
+With a selected persona, create a standing Brief with `POST /watchlist`:
+
+```json
+{
+  "brief": "Compare US electric vehicle makers' pricing, sales and battery plans for 2026",
+  "cadence_minutes": 15,
+  "max_runs": 3,
+  "source_toggles": {"web": true, "documents": false, "memory": false}
+}
+```
+
+Creation checks that the Planner can produce a concrete plan (a model call in production).
+A Vague Brief is rejected before storage. Web is required, uploads are prohibited, and memory
+is optional. Omit `max_runs` for unbounded scheduling only at cadences of at least 15 minutes.
+The first tick is one cadence after creation; downtime and overlapping ticks are skipped.
+
+List with `GET /watchlist`, retrieve with `GET /watchlist/{id}`, edit with `PATCH` at that path,
+and delete with `DELETE`. Responses include `item`, `runs_started`, `completed_runs`,
+`failed_runs`, `recent_failed_runs` (up to five), and the first-success Baseline seed state.
+The UI can render `runs_started` of `item.max_runs` runs started. Executor capacity refusal
+creates no Run and consumes no slot; a persisted Run that fails or is cancelled consumes one.
+
+An edit resets the next tick and does not reset the Run count. Once any Run has started, use a
+new item to change its Brief. Deleting an item retains its Runs and Reports and lets already
+admitted work finish. All endpoints use the existing owner-scoped 404 behavior.
+
+T11 persists current Claim/Evidence seeds with full provenance on first success, marked
+`normalization_pending=true`. Normalized Finding state, comparisons, Material changes and
+Alerts remain T12; the Baseline is never treated as just a previous Report pointer.
