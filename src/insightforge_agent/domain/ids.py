@@ -16,9 +16,12 @@ def derive_source_id(kind: str, locator: str) -> str:
     return f"src_{_digest(kind, locator)}"
 
 
-def derive_observation_id(owner_id: str, source: str, fetched_at: datetime, content: str) -> str:
-    """Derived from the fetch itself, so storing the same fetch twice is the same Observation."""
-    return f"obs_{_digest(owner_id, source, fetched_at.isoformat(), _digest(content))}"
+def derive_observation_id(owner_id: str, run_id: str, source: str, fetched_at: datetime,
+                          content: str) -> str:
+    """Derived from the fetch itself, so storing the same fetch twice is the same Observation.
+    The fetching Run is part of it: two Runs that fetch identical content at the same instant
+    made two fetches, and neither may become the other's Observation."""
+    return f"obs_{_digest(owner_id, run_id, source, fetched_at.isoformat(), _digest(content))}"
 
 
 def derive_evidence_id(run_id: str, statement: str) -> str:

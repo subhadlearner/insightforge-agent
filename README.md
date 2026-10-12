@@ -4,6 +4,39 @@ An autonomous research platform: a user submits a research question and receives
 intelligence report. See `docs/design.md` for the design and `CONTEXT.md` for the vocabulary.
 (The full README is T17.)
 
+> **The persona picker is identity selection for the demo. It is not authentication and must
+> not be treated as a security boundary.** Anyone who can reach the API can select any persona
+> in `users.yml`. The session cookie is signed (HMAC with `SESSION_SECRET`) and HttpOnly only so
+> that a browser cannot switch persona by editing it; there are no passwords and no accounts.
+
+## Running the API (T10)
+
+Set the provider and search keys in `.env` (see `.env.example`), plus `SESSION_SECRET` (at least
+32 characters; the app refuses to start without it). Start Qdrant and the API:
+
+```
+docker compose up -d qdrant
+uv run insightforge-agent serve --port 8000
+```
+
+Stop it with Ctrl+C: open progress streams end at once (clients reconnect with
+`Last-Event-ID`), the scheduler and executor stop, running Runs finish, and the databases are
+closed. Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves the same app,
+but on shutdown uvicorn then waits for open streams for up to `SSE_MAX_STREAM_SECONDS` (60 s).
+
+Runs execute in the API process on a bounded pool (`RUN_CONCURRENCY` workers, `RUN_QUEUE_LIMIT`
+queued); a submission beyond that is refused with 503. Endpoints:
+
+| Endpoint | What it does |
+|---|---|
+| `GET /personas`, `POST /session {"persona_id"}`, `GET` / `DELETE /session` | list and select a persona (sets the signed HttpOnly cookie) |
+| `POST /research/run {"brief", "source_toggles"?, "documents"?}` | 202 with `run_id`; 422 if no source type is available; 503 at capacity |
+| `GET /research/status?run_id=` | SSE progress; reconnect with `Last-Event-ID` to resume |
+| `GET /research/{run_id}/clarification`, `POST /research/{run_id}/clarify {"answer"}` | the Run's clarifying question; 409 once resolved |
+| `GET /reports`, `GET /reports/{report_id}` | the selected persona's Reports (there is no delete) |
+
+Another persona's Run or Report is 404. Documents are sent as `{"filename", "content_base64"}`.
+
 ## Offline demo: Extraction and synthesis
 
 Exercise the real Extraction and synthesis stages with seeded Sources and scripted models. No

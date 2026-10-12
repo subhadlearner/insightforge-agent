@@ -3,7 +3,7 @@
 import logging
 from typing import Annotated, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,17 @@ class Settings(BaseSettings):
     # Infrastructure.
     qdrant_url: str = "http://localhost:6335"
     database_url: str = "sqlite:///insightforge.db"
+    checkpoint_database_url: str = "sqlite:///insightforge-checkpoints.db"  # LangGraph threads
     personas_file: str = "users.yml"
+
+    # API (design.md section 9). The session secret signs the persona cookie; the app refuses
+    # to start without one. Persona selection, not security.
+    session_secret: SecretStr | None = None
+    session_cookie_secure: bool = False  # True when served over HTTPS
+    run_concurrency: int = Field(default=2, ge=1)  # Runs executing at once (RunExecutor)
+    run_queue_limit: int = Field(default=2, ge=0)  # new Runs that may wait for a free worker
+    sse_poll_seconds: float = Field(default=0.5, gt=0)  # how often the SSE stream tails run_events
+    sse_max_stream_seconds: float = Field(default=60, gt=0)  # then the client reconnects
 
     @field_validator("search_providers", mode="before")
     @classmethod

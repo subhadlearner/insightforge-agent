@@ -130,7 +130,7 @@ class Process:
         self.submitted: list = []
         self.service = ClarificationService(self.deps, submit=self.run_now)
 
-    def run_now(self, work):
+    def run_now(self, work, on_cancel=None):
         self.submitted.append(work)
         return work()
 
@@ -320,7 +320,8 @@ def test_concurrent_answer_and_timeout_have_exactly_one_winner_and_one_resume(wo
     a = Process(tmp_path, proc.stack, ScriptedChat(script=[]), late)
     b = Process(tmp_path, proc.stack, ScriptedChat(script=[]), due)
     for p in (a, b):
-        p.service = ClarificationService(p.deps, submit=p.submitted.append)  # resume recorded
+        p.service = ClarificationService(  # resume recorded
+            p.deps, submit=lambda work, **_: p.submitted.append(work))
     start, outcomes = threading.Barrier(2), {}
 
     def answer():
@@ -485,7 +486,7 @@ def test_an_awaiting_run_is_never_memory_or_planner_context(world):
 def test_a_crash_after_the_resolution_is_stored_resumes_on_restart(world):
     proc, run = ask(world)
     # The answer is stored, then the process dies before the resume runs.
-    proc.service = ClarificationService(proc.deps, submit=lambda work: None)
+    proc.service = ClarificationService(proc.deps, submit=lambda work, **_: None)
     proc.service.answer("alice", run.id, ANSWER)
     assert proc.run(run.id).state == RunState.RESUMING
     after = proc.restart(scripted(plan_turn(), research_turn()))
@@ -498,7 +499,7 @@ def test_a_crash_after_the_resolution_is_stored_resumes_on_restart(world):
 
 def test_a_repeated_sweep_never_runs_a_run_twice(world):
     proc, run = ask(world)
-    proc.service = ClarificationService(proc.deps, submit=lambda work: None)
+    proc.service = ClarificationService(proc.deps, submit=lambda work, **_: None)
     proc.service.answer("alice", run.id, ANSWER)
     after = proc.restart(scripted(plan_turn(), research_turn()))  # scripted for one run only
     startup_sweep(after.deps, after.service)
@@ -510,7 +511,7 @@ def test_a_repeated_sweep_never_runs_a_run_twice(world):
 
 def test_resuming_twice_carries_the_run_on_once(world):
     proc, run = ask(world)
-    proc.service = ClarificationService(proc.deps, submit=lambda work: None)
+    proc.service = ClarificationService(proc.deps, submit=lambda work, **_: None)
     proc.service.answer("alice", run.id, ANSWER)
     proc.deps.planner_model.script += plan_turn() + research_turn()
     assert resume_run(proc.deps, "alice", run.id).state == RunState.COMPLETE
@@ -560,7 +561,7 @@ def test_a_crash_right_after_the_claim_is_resumed_not_failed(world):
     """The answer was accepted (202) and the Run claimed, but the graph never took the answer
     in: nothing of the resumed Run has run, so the sweep resumes it rather than failing it."""
     proc, run = ask(world)
-    proc.service = ClarificationService(proc.deps, submit=lambda work: None)
+    proc.service = ClarificationService(proc.deps, submit=lambda work, **_: None)
     proc.service.answer("alice", run.id, ANSWER)
     proc.repos.runs.claim_resume("alice", run.id)  # claimed, then the process died
     after = proc.restart(scripted(plan_turn(), research_turn()))
@@ -573,7 +574,7 @@ def test_a_crash_after_the_graph_took_the_answer_fails_rather_than_running_again
     """Once the graph is past the question, the Run was genuinely running: like any Run left
     in progress it fails, and nothing is asked or planned twice."""
     proc, run = ask(world)
-    proc.service = ClarificationService(proc.deps, submit=lambda work: None)
+    proc.service = ClarificationService(proc.deps, submit=lambda work, **_: None)
     proc.service.answer("alice", run.id, ANSWER)
     proc.repos.runs.claim_resume("alice", run.id)
     from langgraph.types import Command
@@ -590,7 +591,7 @@ def test_a_crash_after_the_graph_took_the_answer_fails_rather_than_running_again
 
 def test_a_resuming_run_without_a_checkpoint_fails(world):
     proc, run = ask(world)
-    proc.service = ClarificationService(proc.deps, submit=lambda work: None)
+    proc.service = ClarificationService(proc.deps, submit=lambda work, **_: None)
     proc.service.answer("alice", run.id, ANSWER)
     with SqliteSaver.from_conn_string(":memory:") as empty:
         lost = proc.restart(ScriptedChat(script=[]), checkpointer=empty)

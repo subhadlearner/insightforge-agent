@@ -27,8 +27,8 @@ class PassageDraft:
 
 @dataclass(frozen=True)
 class SourceContents:
-    """What `read_source` resolves: the Source, its latest Observation and that
-    Observation's Passages (empty when the Source has not been fetched yet)."""
+    """What `read_source` resolves: the Source, its latest Observation (of one Run, for
+    `read_run_source`) and that Observation's Passages (empty when there is none)."""
 
     source: Source
     observation: Observation | None
@@ -96,7 +96,7 @@ class SourceStore:
             id=sid, owner_id=owner_id, run_id=run_id, kind=kind, locator=locator, title=title,
             credibility_score=credibility_score, published_at=published_at,
         ))
-        oid = derive_observation_id(owner_id, sid, fetched_at, content)
+        oid = derive_observation_id(owner_id, run_id, sid, fetched_at, content)
         try:
             # Already stored (even if it split to nothing): never re-split.
             return self._observations.get(owner_id, oid)
@@ -116,9 +116,25 @@ class SourceStore:
         ))
 
     def read_source(self, owner_id: str, source_id: str) -> SourceContents:
-        """Resolve a Source ID. Raises NotFoundError if it is missing or not the User's."""
+        """Resolve a Source ID to the User's latest Observation of it, from whichever Run.
+        Raises NotFoundError if it is missing or not the User's. A pipeline stage reads its
+        own Run's fetch instead (`read_run_source`)."""
         source = self._sources.get(owner_id, source_id)
-        observations = self._observations.list_for_source(owner_id, source_id)
+        return self._contents(owner_id, source,
+                              self._observations.list_for_source(owner_id, source_id))
+
+    def read_run_source(self, owner_id: str, run_id: str, source_id: str) -> SourceContents:
+        """Resolve a Source ID to the latest Observation *this Run* made of it. A web Source is
+        shared by every Run that fetched its URL, so the User's latest Observation may be
+        another Run's (concurrent Runs); a Run must never read that. The observation is None
+        if this Run never fetched the Source. Raises NotFoundError as `read_source`."""
+        source = self._sources.get(owner_id, source_id)
+        return self._contents(owner_id, source, [
+            o for o in self._observations.list_for_source(owner_id, source_id)
+            if o.run_id == run_id])
+
+    def _contents(self, owner_id: str, source: Source,
+                  observations: list[Observation]) -> SourceContents:
         latest = observations[-1] if observations else None
         passages = self._passages.list(owner_id, latest.id) if latest else []
         return SourceContents(source=source, observation=latest, passages=passages)
