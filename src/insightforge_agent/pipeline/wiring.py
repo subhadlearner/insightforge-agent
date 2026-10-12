@@ -12,6 +12,7 @@ from insightforge_agent.embeddings import FastEmbedEmbedder
 from insightforge_agent.llm import build_chat_model
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.stores.doc_chunks import DocChunkIndex
+from insightforge_agent.stores.report_sections import ReportSectionIndex
 from insightforge_agent.stores.source_store import SourceStore
 
 
@@ -25,8 +26,10 @@ def build_qdrant(settings: Settings) -> QdrantClient:
 
 def build_deps(settings: Settings, repos: Any, checkpointer: Any) -> Deps:
     # One local embedding model for everything that embeds (design.md section 10): Doc Reader
-    # search, Evidence relevance and Fact-Checker similarity. It loads on first use.
+    # search, Memory researcher search, Evidence relevance and Fact-Checker similarity. It
+    # loads on first use.
     embedder = FastEmbedEmbedder(settings.embedding_model)
+    qdrant = build_qdrant(settings)
     return Deps(
         repos=repos,
         store=SourceStore(repos.sources, repos.observations, repos.passages),
@@ -38,8 +41,9 @@ def build_deps(settings: Settings, repos: Any, checkpointer: Any) -> Deps:
         fetcher=HttpFetcher(),
         checkpointer=checkpointer,
         embedder=embedder,
-        doc_index=DocChunkIndex(build_qdrant(settings), embedder, settings.embedding_model,
-                                embedder.dimensions),
+        doc_index=DocChunkIndex(qdrant, embedder, settings.embedding_model, embedder.dimensions),
+        report_index=ReportSectionIndex(qdrant, embedder, settings.embedding_model,
+                                        embedder.dimensions),
         chunker=DoclingChunker(),
         evidence_budget_tokens=settings.evidence_budget_tokens,
         passage_token_cap=settings.passage_token_cap,

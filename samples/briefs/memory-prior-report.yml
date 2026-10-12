@@ -1,0 +1,44 @@
+# Sample brief library (design.md section 11; T16 #17 completes it to 5 briefs and the eval command).
+# T8 (#9): the evaluation brief for the memory path. It runs in two steps for the same User:
+# `setup` first completes a one-shot Run (memory off) whose Report becomes eligible memory; the
+# memory Run then asks for an update with `memory: true`.
+id: memory-prior-report
+industry: Electric vehicles
+question_type: Follow-up on an earlier report, with prior findings as dated background
+setup:
+  runs_before: 1
+  brief: >-
+    Summarise BYD's 2025 battery electric vehicle sales, its pricing moves against Tesla, and the
+    state of LFP and solid-state battery technology.
+  source_toggles:
+    web: true
+    documents: false
+    memory: false
+  expect: The setup Run reaches COMPLETE, so its Report is memory-eligible for the same User.
+brief: >-
+  Update the earlier briefing on BYD: what is new in its sales and pricing over the last six
+  months, set against what the earlier report found about its 2025 sales and battery technology.
+source_toggles:
+  web: true
+  documents: false
+  memory: true
+expected_report_structure:
+  sections:
+    - heading: Executive Summary
+      notes: At most 150 words, plain language.
+    - heading: Recent sales and pricing
+      source_types: [web]
+      notes: Current Evidence only, fetched in this Run.
+    - heading: Earlier findings
+      source_types: [memory]
+      must_cite: [BYD 2025 sales from the earlier report, battery technology from the earlier report]
+      notes: >-
+        Historical Claims only, each marked historical and showing the earlier Report's date inline
+        as "(reported YYYY-MM-DD)", which is the Report's date and not the fact's As-of period.
+    - heading: Gaps & limitations
+  checks:
+    - The Planner's PLAN message holds at most 3 earlier Run summaries and no earlier Report text.
+    - The Memory researcher searches only this User's eligible Reports (`memory_search` events) and returns references, never Report text.
+    - Every Historical Claim cites a Historical item (`hist_` id), never an Evidence item, and no Historical item appears in the Evidence bundle.
+    - Sampled Historical Claims are fact-checked against the earlier Report's original Sources (check "historical_web_refetch" or "historical_document_passages"), keeping the original citation.
+    - A Historical Claim never establishes or confirms a Finding (relevant once T12 diffing exists).

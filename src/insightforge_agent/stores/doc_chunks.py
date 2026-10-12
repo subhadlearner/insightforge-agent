@@ -9,7 +9,6 @@ class. Nothing here deletes a chunk: removal belongs to the retention sweep (T13
 keep every chunk a Report cites."""
 
 import uuid
-import warnings
 from dataclasses import dataclass
 
 from qdrant_client import QdrantClient, models
@@ -17,6 +16,7 @@ from qdrant_client import QdrantClient, models
 from insightforge_agent.domain.contracts import PassageRef
 from insightforge_agent.domain.models import Passage, Source
 from insightforge_agent.embeddings import Embedder
+from insightforge_agent.stores.vector_collections import ensure_collection
 
 COLLECTION = "doc_chunks"
 DEFAULT_K = 8
@@ -40,27 +40,10 @@ class DocChunkIndex:
         self._ready = False
 
     def _ensure_collection(self) -> None:
-        if self._ready:
-            return
-        if not self._client.collection_exists(COLLECTION):
-            try:
-                self._client.create_collection(COLLECTION, vectors_config=models.VectorParams(
-                    size=self._dimensions, distance=models.Distance.COSINE))
-            except Exception:
-                if not self._client.collection_exists(COLLECTION):
-                    raise  # a real failure, not another process creating it first
-            with warnings.catch_warnings():  # in-memory Qdrant (tests) ignores payload indexes
-                warnings.simplefilter("ignore", UserWarning)
-                for field in ("owner_id", "run_id", "embedding_model"):
-                    self._client.create_payload_index(
-                        COLLECTION, field, models.PayloadSchemaType.KEYWORD)
-        else:
-            size = self._client.get_collection(COLLECTION).config.params.vectors.size
-            if size != self._dimensions:
-                raise RuntimeError(
-                    f"{COLLECTION} holds {size}-dimensional vectors, but {self._model} gives "
-                    f"{self._dimensions}; use a separate Qdrant collection or a fresh volume")
-        self._ready = True
+        if not self._ready:
+            ensure_collection(self._client, COLLECTION, self._dimensions, self._model,
+                              ("owner_id", "run_id", "embedding_model"))
+            self._ready = True
 
     @staticmethod
     def _point_id(owner_id: str, run_id: str, ref: PassageRef) -> str:

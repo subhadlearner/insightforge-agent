@@ -93,7 +93,7 @@ A Finding in the Baseline that the latest Run neither confirmed nor contradicted
 _Avoid_: removed, missing, stale
 
 **Historical Claim**:
-A Claim backed only by prior Reports rather than by Sources fetched in the current Run. It is shown with its original date as background, never as a current fact, and it never establishes or confirms a Finding.
+A Claim backed only by prior Reports rather than by Sources fetched in the current Run. It is shown with its original date (the date of the Report that first made it, not its As-of period) as background, never as a current fact, and it never establishes or confirms a Finding. It cites the earlier Claim it rests on, which keeps that Claim's original Passages, never an Evidence item of the current Run.
 _Avoid_: memory claim, old claim
 
 **Claim verdicts**:

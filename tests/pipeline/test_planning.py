@@ -392,16 +392,23 @@ def test_nothing_can_be_dispatched_while_planning(make_deps):
     ({"memory": True}, []),
 ])
 def test_a_brief_whose_only_sources_cannot_run_yet_is_rejected_up_front(make_deps, toggles, ids):
+    # Memory is available (an eligible Report exists) but not runnable: no report_sections index.
     deps = make_deps()
-    deps.repos.reports.add(_a_report())
+    _an_eligible_report(deps)
     with pytest.raises(SubmissionRejected, match="no runnable source type"):
         run_brief(deps, "alice", Brief(text=BRIEF, source_toggles=toggles, document_ids=ids))
-    assert deps.repos.runs.list_for_owner("alice") == []
+    assert [r.id for r in deps.repos.runs.list_for_owner("alice")] == ["run_old"]
 
 
-def _a_report():
+def _an_eligible_report(deps):
+    """A COMPLETE Run with its Report finalised and indexed: memory-eligible (T8)."""
     from datetime import UTC, datetime
 
-    from insightforge_agent.domain.models import Report
-    return Report(id="rep_old", owner_id="alice", run_id="run_old",
-                  created_at=datetime.now(UTC), body={})
+    from insightforge_agent.domain.models import Report, Run, RunState, RunSummary
+    now = datetime.now(UTC)
+    deps.repos.runs.add(Run(id="run_old", owner_id="alice", brief="b", state=RunState.COMPLETE,
+                            created_at=now))
+    deps.repos.summaries.add(RunSummary(owner_id="alice", run_id="run_old", created_at=now,
+                                        brief="b", memory_indexed=True))
+    deps.repos.reports.add(Report(id="rep_old", owner_id="alice", run_id="run_old",
+                                  created_at=now, body={}))

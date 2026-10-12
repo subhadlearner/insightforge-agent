@@ -26,6 +26,11 @@ def derive_evidence_id(run_id: str, statement: str) -> str:
     return f"ev_{_digest(run_id, ' '.join(statement.lower().split()))}"
 
 
+def derive_historical_id(run_id: str, report_id: str, section: int, claim: int) -> str:
+    """One earlier Claim used as background in a Run is one Historical item."""
+    return f"hist_{_digest(run_id, report_id, str(section), str(claim))}"
+
+
 def derive_fact_id(source_id: str, observation_id: str, passage_index: int, statement: str) -> str:
     """The same statement from the same Passage is the same extracted fact."""
     return f"fact_{_digest(source_id, observation_id, str(passage_index), ' '.join(statement.lower().split()))}"

@@ -101,6 +101,23 @@ class Report(_Record):
     body: dict[str, Any]
 
 
+class RunSummary(_Record):
+    """A compressed record of one Run, written once before it becomes COMPLETE, derived from its
+    stored records without a model call (design.md section 4, Memory). The Planner reads it;
+    it never holds a Report body, a Planner message or a transcript."""
+
+    owner_id: str
+    run_id: str
+    watchlist_item_id: str | None = None
+    created_at: datetime
+    brief: str
+    themes: list[str] = Field(default_factory=list)  # the Report's section headings (Aspects)
+    key_entities: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    # The Report's Claims are in `report_sections`, so the Memory researcher can search them.
+    memory_indexed: bool = False
+
+
 class RunEvent(_Record):
     """One append-only progress entry. `seq` is assigned on append and is the cursor."""
 

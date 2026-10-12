@@ -193,11 +193,7 @@ def test_document_claims_are_checked_against_the_stored_chunks(make_deps):
     assert v.verdict == "verified" and v.check == "document_passages" and fetcher.fetched == []
 
 
-def test_historical_claims_are_sampled_but_unchecked_for_now(make_deps):
-    deps = make_deps(fetcher=Fetcher({URL: SALES}))
-    _, bundle = evidence(deps, [SALES])
-    (v,) = fact_check(deps, "alice", "run_1", draft_of([SALES], historical={0}), bundle).verdicts
-    assert v.verdict == "unchecked" and v.check == "not_checkable"
+# Historical Claims (T8) are checked through their original Sources: test_t8_historical_checks.py
 
 
 # --- citations ----------------------------------------------------------------------------
