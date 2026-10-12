@@ -8,8 +8,8 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
 |---|---|---|
 | CP1 | App composition root, persona session, owner-scoped Reports | done |
 | CP2 | Bounded RunExecutor, durable Run creation and admission, `POST /research/run` | done |
-| CP3 | SSE over run_events, clarification router, scheduler, startup sweep | next |
-| CP4 | Cross-Run Observation fix, regressions, full verification, PR | todo |
+| CP3 | SSE over run_events, clarification router, scheduler, startup sweep | done |
+| CP4 | Cross-Run Observation fix, regressions, full verification, PR | next |
 
 ## Decisions so far
 
@@ -33,12 +33,18 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
   toggles default to the persona's). SQLite: every public repository method holds the shared
   RLock (`_Base.__init_subclass__`), since concurrent Runs share one connection.
 
-## Planned (CP3-CP4)
+- CP3: `enter()` logs the stage event before setting the state (every event is stored before
+  a Run is terminal). `GET /research/status?run_id=` SSE: `id: seq`, `data: {seq,type,payload,
+  created_at}`, batches of 100 via `read_after`, poll `SSE_POLL_SECONDS`, keep-alive comment,
+  drain after terminal then `event: end`; `Last-Event-ID` absent/empty = 0, non-digits or >18
+  digits = 400; foreign/unknown run 404 before streaming. `ClarificationService.resume` passes
+  `on_cancel`; `WorkNotAccepted` or cancellation logs `resume_deferred` and leaves the Run
+  RESUMING for the next startup sweep. `Runtime.start`: scheduler start(paused) -> install
+  handler -> startup_sweep -> scheduler.resume; `stop`: scheduler pause+shutdown -> handler None
+  -> executor.shutdown -> close Qdrant/checkpointer/SQLite. Clarification router mounted with the
+  persona `current_user_id`.
 
-- Resumes: a refused or cancelled resume leaves the Run RESUMING with a `resume_deferred` event,
-  which the startup sweep resumes.
-- `enter()` logs the stage event before setting the state, so every event of a Run is persisted
-  before it becomes terminal and the SSE stream can drain and close exactly.
+## Planned (CP4)
 - Observation fix: `derive_observation_id` includes `run_id`; pipeline stages read a Source through
   `SourceStore.read_run_source(owner, run, source)` (the Run's own latest Observation).
 
@@ -48,10 +54,12 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
 - CP1: `uv run pytest -q tests/api/test_t10_session_reports.py` -> 17 passed.
 - CP2: `uv run pytest -q tests/api` -> 34 passed; full offline suite: all pre-existing tests
   passed (1413 passed incl. new); lint-imports 4 kept.
+- CP3: `uv run pytest -q tests/api` -> 60 passed; full offline `uv run pytest -q` -> 1455
+  passed, 26 deselected; lint-imports 4 kept.
 
 ## Next step
 
-CP3: reorder `enter()`; SSE `GET /research/status` in `api/research.py`; Runtime gets
-scheduler (paused start), ClarificationService(submit=executor.submit), handler install,
-startup_sweep, scheduler resume; shutdown order; tests `tests/api/test_t10_sse.py`,
-`tests/api/test_t10_clarification_app.py`.
+CP4: `derive_observation_id(owner, run, source, fetched_at, content)`;
+`SourceStore.read_run_source`; use it in `extract` and `synthesize`; regressions in
+`tests/pipeline/test_t10_observation_provenance.py`; README run section; uvicorn dependency;
+design.md T10 notes; full suites; PR.

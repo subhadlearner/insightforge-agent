@@ -5,8 +5,8 @@ compare-and-set on the Run moves it from AWAITING_CLARIFICATION to RESUMING and 
 resolution in the same write. The first resolver wins; the other gets ClarificationConflict
 (409 for the endpoint, a no-op for the job). Cancelling the timeout job after an answer is only
 clean-up: the compare-and-set alone decides the winner. Resuming happens after the resolution
-is stored, through `submit` (T10's RunExecutor in the app), so a request or the scheduler
-thread only hands the Run on and never runs the pipeline itself."""
+is stored, through `submit` (the app's RunExecutor), so a request or the scheduler thread only
+hands the Run on and never runs the pipeline itself."""
 
 from collections.abc import Callable
 from datetime import datetime
@@ -14,11 +14,14 @@ from datetime import datetime
 from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.models import Clarification, Run, RunState
 from insightforge_agent.pipeline.deps import Deps
+from insightforge_agent.pipeline.executor import WorkNotAccepted
 from insightforge_agent.pipeline.graph import resume_run
 
 MAX_ANSWER_CHARS = 2000
 
-Submit = Callable[[Callable[[], object]], object]  # runs a Run's work, e.g. an executor's submit
+# Runs a Run's work, as RunExecutor.submit(work, on_cancel=...) does. It may raise
+# WorkNotAccepted, and calls `on_cancel` if it drops the work before starting it.
+Submit = Callable[..., object]
 
 
 class ClarificationService:
@@ -90,5 +93,18 @@ class ClarificationService:
 
     def resume(self, owner_id: str, run_id: str, *, claimed: bool = False) -> None:
         """Hand a RESUMING Run to `submit`. `resume_run` lets only one caller carry it on;
-        `claimed` is for the startup sweep re-resuming a Run whose claim a crash interrupted."""
-        self._submit(lambda: resume_run(self._deps, owner_id, run_id, claimed=claimed))
+        `claimed` is for the startup sweep re-resuming a Run whose claim a crash interrupted.
+
+        The resolution is already stored, so the Run is never failed here. If the executor
+        will not take the work (it is shutting down), or cancels it before it starts, the Run
+        stays durably RESUMING (or, for `claimed`, PLANNING still waiting at its question),
+        which the next startup sweep resumes; `resume_deferred` records why."""
+        def deferred(reason: str) -> None:
+            self._deps.log(owner_id, run_id, "resume_deferred", reason=reason,
+                           recovery="the startup sweep resumes the Run")
+
+        try:
+            self._submit(lambda: resume_run(self._deps, owner_id, run_id, claimed=claimed),
+                         on_cancel=lambda: deferred("the process shut down before resuming"))
+        except WorkNotAccepted as e:
+            deferred(f"the executor did not accept the resume: {e}")

@@ -258,8 +258,10 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 "recursion_limit": deps.recursion_limit}
 
     def enter(state: State, stage: RunState) -> None:
-        deps.repos.runs.set_state(state["owner_id"], state["run_id"], stage)
+        # The event first: every event of a Run is stored before the Run is terminal, so a
+        # progress stream that sees COMPLETE and then drains the log has seen everything.
         deps.log(state["owner_id"], state["run_id"], "stage", state=stage.value)
+        deps.repos.runs.set_state(state["owner_id"], state["run_id"], stage)
 
     def thread(state: State) -> list:
         return planner_for(state).get_state(cfg(state)).values["messages"]

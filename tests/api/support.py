@@ -4,16 +4,21 @@ thread, so any number of Runs can interleave on it."""
 
 import copy
 import itertools
+import json
+import queue
 import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import anyio
+from anyio.from_thread import start_blocking_portal
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
 
 from insightforge_agent.api.app import Runtime, create_app
+from insightforge_agent.api.session import COOKIE_NAME
 from insightforge_agent.config import Settings
 from insightforge_agent.domain.models import TERMINAL_STATES, Run, RunState
 from insightforge_agent.pipeline.deps import Deps
@@ -149,3 +154,94 @@ def wait_until(condition: Callable[[], bool], timeout: float = 30) -> None:
 
 T0 = datetime(2030, 3, 1, 9, tzinfo=UTC)
 TERMINAL = {RunState.COMPLETE, RunState.FAILED}
+
+
+class LiveStream:
+    """One SSE request driven straight through the ASGI app on its own event loop, so a test
+    can read a live stream frame by frame and then disconnect (TestClient buffers a response
+    until it ends, and cannot disconnect). The app must already be started (lifespan)."""
+
+    def __init__(self, app, run_id: str, cookie: str, last_event_id: str | None = None) -> None:
+        self._messages: queue.Queue = queue.Queue()
+        self._gone = threading.Event()
+        self._buffer = ""
+        headers = [(b"cookie", f"{COOKIE_NAME}={cookie}".encode())]
+        if last_event_id is not None:
+            headers.append((b"last-event-id", last_event_id.encode()))
+        self._scope = {
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "GET", "scheme": "http",
+            "path": "/research/status", "raw_path": b"/research/status",
+            "query_string": f"run_id={run_id}".encode(), "headers": headers,
+            "client": ("testclient", 1), "server": ("testserver", 80), "root_path": ""}
+        self._portal_cm = start_blocking_portal()
+        portal = self._portal_cm.__enter__()
+        self._done = portal.start_task_soon(self._serve, app)
+        start = self._messages.get(timeout=30)
+        assert start["type"] == "http.response.start", start
+        self.status = start["status"]
+
+    async def _serve(self, app) -> None:
+        requested = False
+
+        async def receive():
+            nonlocal requested
+            if not requested:
+                requested = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            while not self._gone.is_set():
+                await anyio.sleep(0.01)
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            self._messages.put(message)
+
+        try:
+            await app(self._scope, receive, send)
+        finally:
+            self._messages.put(None)
+
+    def frames(self, limit: int | None = None, timeout: float = 60):
+        """Parsed frames ({"id", "event", "data"}), until the stream ends or `limit` are read.
+        Comments (keep-alives) are skipped."""
+        out = []
+        deadline = time.monotonic() + timeout
+        while limit is None or len(out) < limit:
+            while "\n\n" in self._buffer and (limit is None or len(out) < limit):
+                raw, self._buffer = self._buffer.split("\n\n", 1)
+                frame = parse_frame(raw)
+                if frame:
+                    out.append(frame)
+            if limit is not None and len(out) >= limit:
+                break
+            message = self._messages.get(timeout=max(0.1, deadline - time.monotonic()))
+            if message is None:
+                break
+            self._buffer += message.get("body", b"").decode()
+        return out
+
+    def close(self) -> None:
+        """Disconnect, as a browser closing the page does."""
+        self._gone.set()
+        self._done.result(30)
+        self._portal_cm.__exit__(None, None, None)
+
+
+def parse_frame(raw: str) -> dict | None:
+    frame: dict = {"id": None, "event": "message", "data": ""}
+    lines = [line for line in raw.split("\n") if line and not line.startswith(":")]
+    if not lines:
+        return None
+    for line in lines:
+        field, _, value = line.partition(": ")
+        frame[field] = value
+    frame["data"] = json.loads(frame["data"]) if frame["data"] else None
+    return frame
+
+
+def read_stream(client: TestClient, run_id: str, last_event_id: str | None = None):
+    """A whole stream through TestClient (which returns only once the stream has closed)."""
+    headers = {} if last_event_id is None else {"Last-Event-ID": last_event_id}
+    response = client.get("/research/status", params={"run_id": run_id}, headers=headers)
+    frames = [f for f in map(parse_frame, response.text.split("\n\n")) if f]
+    return response, frames
