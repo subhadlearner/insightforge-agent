@@ -7,7 +7,7 @@ class NotFoundError(LookupError):
 class ClarificationConflict(Exception):
     """The Run is not in the state the clarification step needs: it is not awaiting an answer
     (already answered, timed out, or never asked), or it already asked its one question. The
-    API answers 409."""
+    answer endpoint answers 409."""
 
 
 class SubmissionRejected(ValueError):

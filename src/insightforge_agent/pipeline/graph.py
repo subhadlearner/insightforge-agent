@@ -627,29 +627,41 @@ def run_brief(
 
 
 def resume_run(deps: Deps, owner_id: str, run_id: str,
-               on_state: Callable[[dict], None] | None = None) -> Run:
+               on_state: Callable[[dict], None] | None = None, *, claimed: bool = False) -> Run:
     """Carry a RESUMING Run (its clarification resolved and stored) on from its checkpoint,
     giving the graph the stored resolution. Idempotent: only the caller that moves the Run from
     RESUMING to PLANNING runs it; any other call, or one for a Run in another state, changes
-    nothing and returns the Run as it is."""
-    try:
-        run = deps.repos.runs.claim_resume(owner_id, run_id)
-    except ClarificationConflict:
-        return deps.repos.runs.get(owner_id, run_id)
+    nothing and returns the Run as it is. `claimed=True` skips the claim, for the startup sweep
+    only: a crash came after the claim and before the graph took the resolution in
+    (`awaits_resume`)."""
+    if claimed:
+        run = deps.repos.runs.get(owner_id, run_id)
+    else:
+        try:
+            run = deps.repos.runs.claim_resume(owner_id, run_id)
+        except ClarificationConflict:
+            return deps.repos.runs.get(owner_id, run_id)
     c = run.clarification
     deps.log(owner_id, run_id, "resuming", resolution=c.resolution)
     graph = build_graph(deps)  # uploads were ingested before PLANNING; they are not needed
     config = outer_config(run_thread_id(owner_id, run_id))
-    paused = graph.get_state(config)
-    if paused.interrupts:
-        graph_input = Command(resume={"question": c.question, "resolution": c.resolution,
-                                      "answer": c.answer})
-    elif paused.next:  # the resolution was taken in before a crash; carry on from there
-        graph_input = None
-    else:
+    if not graph.get_state(config).interrupts:
         return settle_interrupted(deps, owner_id, run_id,
-                                  "the Run's checkpoint was not found, so it cannot resume")
-    return drive(deps, owner_id, run_id, graph, graph_input, config, on_state)
+                                  "the Run's checkpoint holds no question to resume")
+    return drive(deps, owner_id, run_id, graph,
+                 Command(resume={"question": c.question, "resolution": c.resolution,
+                                 "answer": c.answer}),
+                 config, on_state)
+
+
+def awaits_resume(deps: Deps, run: Run) -> bool:
+    """A PLANNING Run that resolved its question but whose checkpoint still waits at it: the
+    process died between `claim_resume` and the graph taking the resolution in, so nothing of
+    the resumed Run has run yet and resuming it again cannot run anything twice."""
+    return (run.state == RunState.PLANNING and run.clarification is not None
+            and run.clarification.resolution is not None
+            and bool(build_graph(deps).get_state(
+                outer_config(run_thread_id(run.owner_id, run.id))).interrupts))
 
 
 def drive(deps: Deps, owner_id: str, run_id: str, graph, graph_input, config: dict,

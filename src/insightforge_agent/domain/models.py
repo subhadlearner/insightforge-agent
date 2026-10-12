@@ -51,6 +51,10 @@ class Clarification(_Record):
     answer: str | None = None
     resolved_at: datetime | None = None
 
+    def expired(self, now: datetime) -> bool:
+        """The deadline has passed: only the timeout may resolve the question now."""
+        return now >= self.deadline
+
 
 class Run(_Record):
     id: str

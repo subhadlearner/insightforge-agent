@@ -147,9 +147,10 @@ class SqliteRunRepository(_Base):
         """One conditional UPDATE: SQLite applies it under its write lock, so of two callers
         whose condition holds when they read, only the first changes the row. The lock only
         keeps two threads from sharing one transaction on this connection."""
-        with self._lock, self._db:
-            changed = self._db.execute(sql, (*params, owner_id, run_id)).rowcount
-        run = self.get(owner_id, run_id)  # NotFoundError for an unknown or foreign Run
+        with self._lock:
+            with self._db:
+                changed = self._db.execute(sql, (*params, owner_id, run_id)).rowcount
+            run = self.get(owner_id, run_id)  # NotFoundError for an unknown or foreign Run
         if not changed:
             raise ClarificationConflict(f"run {run_id} {conflict} (it is {run.state.value})")
         return run

@@ -294,11 +294,12 @@ def test_the_timeout_wins_when_it_comes_first_and_a_late_answer_is_refused(world
     assert len(proc.submitted) == 1
 
 
-def test_a_timeout_job_firing_before_the_deadline_changes_nothing(world):
+def test_a_timeout_job_firing_before_the_deadline_is_scheduled_again(world):
     proc, run = ask(world)
     proc.clock.advance(TIMEOUT - timedelta(seconds=1))
     assert proc.service.time_out("alice", run.id) is False
     assert proc.run(run.id).state == RunState.AWAITING_CLARIFICATION
+    assert proc.timeouts.jobs[("alice", run.id)] == T0 + TIMEOUT  # the obligation stands
 
 
 def test_an_answer_after_the_deadline_is_late_even_before_the_job_runs(world):
@@ -555,30 +556,36 @@ def test_ordinary_runs_left_in_progress_fail_and_terminal_runs_are_untouched(wor
     assert startup_sweep(proc.deps, proc.service) == {}
 
 
-def test_a_run_crashed_while_planning_after_its_resume_fails_rather_than_asking_again(world):
+def test_a_crash_right_after_the_claim_is_resumed_not_failed(world):
+    """The answer was accepted (202) and the Run claimed, but the graph never took the answer
+    in: nothing of the resumed Run has run, so the sweep resumes it rather than failing it."""
     proc, run = ask(world)
     proc.service = ClarificationService(proc.deps, submit=lambda work: None)
     proc.service.answer("alice", run.id, ANSWER)
     proc.repos.runs.claim_resume("alice", run.id)  # claimed, then the process died
-    after = proc.restart(ScriptedChat(script=[]))
-    assert startup_sweep(after.deps, after.service) == {"failed": 1}
-    assert after.run(run.id).state == RunState.FAILED
+    after = proc.restart(scripted(plan_turn(), research_turn()))
+    assert startup_sweep(after.deps, after.service) == {"resumed": 1}
+    assert after.run(run.id).state == RunState.COMPLETE
+    assert len(after.repos.reports.list_for_owner("alice")) == 1
 
 
-def test_a_resuming_run_whose_checkpoint_took_the_answer_carries_on_from_there(world):
-    """Defensive path of `resume_run`: the checkpoint is already past the question."""
+def test_a_crash_after_the_graph_took_the_answer_fails_rather_than_running_again(world):
+    """Once the graph is past the question, the Run was genuinely running: like any Run left
+    in progress it fails, and nothing is asked or planned twice."""
     proc, run = ask(world)
     proc.service = ClarificationService(proc.deps, submit=lambda work: None)
     proc.service.answer("alice", run.id, ANSWER)
+    proc.repos.runs.claim_resume("alice", run.id)
     from langgraph.types import Command
 
     config = outer_config(run_thread_id("alice", run.id))
     build_graph(proc.deps, interrupt_after=["clarify"]).invoke(
         Command(resume={"question": QUESTION, "resolution": "answered", "answer": ANSWER}),
-        config)
-    assert build_graph(proc.deps).get_state(config).next == ("planning",)
-    proc.deps.planner_model.script += plan_turn() + research_turn()
-    assert resume_run(proc.deps, "alice", run.id).state == RunState.COMPLETE
+        config)  # the answer is in the checkpoint; then the process died
+    after = proc.restart(ScriptedChat(script=[]))  # any Planner call would raise
+    assert startup_sweep(after.deps, after.service) == {"failed": 1}
+    assert after.run(run.id).state == RunState.FAILED
+    assert after.repos.reports.list_for_owner("alice") == []
 
 
 def test_a_resuming_run_without_a_checkpoint_fails(world):

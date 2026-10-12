@@ -1,17 +1,17 @@
 """Resolving a Run's one clarifying question (design.md section 2, Clarification).
 
-The answer endpoint and the timeout job both go through `ClarificationService.resolve`: one
+The answer endpoint and the timeout job both go through `ClarificationService._resolve`: one
 compare-and-set on the Run moves it from AWAITING_CLARIFICATION to RESUMING and stores the
 resolution in the same write. The first resolver wins; the other gets ClarificationConflict
 (409 for the endpoint, a no-op for the job). Cancelling the timeout job after an answer is only
 clean-up: the compare-and-set alone decides the winner. Resuming happens after the resolution
-is stored, through `submit`, so the caller (a request or the scheduler thread) never runs the
-pipeline itself."""
+is stored, through `submit` (T10's RunExecutor in the app), so a request or the scheduler
+thread only hands the Run on and never runs the pipeline itself."""
 
 from collections.abc import Callable
 from datetime import datetime
 
-from insightforge_agent.domain.errors import ClarificationConflict
+from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.models import Clarification, Run, RunState
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.graph import resume_run
@@ -21,13 +21,8 @@ MAX_ANSWER_CHARS = 2000
 Submit = Callable[[Callable[[], object]], object]  # runs a Run's work, e.g. an executor's submit
 
 
-def inline(work: Callable[[], object]) -> object:
-    """A `Submit` that runs the work at once, in the caller's thread (tests, the CLI)."""
-    return work()
-
-
 class ClarificationService:
-    def __init__(self, deps: Deps, submit: Submit = inline) -> None:
+    def __init__(self, deps: Deps, submit: Submit) -> None:
         self._deps = deps
         self._submit = submit
 
@@ -48,7 +43,7 @@ class ClarificationService:
             raise ValueError(f"an answer needs 1 to {MAX_ANSWER_CHARS} characters")
         run = self._deps.repos.runs.get(owner_id, run_id)
         now = self._deps.now()
-        if run.clarification is not None and now >= run.clarification.deadline:
+        if run.clarification is not None and run.clarification.expired(now):
             raise ClarificationConflict(f"run {run_id}: the clarification deadline has passed")
         resolved = self._resolve(owner_id, run_id, answer=text, now=now)
         try:
@@ -62,15 +57,17 @@ class ClarificationService:
 
     def time_out(self, owner_id: str, run_id: str) -> bool:
         """The timeout: resolves the Run as timed out if it still awaits an answer and its
-        deadline has passed. False, changing nothing, when an answer won first, the Run is gone
-        or the deadline is still ahead."""
+        deadline has passed. False when an answer won first or the Run is gone; a job that
+        fired before the deadline is scheduled again at it."""
         try:
             run = self._deps.repos.runs.get(owner_id, run_id)
-        except LookupError:
+        except NotFoundError:
             return False
         now = self._deps.now()
-        if (run.state != RunState.AWAITING_CLARIFICATION or run.clarification is None
-                or now < run.clarification.deadline):
+        if run.state != RunState.AWAITING_CLARIFICATION or run.clarification is None:
+            return False
+        if not run.clarification.expired(now):  # fired early: the obligation must not lapse
+            self._deps.timeouts.schedule(owner_id, run_id, run.clarification.deadline)
             return False
         try:
             self._resolve(owner_id, run_id, answer=None, now=now)
@@ -91,6 +88,7 @@ class ClarificationService:
         self._deps.log(owner_id, run_id, "stage", state=RunState.RESUMING.value)
         return run
 
-    def resume(self, owner_id: str, run_id: str) -> None:
-        """Hand a RESUMING Run to `submit`. `resume_run` lets only one caller carry it on."""
-        self._submit(lambda: resume_run(self._deps, owner_id, run_id))
+    def resume(self, owner_id: str, run_id: str, *, claimed: bool = False) -> None:
+        """Hand a RESUMING Run to `submit`. `resume_run` lets only one caller carry it on;
+        `claimed` is for the startup sweep re-resuming a Run whose claim a crash interrupted."""
+        self._submit(lambda: resume_run(self._deps, owner_id, run_id, claimed=claimed))
