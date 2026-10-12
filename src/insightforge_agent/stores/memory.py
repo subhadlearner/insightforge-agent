@@ -1,6 +1,8 @@
 """In-memory fakes of every repository. Used by default tests: no keys, no Docker."""
 
 import threading
+
+from insightforge_agent.stores.watchlist import MemoryWatchlistRepository
 from datetime import datetime
 
 from insightforge_agent.domain.contracts import ExtractedFact
@@ -270,3 +272,4 @@ class MemoryRepos:
         self.entities = MemoryEntityRepository()
         self.summaries = MemoryRunSummaryRepository()
         self.lock = threading.RLock()  # same contract as SqliteRepos.lock
+        self.watchlists = MemoryWatchlistRepository(self.runs, self.lock)

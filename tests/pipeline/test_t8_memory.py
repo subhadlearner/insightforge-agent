@@ -24,6 +24,8 @@ from insightforge_agent.domain.contracts import (
 from insightforge_agent.domain.errors import SubmissionRejected
 from insightforge_agent.domain.memory import MemoryRef
 from insightforge_agent.domain.models import Report, Run, RunState
+from insightforge_agent.domain.watchlist import WatchlistItem
+from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.plan import AGENT_FOR_SOURCE_TYPE, SubTaskPlan, dispatched_id
 from insightforge_agent.embeddings import HashingEmbedder
 from insightforge_agent.pipeline.citations import report_citations
@@ -163,6 +165,12 @@ def prior_run(deps, owner="alice", brief="EV market", item=None, day=0) -> Run:
     """A completed web Run on the fixture pages: 10 Claims in one section, "Findings"."""
     deps.now.t = T0 + timedelta(days=day)
     deps.planner_model = fakes.planner()
+    if item is not None:
+        try:
+            deps.repos.watchlists.get(owner, item)
+        except NotFoundError:
+            deps.repos.watchlists.add(WatchlistItem(id=item, owner_id=owner, brief=brief,
+                cadence_minutes=15, created_at=deps.now(), next_tick_at=deps.now()))
     run = run_brief(deps, owner, Brief(text=brief), watchlist_item_id=item)
     assert run.state == RunState.COMPLETE, events(deps, run, "run_failed")
     return run

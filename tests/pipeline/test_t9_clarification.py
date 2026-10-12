@@ -21,6 +21,7 @@ from insightforge_agent.api.clarify import clarification_router
 from insightforge_agent.domain.contracts import Brief
 from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.models import Run, RunState
+from insightforge_agent.domain.watchlist import WatchlistItem
 from insightforge_agent.pipeline.clarification import ClarificationService
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.graph import (
@@ -257,6 +258,8 @@ def test_the_planner_may_not_ask_a_second_question(world):
 
 def test_a_watchlist_run_never_waits_for_an_answer(world):
     proc = world(scripted(ask_turn(), plan_turn(), research_turn()))
+    proc.deps.repos.watchlists.add(WatchlistItem(id="wl_1", owner_id="alice", brief=VAGUE,
+        cadence_minutes=15, created_at=T0, next_tick_at=T0))
     run = run_brief(proc.deps, "alice", Brief(text=VAGUE), watchlist_item_id="wl_1")
     assert run.state == RunState.COMPLETE and run.clarification is None
     assert any(e.type == "clarification_refused" for e in proc.events(run.id))

@@ -38,6 +38,7 @@ from insightforge_agent.agents.researcher import (
     researcher_subagent,
     source_ids_in,
 )
+from insightforge_agent.domain.watchlist import check_watchlist_sources
 from insightforge_agent.domain.contracts import (
     Brief,
     EvidenceBundle,
@@ -603,6 +604,7 @@ class CheckedBrief:
     memory_reports: list[str]
     uploads: list[Upload]
     watchlist_item_id: str | None
+    watchlist_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -621,6 +623,13 @@ def check_brief(deps: Deps, owner_id: str, brief: Brief, uploads: list[Upload] |
     uploads that break the document limits (at most 10 PDFs of at most 20 MB, matching
     `brief.document_ids`), raises SubmissionRejected, and no Run is created."""
     uploads = list(uploads or [])
+    revision = None
+    if watchlist_item_id is not None:
+        item = deps.repos.watchlists.get(owner_id, watchlist_item_id)
+        check_watchlist_sources(brief)
+        if uploads:
+            raise SubmissionRejected("Watchlist Items cannot use uploaded documents")
+        revision = item.revision
     # One eligibility rule decides memory availability here and what memory may search later.
     memory_reports = eligible_report_ids(deps, owner_id, watchlist_item_id)
     available = check_submission(brief, bool(memory_reports))
@@ -631,7 +640,7 @@ def check_brief(deps: Deps, owner_id: str, brief: Brief, uploads: list[Upload] |
     check_uploads(brief, uploads)
     return CheckedBrief(owner_id=owner_id, brief=brief, allowed=allowed,
                         memory_reports=memory_reports if "memory" in allowed else [],
-                        uploads=uploads, watchlist_item_id=watchlist_item_id)
+                        uploads=uploads, watchlist_item_id=watchlist_item_id, watchlist_revision=revision)
 
 
 def start_run(deps: Deps, checked: CheckedBrief) -> StartedRun:
@@ -642,7 +651,10 @@ def start_run(deps: Deps, checked: CheckedBrief) -> StartedRun:
     run = Run(id=f"run_{deps.new_id()}", owner_id=owner_id, brief=brief.text,
               state=RunState.INGESTING if ingest else RunState.PLANNING, created_at=deps.now(),
               watchlist_item_id=checked.watchlist_item_id)
-    deps.repos.runs.add(run)
+    if checked.watchlist_item_id is None:
+        deps.repos.runs.add(run)
+    else:
+        deps.repos.watchlists.start(run, checked.watchlist_revision)
     initial: State = {"thread_id": run_thread_id(owner_id, run.id), "owner_id": owner_id,
                       "run_id": run.id, "brief": brief.text,
                       "allowed_types": checked.allowed, "has_uploads": ingest,
@@ -726,7 +738,7 @@ def drive(deps: Deps, owner_id: str, run_id: str, graph, graph_input, config: di
     pending = graph.get_state(config).interrupts
     if pending:
         return await_clarification(deps, owner_id, run_id, pending[0].value["question"])
-    return deps.repos.runs.get(owner_id, run_id)
+    return deps.completed(deps.repos.runs.get(owner_id, run_id))
 
 
 def await_clarification(deps: Deps, owner_id: str, run_id: str, question: str) -> Run:
@@ -768,4 +780,4 @@ def settle_interrupted(deps: Deps, owner_id: str, run_id: str, reason: str) -> R
                  f"finalised: {type(finalising).__name__}: {finalising}")
         return deps.repos.runs.set_state(owner_id, run_id, RunState.FAILED)
     deps.log(owner_id, run_id, "completion_recovered", detail=reason)
-    return deps.repos.runs.set_state(owner_id, run_id, RunState.COMPLETE)
+    return deps.completed(deps.repos.runs.set_state(owner_id, run_id, RunState.COMPLETE))

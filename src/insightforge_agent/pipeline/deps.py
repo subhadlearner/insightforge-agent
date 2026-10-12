@@ -1,5 +1,6 @@
 """Everything a Run needs from outside, passed in so tests can supply scripted fakes."""
 
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -10,7 +11,7 @@ from langchain_core.language_models import BaseChatModel
 
 from insightforge_agent.agents.web import PageFetcher, SearchProvider
 from insightforge_agent.domain.evidence import Thresholds
-from insightforge_agent.domain.models import RunEvent
+from insightforge_agent.domain.models import Run, RunEvent, RunState
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import Embedder, HashingEmbedder
 from insightforge_agent.pipeline.errors import RunFailed
@@ -62,6 +63,8 @@ class Deps:
     timeouts: TimeoutScheduler | None = None
     clarification_timeout: timedelta = timedelta(minutes=30)
 
+    on_complete: Callable[[Run], object] | None = None  # scheduler post-processing, outside the graph
+
     _spent: dict[tuple[str, str], int] = field(default_factory=dict, repr=False)
 
     def spend(self, owner_id: str, run_id: str, *texts: str) -> None:
@@ -75,3 +78,12 @@ class Deps:
         self.repos.events.append(RunEvent(
             owner_id=owner_id, run_id=run_id, type=type_, payload=payload, created_at=self.now(),
         ))
+
+    def completed(self, run: Run) -> Run:
+        """Post-processing may never change the research outcome; startup repairs omissions."""
+        if run.state == RunState.COMPLETE and self.on_complete is not None:
+            try:
+                self.on_complete(run)
+            except Exception:
+                logging.getLogger(__name__).exception("Watchlist completion processing failed")
+        return run
