@@ -7,7 +7,8 @@ request or a Run may still use it. Run it with
 `insightforge-agent serve` (`serve` below), which tells the Runtime the moment uvicorn is asked
 to stop, so open SSE streams end at once instead of holding uvicorn's graceful shutdown for up
 to their lifetime. Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` also works,
-but then shutdown waits up to `SSE_MAX_STREAM_SECONDS` for open streams (measured: 60 s).
+but then shutdown waits up to `SSE_MAX_STREAM_SECONDS` for open streams (60.25 s observed with
+the default).
 
 Startup (`start`), in order:
 
@@ -33,6 +34,7 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from types import FrameType
 from typing import Any
 
 import anyio
@@ -85,7 +87,8 @@ class Runtime:
     clarifications: ClarificationService
     research: ResearchService
     recovered: Counter = field(default_factory=Counter)  # what the startup sweep did
-    closing: threading.Event = field(default_factory=threading.Event)  # streams end when set
+    # Set once, when the process is stopping: open streams end. A Runtime is not restarted.
+    closing: threading.Event = field(default_factory=threading.Event)
     _closers: list[Callable[[], object]] = field(default_factory=list)
 
     @classmethod
@@ -178,7 +181,7 @@ class _Server(uvicorn.Server):
         super().__init__(config)
         self._runtime = runtime
 
-    def handle_exit(self, sig, frame) -> None:
+    def handle_exit(self, sig: int, frame: FrameType | None) -> None:
         self._runtime.begin_shutdown()
         super().handle_exit(sig, frame)
 

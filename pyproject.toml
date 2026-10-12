@@ -24,7 +24,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "qdrant-client>=1.19.1",
     "sqlalchemy>=2.0",
-    "uvicorn>=0.30",
+    "uvicorn>=0.54",  # re-raises a caught stop signal after graceful shutdown
 ]
 
 [project.scripts]

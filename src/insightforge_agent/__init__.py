@@ -13,11 +13,12 @@ def main() -> None:
         from insightforge_agent.api.app import Runtime, serve
         from insightforge_agent.config import Settings
 
-        args = argparse.ArgumentParser(prog="insightforge-agent serve")
-        args.add_argument("--host", default="127.0.0.1")
-        args.add_argument("--port", type=int, default=8000)
-        opts = args.parse_args(sys.argv[2:])
-        raise SystemExit(serve(Runtime.build(Settings()), opts.host, opts.port))
+        parser = argparse.ArgumentParser(prog="insightforge-agent serve")
+        parser.add_argument("--host", default="127.0.0.1")
+        parser.add_argument("--port", type=int, default=8000)
+        opts = parser.parse_args(sys.argv[2:])
+        serve(Runtime.build(Settings()), opts.host, opts.port)
+        return
     if sys.argv[1:] == ["models", "download"]:
         from insightforge_agent.prefetch import download
 

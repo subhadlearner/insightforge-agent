@@ -100,7 +100,7 @@ def end_frame(run_id: str, state: str) -> str:
 def research_router(service: ResearchService, current_user: Callable[..., User],
                     runs: RunRepository, events: RunEventRepository,
                     poll_seconds: float, max_stream_seconds: float,
-                    closing: threading.Event | None = None) -> APIRouter:
+                    closing: threading.Event) -> APIRouter:
     router = APIRouter(prefix="/research")
 
     @router.post("/run", status_code=202, response_model=RunAccepted)
@@ -166,7 +166,7 @@ def research_router(service: ResearchService, current_user: Callable[..., User],
                 return
             if await request.is_disconnected():
                 return
-            if closing is not None and closing.is_set():
+            if closing.is_set():
                 return  # the server is stopping; the client reconnects with Last-Event-ID
             if anyio.current_time() >= ends_at:
                 # A bounded lifetime, so no stream holds up a shutdown (or waits forever on a
