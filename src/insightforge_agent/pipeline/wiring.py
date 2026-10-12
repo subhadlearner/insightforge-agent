@@ -26,12 +26,14 @@ def build_qdrant(settings: Settings) -> QdrantClient:
 
 
 def build_deps(settings: Settings, repos: Any, checkpointer: Any,
-               timeouts: TimeoutScheduler | None = None) -> Deps:
+               timeouts: TimeoutScheduler | None = None,
+               qdrant: QdrantClient | None = None) -> Deps:
+    """`qdrant`: a client the caller owns (and closes); by default one from QDRANT_URL."""
     # One local embedding model for everything that embeds (design.md section 10): Doc Reader
     # search, Memory researcher search, Evidence relevance and Fact-Checker similarity. It
     # loads on first use.
     embedder = FastEmbedEmbedder(settings.embedding_model)
-    qdrant = build_qdrant(settings)
+    qdrant = qdrant if qdrant is not None else build_qdrant(settings)
     return Deps(
         repos=repos,
         store=SourceStore(repos.sources, repos.observations, repos.passages),

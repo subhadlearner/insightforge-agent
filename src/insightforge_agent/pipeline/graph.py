@@ -8,6 +8,7 @@ read from the SourceStore by the stage that needs it, one bounded batch at a tim
 runs only when documents were uploaded."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage
@@ -590,18 +591,33 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
     return g.compile(checkpointer=deps.checkpointer, interrupt_after=interrupt_after)
 
 
-def run_brief(
-    deps: Deps, owner_id: str, brief: Brief, on_state: Callable[[dict], None] | None = None,
-    uploads: list[Upload] | None = None, watchlist_item_id: str | None = None,
-) -> Run:
-    """Create a Run for the Brief and carry it to COMPLETE or FAILED, or to
-    AWAITING_CLARIFICATION when the Planner asks its one question (`resume_run` carries it on
-    once that is resolved). A Brief with no available source type, or with uploads that break
-    the document limits (at most 10 PDFs of at most 20 MB, matching `brief.document_ids`),
-    raises SubmissionRejected before any Run exists. A Run that fails does not raise; its
-    reason is in the Run log. `on_state` sees every graph state snapshot. `watchlist_item_id`
-    marks a Watchlist Run (memory and Run summaries are then scoped to that item); None is a
-    one-shot Run."""
+@dataclass(frozen=True)
+class CheckedBrief:
+    """A Brief that passed the Submission check; no Run exists for it yet."""
+
+    owner_id: str
+    brief: Brief
+    allowed: list[str]
+    memory_reports: list[str]
+    uploads: list[Upload]
+    watchlist_item_id: str | None
+
+
+@dataclass(frozen=True)
+class StartedRun:
+    """A Run stored in its first state, with what its graph starts from. The upload bytes
+    stay here, never in graph state or the checkpoint."""
+
+    run: Run
+    initial: State
+    uploads: list[Upload]
+
+
+def check_brief(deps: Deps, owner_id: str, brief: Brief, uploads: list[Upload] | None = None,
+                watchlist_item_id: str | None = None) -> CheckedBrief:
+    """The Submission check, with no write: a Brief with no available source type, or with
+    uploads that break the document limits (at most 10 PDFs of at most 20 MB, matching
+    `brief.document_ids`), raises SubmissionRejected, and no Run is created."""
     uploads = list(uploads or [])
     # One eligibility rule decides memory availability here and what memory may search later.
     memory_reports = eligible_report_ids(deps, owner_id, watchlist_item_id)
@@ -611,19 +627,48 @@ def run_brief(
         raise SubmissionRejected(
             f"no runnable source type: {', '.join(available)} cannot be researched yet")
     check_uploads(brief, uploads)
-    ingest = "documents" in allowed
+    return CheckedBrief(owner_id=owner_id, brief=brief, allowed=allowed,
+                        memory_reports=memory_reports if "memory" in allowed else [],
+                        uploads=uploads, watchlist_item_id=watchlist_item_id)
+
+
+def start_run(deps: Deps, checked: CheckedBrief) -> StartedRun:
+    """Store the Run in its first state (INGESTING with uploads, else PLANNING). From here the
+    Run is durable: it ends COMPLETE or FAILED, or the startup sweep settles it."""
+    owner_id, brief = checked.owner_id, checked.brief
+    ingest = "documents" in checked.allowed
     run = Run(id=f"run_{deps.new_id()}", owner_id=owner_id, brief=brief.text,
               state=RunState.INGESTING if ingest else RunState.PLANNING, created_at=deps.now(),
-              watchlist_item_id=watchlist_item_id)
+              watchlist_item_id=checked.watchlist_item_id)
     deps.repos.runs.add(run)
-    thread_id = run_thread_id(owner_id, run.id)
-    initial: State = {"thread_id": thread_id, "owner_id": owner_id,
+    initial: State = {"thread_id": run_thread_id(owner_id, run.id), "owner_id": owner_id,
                       "run_id": run.id, "brief": brief.text,
-                      "allowed_types": allowed, "has_uploads": ingest,
-                      "watchlist_item_id": watchlist_item_id,
-                      "memory_reports": memory_reports if "memory" in allowed else []}
-    return drive(deps, owner_id, run.id, build_graph(deps, uploads=uploads if ingest else []),
-                 initial, outer_config(thread_id), on_state)
+                      "allowed_types": checked.allowed, "has_uploads": ingest,
+                      "watchlist_item_id": checked.watchlist_item_id,
+                      "memory_reports": checked.memory_reports}
+    return StartedRun(run=run, initial=initial, uploads=checked.uploads if ingest else [])
+
+
+def carry_run(deps: Deps, started: StartedRun,
+              on_state: Callable[[dict], None] | None = None) -> Run:
+    """Carry a started Run to COMPLETE or FAILED, or to AWAITING_CLARIFICATION when the
+    Planner asks its one question (`resume_run` carries it on once that is resolved). A Run
+    that fails does not raise; its reason is in the Run log."""
+    run = started.run
+    return drive(deps, run.owner_id, run.id, build_graph(deps, uploads=started.uploads),
+                 started.initial, outer_config(started.initial["thread_id"]), on_state)
+
+
+def run_brief(
+    deps: Deps, owner_id: str, brief: Brief, on_state: Callable[[dict], None] | None = None,
+    uploads: list[Upload] | None = None, watchlist_item_id: str | None = None,
+) -> Run:
+    """Check the Brief, create its Run and carry it on, in the caller's thread (the API does the
+    same three steps through its RunExecutor). `on_state` sees every graph state snapshot.
+    `watchlist_item_id` marks a Watchlist Run (memory and Run summaries are then scoped to that
+    item); None is a one-shot Run."""
+    checked = check_brief(deps, owner_id, brief, uploads, watchlist_item_id)
+    return carry_run(deps, start_run(deps, checked), on_state)
 
 
 def resume_run(deps: Deps, owner_id: str, run_id: str,

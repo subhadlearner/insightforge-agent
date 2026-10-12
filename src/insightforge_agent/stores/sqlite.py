@@ -1,7 +1,11 @@
 """SQLite implementations of the repositories (stdlib `sqlite3`, no ORM).
 
-Every table carries `owner_id`, and every query filters on it."""
+Every table carries `owner_id`, and every query filters on it. All repositories share one
+connection, used by concurrent Runs, their parallel Researcher tools and the API's threads, so
+every public repository method holds the shared re-entrant lock: each call, and the transaction
+it commits, is atomic with respect to every other thread."""
 
+import functools
 import json
 import sqlite3
 import threading
@@ -90,16 +94,27 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _serialised(method):
+    @functools.wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class _Base:
-    def __init__(self, db: sqlite3.Connection) -> None:
+    def __init__(self, db: sqlite3.Connection, lock: threading.RLock) -> None:
         self._db = db
+        self._lock = lock
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        for name, value in list(vars(cls).items()):
+            if not name.startswith("_") and callable(value):
+                setattr(cls, name, _serialised(value))
 
 
 class SqliteRunRepository(_Base):
-    def __init__(self, db: sqlite3.Connection, lock: threading.RLock) -> None:
-        super().__init__(db)
-        self._lock = lock  # the compare-and-set writes may come from several threads
-
     def add(self, run: Run) -> None:
         try:
             with self._db:
@@ -475,19 +490,20 @@ class SqliteRepos:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(SCHEMA)
         _migrate(self._db)
-        # Callers that use this connection from several threads at once (parallel Researcher
-        # tools) serialise their repository calls with this one lock. Re-entrant, because a
-        # SourceStore operation makes several repository calls.
+        # Every repository method takes this one lock (see `_Base`), and callers that need
+        # several calls to be atomic (a SourceStore operation) hold it around them. Re-entrant
+        # for exactly that.
         self.lock = threading.RLock()
         self.runs = SqliteRunRepository(self._db, self.lock)
-        self.subtasks = SqliteSubTaskRepository(self._db)
-        self.sources = SqliteSourceRepository(self._db)
-        self.observations = SqliteObservationRepository(self._db)
-        self.passages = SqlitePassageRepository(self._db)
-        self.reports = SqliteReportRepository(self._db)
-        self.events = SqliteRunEventRepository(self._db)
-        self.entities = SqliteEntityRepository(self._db)
-        self.summaries = SqliteRunSummaryRepository(self._db)
+        self.subtasks = SqliteSubTaskRepository(self._db, self.lock)
+        self.sources = SqliteSourceRepository(self._db, self.lock)
+        self.observations = SqliteObservationRepository(self._db, self.lock)
+        self.passages = SqlitePassageRepository(self._db, self.lock)
+        self.reports = SqliteReportRepository(self._db, self.lock)
+        self.events = SqliteRunEventRepository(self._db, self.lock)
+        self.entities = SqliteEntityRepository(self._db, self.lock)
+        self.summaries = SqliteRunSummaryRepository(self._db, self.lock)
 
     def close(self) -> None:
-        self._db.close()
+        with self.lock:
+            self._db.close()

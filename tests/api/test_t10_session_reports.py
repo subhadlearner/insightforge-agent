@@ -1,35 +1,21 @@
 """T10 AC2-AC4: persona selection through a signed HttpOnly cookie, the one dependency that
 resolves it, and owner-scoped Report list and retrieve (no delete) through the real app."""
 
-from datetime import UTC, datetime
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
-from insightforge_agent.api.app import Runtime, create_app
+from insightforge_agent.api.app import Runtime
 from insightforge_agent.api.session import COOKIE_NAME, PersonaSession
-from insightforge_agent.config import Settings
 from insightforge_agent.domain.models import Report, Run, RunState
 from insightforge_agent.stores.personas import load_personas
-
-USERS_YML = Path(__file__).resolve().parents[2] / "users.yml"
-SECRET = "test-session-secret-0123456789abcdef"
-T0 = datetime(2030, 3, 1, 9, tzinfo=UTC)
-
-
-def settings(tmp_path, **kw) -> Settings:
-    return Settings(llm_provider="fake", search_providers=["fake"], session_secret=SECRET,
-                    personas_file=str(USERS_YML),
-                    database_url=f"sqlite:///{(tmp_path / 'app.db').as_posix()}", **kw)
+from tests.api.support import T0, USERS_YML, App, settings
 
 
 @pytest.fixture
 def client(tmp_path):
-    runtime = Runtime.build(settings(tmp_path))
-    with TestClient(create_app(runtime)) as c:
-        c.runtime = runtime
-        yield c
+    with App(tmp_path) as app:
+        app.client.runtime = app.runtime
+        yield app.client
 
 
 def as_persona(client: TestClient, persona_id: str) -> TestClient:
