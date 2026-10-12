@@ -18,6 +18,11 @@ from insightforge_agent.agents.doc_reader import (
     doc_reader_subagent,
     make_doc_search_tool,
 )
+from insightforge_agent.agents.memory_researcher import (
+    MEMORY_SEARCH_EVENT,
+    make_memory_search_tool,
+    memory_researcher_subagent,
+)
 from insightforge_agent.agents.planner import ApprovedDispatchGuard, build_planner, submitted_plan
 from insightforge_agent.agents.researcher import (
     SUMMARY_EVENT,
@@ -29,6 +34,7 @@ from insightforge_agent.domain.contracts import (
     Brief,
     EvidenceBundle,
     ExtractionResult,
+    HistoricalContext,
     ReportDraft,
     ResearchResults,
     SourceRef,
@@ -37,6 +43,8 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.domain.documents import Upload, check_uploads, chunk_id, chunk_ids_in
 from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
+from insightforge_agent.domain.ids import derive_report_id
+from insightforge_agent.domain.memory import memory_ref_id, memory_refs_in, render_run_summaries
 from insightforge_agent.domain.models import (
     Report,
     Run,
@@ -58,17 +66,25 @@ from insightforge_agent.pipeline.errors import RunFailed
 from insightforge_agent.pipeline.extract import extract
 from insightforge_agent.pipeline.fact_check import fact_check
 from insightforge_agent.pipeline.ingest import ingest_documents
+from insightforge_agent.pipeline.memory import (
+    eligible_report_ids,
+    finalise_report,
+    report_finalised,
+    resolve_historical,
+    summaries_for_planner,
+)
 from insightforge_agent.pipeline.synthesize import synthesize
 from insightforge_agent.pipeline.write import write_report
 
-# Source types a Run can actually carry out so far; memory arrives in T8.
-IMPLEMENTED_SOURCE_TYPES = ["web", "documents"]
+IMPLEMENTED_SOURCE_TYPES = ["web", "documents", "memory"]
 
 
 def runnable_source_types(deps: Deps) -> list[str]:
-    """Documents need the chunker and the `doc_chunks` index wired in."""
-    return [t for t in IMPLEMENTED_SOURCE_TYPES
-            if t != "documents" or (deps.doc_index is not None and deps.chunker is not None)]
+    """Documents need the chunker and the `doc_chunks` index wired in; memory needs the
+    `report_sections` index."""
+    wired = {"web": True, "documents": deps.doc_index is not None and deps.chunker is not None,
+             "memory": deps.report_index is not None}
+    return [t for t in IMPLEMENTED_SOURCE_TYPES if wired[t]]
 DESCRIPTION_RULE = ('Each task description must be exactly "SUBTASK_ID=<id> <query>", with the '
                     "query copied verbatim and nothing added.")
 
@@ -81,12 +97,15 @@ class State(TypedDict, total=False):
     allowed_types: list[str]
     has_uploads: bool  # documents are an allowed source type, so INGESTING runs
     documents: list[str]  # Source IDs of the ingested uploads
+    watchlist_item_id: str | None  # None for a one-shot Run
+    memory_reports: list[str]  # Report IDs the Memory researcher may search, fixed at submission
     plan: dict
     repaired: bool
     missing: list[str]
     research: dict
     extraction: dict
     bundle: dict
+    historical: dict  # HistoricalContext: background from earlier Reports, never in `bundle`
     draft: dict
     verified: dict
     report_id: str
@@ -105,17 +124,28 @@ def summaries_from_log(deps: Deps, owner_id: str, run_id: str) -> dict[str, Sour
     return found
 
 
-def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
-    """Per Sub-task, the chunk IDs its own Doc Reader searches returned in this Run, from the
-    Run log. A search with no Sub-task authorises nothing."""
+def returned_by_subtask(deps: Deps, owner_id: str, run_id: str, event_type: str,
+                        key: str) -> dict[str, set[str]]:
+    """Per Sub-task, the IDs (`key` of each `event_type` event) its own searches returned in
+    this Run, from the Run log. A search with no Sub-task authorises nothing."""
     found: dict[str, set[str]] = {}
     cursor = 0
     while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
         for e in batch:
-            if e.type == DOC_SEARCH_EVENT and e.payload.get("subtask_id"):
-                found.setdefault(e.payload["subtask_id"], set()).update(e.payload["chunk_ids"])
+            if e.type == event_type and e.payload.get("subtask_id"):
+                found.setdefault(e.payload["subtask_id"], set()).update(e.payload[key])
         cursor = batch[-1].seq
     return found
+
+
+def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
+    """Per Sub-task, the chunk IDs its own Doc Reader searches returned in this Run."""
+    return returned_by_subtask(deps, owner_id, run_id, DOC_SEARCH_EVENT, "chunk_ids")
+
+
+def returned_memory_refs(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
+    """Per Sub-task, the memory references its own Memory researcher searches returned."""
+    return returned_by_subtask(deps, owner_id, run_id, MEMORY_SEARCH_EVENT, "refs")
 
 
 def outer_config(thread_id: str) -> dict:
@@ -147,6 +177,12 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                                             events=deps.repos.events, now=deps.now,
                                             lock=deps.repos.lock)
                 subagents.append(doc_reader_subagent([docs], deps.researcher_model))
+            if "memory" in state.get("allowed_types", []):
+                memory = make_memory_search_tool(
+                    owner_id=owner, run_id=run_id, index=deps.report_index,
+                    report_ids=state.get("memory_reports", []), events=deps.repos.events,
+                    now=deps.now, lock=deps.repos.lock)
+                subagents.append(memory_researcher_subagent([memory], deps.researcher_model))
             holder["planner"] = build_planner(
                 model=deps.planner_model,
                 subagents=subagents,
@@ -212,8 +248,14 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 return None, [f"planning produced no valid plan: {e}"]
             return plan, plan_violations(plan, allowed)
 
+        # Only the last 3 Run summaries, never a transcript or an earlier Report's body.
+        summaries = summaries_for_planner(deps, owner, state.get("watchlist_item_id"), run_id)
+        deps.log(owner, run_id, "run_summaries_loaded", count=len(summaries),
+                 run_ids=[s.run_id for s in summaries])
+        earlier = ("\nEarlier Runs (summaries, newest first; context for planning only):\n"
+                   + render_run_summaries(summaries) if summaries else "")
         plan, problems = attempt(
-            f"PLAN. Allowed source types: {', '.join(allowed)}. Brief: {state['brief']}")
+            f"PLAN. Allowed source types: {', '.join(allowed)}. Brief: {state['brief']}{earlier}")
         if problems:
             too_many_aspects = plan is not None and len(plan.aspects) > MAX_ASPECTS
             deps.log(owner, run_id, "plan_correction", violations=problems)
@@ -270,9 +312,23 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         returned = returned_chunks(deps, owner, run_id)
         documents = set(state.get("documents", []))
         source_type = {t["id"]: t["source_type"] for t in state["plan"]["sub_tasks"]}
+        all_outcomes = outcomes(state)
+        historical = memory_background(state, all_outcomes)
+        found_background = {sid for sid, refs in historical.accepted.items() if refs}
         results = []
-        for sid, outcome in outcomes(state).items():
+        for sid, outcome in all_outcomes.items():
             refs: list[SourceRef] = []
+            if source_type[sid] == "memory":
+                # Background only: no current Source, so nothing for Extraction or Synthesis.
+                ok = outcome.status == "succeeded" and sid in found_background
+                if not ok:
+                    deps.log(owner, run_id, "subtask_failed", subtask_id=sid,
+                             status=outcome.status)
+                results.append(SubTaskResult(subtask_id=sid,
+                                             status="succeeded" if ok else "failed"))
+                deps.repos.subtasks.set_status(
+                    owner, run_id, sid, SubTaskStatus.SUCCEEDED if ok else SubTaskStatus.FAILED)
+                continue
             if outcome.status == "succeeded" and source_type[sid] == "documents":
                 reply = outcome.dispatch.result or ""
                 refs = document_refs(owner, reply, returned.get(sid, set()), documents)
@@ -296,7 +352,39 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 owner, run_id, sid, SubTaskStatus.SUCCEEDED if ok else SubTaskStatus.FAILED)
         if not any(r.status == "succeeded" for r in results):
             raise RunFailed("every Sub-task failed")
-        return {"research": ResearchResults(results=results).model_dump()}
+        return {"research": ResearchResults(results=results).model_dump(),
+                "historical": historical.context.model_dump(mode="json")}
+
+    def memory_background(state: State, all_outcomes):
+        """Historical items for the references each memory Sub-task named that its own
+        searches returned, from Reports this Run may use. Anything else is rejected and logged:
+        an invented reference, one returned only to another Sub-task, or one outside the
+        eligible Reports (another User's, a Failed Run's, the same Watchlist Item's)."""
+        owner, run_id = state["owner_id"], state["run_id"]
+        plan = SubTaskPlan.model_validate(state["plan"])
+        returned = returned_memory_refs(deps, owner, run_id)
+        named: dict[str, list] = {}
+        not_returned: dict[str, list] = {}
+        for t in plan.sub_tasks:
+            outcome = all_outcomes[t.id]
+            if t.source_type != "memory" or outcome.status != "succeeded":
+                continue
+            for ref in memory_refs_in(outcome.dispatch.result or ""):
+                own = memory_ref_id(ref) in returned.get(t.id, set())
+                (named if own else not_returned).setdefault(t.id, []).append(ref)
+        resolved = resolve_historical(deps, owner, run_id, plan, named,
+                                      set(state.get("memory_reports", [])))
+        for reason, rejected in (
+                ("not returned by this Sub-task's own searches in this Run", not_returned),
+                ("not a Claim of a Report this Run may use", resolved.rejected)):
+            for sid, refs in rejected.items():
+                deps.log(owner, run_id, "memory_refs_rejected", subtask_id=sid,
+                         refs=[memory_ref_id(r) for r in refs][:50], count=len(refs),
+                         reason=reason)
+        if resolved.context.items:
+            deps.log(owner, run_id, "historical_context", count=len(resolved.context.items),
+                     report_ids=sorted({i.report_id for i in resolved.context.items}))
+        return resolved
 
     def document_refs(owner: str, reply: str, returned: set[str],
                       documents: set[str]) -> list[SourceRef]:
@@ -339,7 +427,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
             ResearchResults.model_validate(state["research"]),
             ExtractionResult.model_validate(state["extraction"]),
         )
-        if not bundle.sections:
+        if not bundle.sections and not historical_of(state).items:
             raise RunFailed("no Evidence item survived synthesis")
         return {"bundle": bundle.model_dump()}
 
@@ -350,30 +438,42 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         gaps = [f"Sub-task {r.subtask_id} ({by_id[r.subtask_id].query}) produced no usable sources."
                 for r in research.results if r.status == "failed"]
         bundle = EvidenceBundle.model_validate(state["bundle"])
-        draft = write_report(deps, state["owner_id"], state["run_id"], state["brief"], bundle, gaps)
+        draft = write_report(deps, state["owner_id"], state["run_id"], state["brief"], bundle,
+                             gaps, historical_of(state))
         return {"draft": draft.model_dump()}
 
     def fact_checking(state: State) -> State:
         enter(state, RunState.FACT_CHECKING)
         verified = fact_check(
             deps, state["owner_id"], state["run_id"], ReportDraft.model_validate(state["draft"]),
-            EvidenceBundle.model_validate(state["bundle"]))
+            EvidenceBundle.model_validate(state["bundle"]), historical_of(state))
         return {"verified": verified.model_dump()}
+
+    def historical_of(state: State) -> HistoricalContext:
+        return HistoricalContext.model_validate(state.get("historical") or {})
 
     def complete(state: State) -> State:
         owner, run_id = state["owner_id"], state["run_id"]
         draft = ReportDraft.model_validate(state["draft"])
         verified = VerifiedReport.model_validate(state["verified"])
+        run = deps.repos.runs.get(owner, run_id)
         try:
             # A retry after a crash between storing the Report and marking COMPLETE reuses it.
             report = deps.repos.reports.get_for_run(owner, run_id)
         except NotFoundError:
             report = Report(
-                id=f"rep_{deps.new_id()}", owner_id=owner, run_id=run_id, created_at=deps.now(),
+                id=derive_report_id(owner, run_id), owner_id=owner, run_id=run_id, created_at=deps.now(),
                 body={"brief": state["brief"], "draft": draft.model_dump(),
-                      "verified": verified.model_dump(), "evidence": state["bundle"]},
+                      "verified": verified.model_dump(), "evidence": state["bundle"],
+                      "historical": historical_of(state).model_dump(mode="json")},
             )
+            # Index and summarise first, store the Report last: a stored Report is always
+            # finalised, so no COMPLETE Run (or recovered one) lacks its summary or index.
+            finalise_report(deps, run, report)
             deps.repos.reports.add(report)
+        else:
+            if not report_finalised(deps, owner, run_id):
+                finalise_report(deps, run, report)
         enter(state, RunState.COMPLETE)
         return {"report_id": report.id}
 
@@ -403,15 +503,18 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
 def run_brief(
     deps: Deps, owner_id: str, brief: Brief, on_state: Callable[[dict], None] | None = None,
-    uploads: list[Upload] | None = None,
+    uploads: list[Upload] | None = None, watchlist_item_id: str | None = None,
 ) -> Run:
     """Create a Run for the Brief and carry it to COMPLETE or FAILED. A Brief with no available
     source type, or with uploads that break the document limits (at most 10 PDFs of at most
     20 MB, matching `brief.document_ids`), raises SubmissionRejected before any Run exists. A
     Run that fails does not raise; its reason is in the Run log. `on_state` sees every graph
-    state snapshot."""
+    state snapshot. `watchlist_item_id` marks a Watchlist Run (memory and Run summaries are
+    then scoped to that item); None is a one-shot Run."""
     uploads = list(uploads or [])
-    available = check_submission(brief, bool(deps.repos.reports.list_for_owner(owner_id)))
+    # One eligibility rule decides memory availability here and what memory may search later.
+    memory_reports = eligible_report_ids(deps, owner_id, watchlist_item_id)
+    available = check_submission(brief, bool(memory_reports))
     allowed = [t for t in available if t in runnable_source_types(deps)]
     if not allowed:
         raise SubmissionRejected(
@@ -419,11 +522,14 @@ def run_brief(
     check_uploads(brief, uploads)
     ingest = "documents" in allowed
     run = Run(id=f"run_{deps.new_id()}", owner_id=owner_id, brief=brief.text,
-              state=RunState.INGESTING if ingest else RunState.PLANNING, created_at=deps.now())
+              state=RunState.INGESTING if ingest else RunState.PLANNING, created_at=deps.now(),
+              watchlist_item_id=watchlist_item_id)
     deps.repos.runs.add(run)
     initial: State = {"thread_id": f"thread-{uuid.uuid4()}", "owner_id": owner_id,
                       "run_id": run.id, "brief": brief.text,
-                      "allowed_types": allowed, "has_uploads": ingest}
+                      "allowed_types": allowed, "has_uploads": ingest,
+                      "watchlist_item_id": watchlist_item_id,
+                      "memory_reports": memory_reports if "memory" in allowed else []}
     try:
         for snapshot in build_graph(deps, uploads=uploads if ingest else []).stream(
                 initial, outer_config(initial["thread_id"]), stream_mode="values"):
@@ -431,12 +537,25 @@ def run_brief(
                 on_state(snapshot)
     except Exception as e:  # noqa: BLE001 - any failure ends the Run, with its reason logged
         reason = str(e) if isinstance(e, RunFailed) else f"{type(e).__name__}: {e}"
-        try:
-            # A Run that already stored its Report is complete, never FAILED with a Report.
-            deps.repos.reports.get_for_run(owner_id, run.id)
-        except NotFoundError:
-            deps.log(owner_id, run.id, "run_failed", reason=reason)
-            return deps.repos.runs.set_state(owner_id, run.id, RunState.FAILED)
-        deps.log(owner_id, run.id, "completion_recovered", detail=reason)
-        return deps.repos.runs.set_state(owner_id, run.id, RunState.COMPLETE)
+        return settle_interrupted(deps, owner_id, run.id, reason)
     return deps.repos.runs.get(owner_id, run.id)
+
+
+def settle_interrupted(deps: Deps, owner_id: str, run_id: str, reason: str) -> Run:
+    """The final state of a Run whose graph stopped with an error. A Run that already stored its
+    Report is COMPLETE, never FAILED with a Report, but only once that Report is finalised
+    (summarised and indexed as memory): finalisation is retried here, and a Report that still
+    cannot be finalised leaves the Run FAILED, so it never feeds memory half-finished."""
+    try:
+        report = deps.repos.reports.get_for_run(owner_id, run_id)
+        if not report_finalised(deps, owner_id, run_id):
+            finalise_report(deps, deps.repos.runs.get(owner_id, run_id), report)
+    except NotFoundError:
+        deps.log(owner_id, run_id, "run_failed", reason=reason)
+        return deps.repos.runs.set_state(owner_id, run_id, RunState.FAILED)
+    except Exception as finalising:  # noqa: BLE001 - Qdrant or the repository unavailable
+        deps.log(owner_id, run_id, "run_failed", reason=f"{reason}; the Report could not be "
+                 f"finalised: {type(finalising).__name__}: {finalising}")
+        return deps.repos.runs.set_state(owner_id, run_id, RunState.FAILED)
+    deps.log(owner_id, run_id, "completion_recovered", detail=reason)
+    return deps.repos.runs.set_state(owner_id, run_id, RunState.COMPLETE)

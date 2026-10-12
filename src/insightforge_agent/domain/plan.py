@@ -13,7 +13,9 @@ SourceType = Literal["web", "documents", "memory"]
 SUBTASK_ID_PATTERN = r"[A-Za-z0-9_]+"
 RESEARCHER = "researcher"
 DOC_READER = "doc_reader"
-AGENT_FOR_SOURCE_TYPE: dict[str, str] = {"web": RESEARCHER, "documents": DOC_READER}
+MEMORY_RESEARCHER = "memory_researcher"
+AGENT_FOR_SOURCE_TYPE: dict[str, str] = {"web": RESEARCHER, "documents": DOC_READER,
+                                         "memory": MEMORY_RESEARCHER}
 
 
 def dispatched_id(description: str) -> str | None:

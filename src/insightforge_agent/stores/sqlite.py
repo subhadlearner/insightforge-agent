@@ -16,6 +16,7 @@ from insightforge_agent.domain.models import (
     Run,
     RunEvent,
     RunState,
+    RunSummary,
     Source,
     SubTaskRecord,
     SubTaskStatus,
@@ -69,6 +70,11 @@ CREATE TABLE IF NOT EXISTS run_events (
 CREATE TABLE IF NOT EXISTS entities (
     owner_id TEXT NOT NULL, run_id TEXT NOT NULL, id TEXT NOT NULL, fact TEXT NOT NULL,
     PRIMARY KEY (owner_id, run_id, id)
+);
+CREATE TABLE IF NOT EXISTS run_summaries (
+    owner_id TEXT NOT NULL, run_id TEXT NOT NULL, watchlist_item_id TEXT,
+    created_at TEXT NOT NULL, summary TEXT NOT NULL,
+    PRIMARY KEY (owner_id, run_id)
 );
 CREATE INDEX IF NOT EXISTS run_events_cursor ON run_events (owner_id, run_id, seq);
 """
@@ -360,6 +366,33 @@ class SqliteEntityRepository(_Base):
         return [ExtractedFact.model_validate_json(r[0]) for r in rows]
 
 
+class SqliteRunSummaryRepository(_Base):
+    def add(self, summary: RunSummary) -> RunSummary:
+        with self._db:
+            self._db.execute(
+                "INSERT OR IGNORE INTO run_summaries VALUES (?,?,?,?,?)",
+                (summary.owner_id, summary.run_id, summary.watchlist_item_id,
+                 summary.created_at.isoformat(), summary.model_dump_json()),
+            )
+        return self.get_for_run(summary.owner_id, summary.run_id)
+
+    def get_for_run(self, owner_id: str, run_id: str) -> RunSummary:
+        row = self._db.execute(
+            "SELECT summary FROM run_summaries WHERE owner_id=? AND run_id=?", (owner_id, run_id)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"run summary for run {run_id}")
+        return RunSummary.model_validate_json(row[0])
+
+    def list_for(self, owner_id: str, watchlist_item_id: str | None) -> list[RunSummary]:
+        rows = self._db.execute(
+            "SELECT summary FROM run_summaries WHERE owner_id=? AND watchlist_item_id IS ? "
+            "ORDER BY created_at DESC, run_id DESC",
+            (owner_id, watchlist_item_id),
+        ).fetchall()
+        return [RunSummary.model_validate_json(r[0]) for r in rows]
+
+
 def sqlite_path(database_url: str) -> str:
     """`sqlite:///rel.db` -> `rel.db`; `sqlite:////abs/x.db` -> `/abs/x.db`; `sqlite://` -> memory."""
     prefix = "sqlite://"
@@ -389,6 +422,7 @@ class SqliteRepos:
         self.reports = SqliteReportRepository(self._db)
         self.events = SqliteRunEventRepository(self._db)
         self.entities = SqliteEntityRepository(self._db)
+        self.summaries = SqliteRunSummaryRepository(self._db)
 
     def close(self) -> None:
         self._db.close()

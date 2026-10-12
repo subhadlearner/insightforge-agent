@@ -2,7 +2,7 @@
 
 Nothing here holds a Source body. Passage text is reached only through `SourceStore`."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -142,9 +142,39 @@ class EvidenceBundle(BaseModel):
     sections: list[EvidenceSection]
 
 
+class HistoricalItem(BaseModel):
+    """Background from one Claim of an earlier Report of the same User (design.md section 5,
+    Memory researcher). Deliberately not an Evidence item: it never enters the Evidence bundle,
+    has no Confidence and can never establish or confirm a Finding. Its lineage is copied from
+    the persisted Report, never from a model or the search index, and is flat: a Claim that was
+    itself historical passes on its own original Report and Passages, never a chain."""
+
+    id: str
+    subtask_id: str
+    aspect_id: str
+    heading: str  # the Aspect name, where the Writer places the Claim
+    statement: str  # the earlier Claim, as that Report's Writer wrote it
+    entity: str = ""
+    report_id: str  # the Report that first made the Claim
+    run_id: str
+    report_date: date  # the original date shown inline; not the As-of period
+    as_of_period: str = "UNKNOWN"  # the period the original Evidence item covered
+    primary: PassageRef  # the original Evidence item's primary Passage
+    supporting: list[PassageRef] = Field(default_factory=list)
+
+
+class HistoricalContext(BaseModel):
+    """What the Memory researcher found, carried beside the Evidence bundle, never inside it."""
+
+    items: list[HistoricalItem] = Field(default_factory=list)
+
+    def by_id(self) -> dict[str, HistoricalItem]:
+        return {i.id: i for i in self.items}
+
+
 class Claim(BaseModel):
     text: str
-    evidence_id: str
+    evidence_id: str  # an Evidence item, or a HistoricalItem when `historical`
     historical: bool = False
 
 
@@ -169,7 +199,9 @@ class ClaimVerdict(BaseModel):
     claim: int
     evidence_id: str
     verdict: Literal["verified", "unverified", "unchecked"]
-    check: Literal["web_refetch", "document_passages", "not_checkable"]
+    # A Historical Claim is checked against its original Sources: the `historical_` kinds.
+    check: Literal["web_refetch", "document_passages", "historical_web_refetch",
+                   "historical_document_passages", "not_checkable"]
     original: PassageRef
     similarity: float | None = None
     matched: PassageRef | None = None

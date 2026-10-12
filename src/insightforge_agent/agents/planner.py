@@ -29,8 +29,8 @@ types. Do NOT call `task` in this phase.
 Phase RESEARCH: the user message starts with RESEARCH. Call `write_todos` with one todo per
 approved Sub-task, then call the `task` tool once per Sub-task with the subagent_type the
 RESEARCH message names for it ("researcher" for web Sub-tasks, "doc_reader" for documents
-Sub-tasks). Each task description MUST be exactly "SUBTASK_ID=<id> <query>": the id, one
-space, then the Sub-task query copied verbatim. Add nothing else (no full stop after the id, no
+Sub-tasks, "memory_researcher" for memory Sub-tasks). Each task description MUST be exactly
+"SUBTASK_ID=<id> <query>": the id, one space, then the Sub-task query copied verbatim. Add nothing else (no full stop after the id, no
 rephrasing, no extra instructions, no source type or time horizon, no reply format; the
 Researcher already knows them). A description that differs by a single character is refused.
 Issue all `task` calls in a single turn. Do not change the approved Sub-tasks.

@@ -90,4 +90,7 @@ def test_documents_are_wired_with_the_configured_local_embedding_model(monkeypat
     assert deps.doc_index is not None and deps.doc_index._embedder is deps.embedder
     assert deps.doc_index._dimensions == 384
     assert isinstance(deps.chunker, DoclingChunker)
-    assert runnable_source_types(deps) == ["web", "documents"]
+    # T8: report_sections uses the same model and the same Qdrant client as doc_chunks.
+    assert deps.report_index is not None and deps.report_index._embedder is deps.embedder
+    assert deps.report_index._client is deps.doc_index._client
+    assert runnable_source_types(deps) == ["web", "documents", "memory"]

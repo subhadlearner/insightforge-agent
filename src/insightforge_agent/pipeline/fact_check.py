@@ -12,7 +12,11 @@ Verification (F2, owner-approved; docs/audits/2026-10-11-f2-fact-checker.md):
 3. Figures: a span that does not state every figure of the Claim is dropped.
 4. Support: one light-model entailment call judges the best `TOP_K` remaining spans. The Claim
    is verified only if a span is judged SUPPORTED. No span left, or a failed or unusable reply,
-   leaves it unverified (fail closed: never unchecked, which the pass rate leaves out)."""
+   leaves it unverified (fail closed: never unchecked, which the pass rate leaves out).
+
+A Historical Claim (T8) goes through the same steps against its original Sources: its
+Historical item carries the earlier Report's primary Passage, and the verdict's check kind is
+`historical_web_refetch` or `historical_document_passages`."""
 
 import math
 import random
@@ -25,10 +29,14 @@ from insightforge_agent.domain.contracts import (
     UNVERIFIED_MARK,
     ClaimVerdict,
     EvidenceBundle,
+    HistoricalContext,
+    HistoricalItem,
     PassageRef,
     ReportDraft,
     VerifiedReport,
 )
+from insightforge_agent.domain.errors import NotFoundError
+from insightforge_agent.domain.memory import without_report_date
 from insightforge_agent.domain.models import Passage, Source
 from insightforge_agent.domain.passages import (
     Span,
@@ -214,21 +222,21 @@ class _Refetcher:
 
 def _verdict(
     deps: Deps, refetch: _Refetcher, vectors: Vectors, owner_id: str, run_id: str,
-    section: int, index: int, text: str, historical: bool, evidence_id: str, original: PassageRef,
+    section: int, index: int, text: str, evidence_id: str, original: PassageRef,
+    historical: bool = False,
 ) -> ClaimVerdict:
+    """`original` is the Passage the Claim cites. For a Historical Claim it is the original
+    primary Passage inherited from the earlier Report, and `text` is the Claim without its
+    inline report date; the check is the same and its kind says it was inherited."""
     base = dict(section=section, claim=index, evidence_id=evidence_id, original=original)
-    if historical:
-        return ClaimVerdict(
-            **base, verdict="unchecked", check="not_checkable",
-            reason="a Historical Claim is checked against its original Sources, which arrive "
-                   "with the memory researcher")
+    prefix = "historical_" if historical else ""
     source = deps.repos.sources.get(
         owner_id, deps.repos.observations.get(owner_id, original.observation_id).source_id)
     if source.kind == "pdf":  # the stored chunks are the original text: no re-fetch
-        check, passages = "document_passages", deps.repos.passages.list(
+        check, passages = f"{prefix}document_passages", deps.repos.passages.list(
             owner_id, original.observation_id)
     else:
-        check, passages = "web_refetch", refetch.passages(source)
+        check, passages = f"{prefix}web_refetch", refetch.passages(source)
         if passages is None:
             return ClaimVerdict(**base, verdict="unchecked", check=check,
                                 reason="the Source could not be re-fetched")
@@ -241,6 +249,29 @@ def _verdict(
     similarity, span = supported
     return ClaimVerdict(**base, verdict="verified", check=check, similarity=similarity,
                         matched=_ref(span))
+
+
+def _historical_verdict(
+    deps: Deps, refetch: _Refetcher, vectors: Vectors, owner_id: str, run_id: str,
+    section: int, index: int, text: str, item: HistoricalItem | None, evidence_id: str,
+) -> ClaimVerdict:
+    """A Historical Claim follows its inheritance chain: the Historical item names the original
+    primary Passage, whose Observation names the original Source, checked as a current Claim
+    would be (re-fetched if a web page, its stored chunks if an uploaded document)."""
+    if item is None:  # the Writer's checks make this unreachable; never guess a Source
+        return ClaimVerdict(section=section, claim=index, evidence_id=evidence_id,
+                            original=PassageRef(observation_id="", index=0),
+                            verdict="unchecked", check="not_checkable",
+                            reason="the Historical Claim names no known Historical item")
+    try:
+        return _verdict(deps, refetch, vectors, owner_id, run_id, section, index,
+                        without_report_date(text, item.report_date), evidence_id, item.primary,
+                        historical=True)
+    except NotFoundError:
+        return ClaimVerdict(section=section, claim=index, evidence_id=evidence_id,
+                            original=item.primary, verdict="unchecked", check="not_checkable",
+                            reason="the original Source of the Historical Claim is no longer "
+                                   "stored")
 
 
 def summarise(total: int, verdicts: list[ClaimVerdict], threshold: float) -> dict:
@@ -257,13 +288,17 @@ def summarise(total: int, verdicts: list[ClaimVerdict], threshold: float) -> dic
 
 def fact_check(
     deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
+    historical: HistoricalContext | None = None,
 ) -> VerifiedReport:
     items = {i.id: i for s in bundle.sections for i in s.items}
+    background = (historical or HistoricalContext()).by_id()
     claims = [(si, ci, c) for si, s in enumerate(draft.sections) for ci, c in enumerate(s.claims)]
     refetch, vectors = _Refetcher(deps, owner_id, run_id), Vectors(deps)
     verdicts = [
-        _verdict(deps, refetch, vectors, owner_id, run_id, si, ci, c.text, c.historical,
-                 c.evidence_id, items[c.evidence_id].primary)
+        _historical_verdict(deps, refetch, vectors, owner_id, run_id, si, ci, c.text,
+                            background.get(c.evidence_id), c.evidence_id) if c.historical else
+        _verdict(deps, refetch, vectors, owner_id, run_id, si, ci, c.text, c.evidence_id,
+                 items[c.evidence_id].primary)
         for si, ci, c in (claims[p] for p in sample_positions(
             run_id, len(claims), deps.fact_check_rate, deps.fact_check_minimum))
     ]

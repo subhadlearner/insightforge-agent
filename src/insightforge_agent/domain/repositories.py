@@ -12,6 +12,7 @@ from insightforge_agent.domain.models import (
     Run,
     RunEvent,
     RunState,
+    RunSummary,
     Source,
     SubTaskRecord,
     SubTaskStatus,
@@ -87,6 +88,19 @@ class ReportRepository(Protocol):
     def get_for_run(self, owner_id: str, run_id: str) -> Report: ...
     def list_for_owner(self, owner_id: str) -> list[Report]:
         """Oldest first."""
+        ...
+
+
+@runtime_checkable
+class RunSummaryRepository(Protocol):
+    def add(self, summary: RunSummary) -> RunSummary:
+        """Idempotent per Run: the first summary stored for a Run is kept and returned."""
+        ...
+
+    def get_for_run(self, owner_id: str, run_id: str) -> RunSummary: ...
+    def list_for(self, owner_id: str, watchlist_item_id: str | None) -> list[RunSummary]:
+        """The User's summaries for one Watchlist Item, or for one-shot Runs when
+        `watchlist_item_id` is None. Newest first."""
         ...
 
 

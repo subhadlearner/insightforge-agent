@@ -12,6 +12,7 @@ from insightforge_agent.domain.models import (
     Run,
     RunEvent,
     RunState,
+    RunSummary,
     Source,
     SubTaskRecord,
     SubTaskStatus,
@@ -176,6 +177,25 @@ class MemoryRunEventRepository:
         return matching[:limit]
 
 
+class MemoryRunSummaryRepository:
+    def __init__(self) -> None:
+        self._summaries: dict[tuple[str, str], RunSummary] = {}
+
+    def add(self, summary: RunSummary) -> RunSummary:
+        return self._summaries.setdefault((summary.owner_id, summary.run_id), summary)
+
+    def get_for_run(self, owner_id: str, run_id: str) -> RunSummary:
+        try:
+            return self._summaries[(owner_id, run_id)]
+        except KeyError:
+            raise NotFoundError(f"run summary for run {run_id}") from None
+
+    def list_for(self, owner_id: str, watchlist_item_id: str | None) -> list[RunSummary]:
+        own = [s for (owner, _), s in self._summaries.items()
+               if owner == owner_id and s.watchlist_item_id == watchlist_item_id]
+        return sorted(own, key=lambda s: (s.created_at, s.run_id), reverse=True)
+
+
 class MemoryEntityRepository:
     def __init__(self) -> None:
         self._facts: dict[tuple[str, str], dict[str, ExtractedFact]] = {}
@@ -201,4 +221,5 @@ class MemoryRepos:
         self.reports = MemoryReportRepository()
         self.events = MemoryRunEventRepository()
         self.entities = MemoryEntityRepository()
+        self.summaries = MemoryRunSummaryRepository()
         self.lock = threading.RLock()  # same contract as SqliteRepos.lock
