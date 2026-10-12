@@ -152,7 +152,8 @@ def synthesize(
             sources_of[result.subtask_id] = list(dict.fromkeys(r.source_id for r in result.source_refs))
             scope_of[result.subtask_id] = result.passage_scope()
 
-    contents = {sid: deps.store.read_source(owner_id, sid)
+    # The Run's own fetch of each Source: another Run may have fetched the same URL since.
+    contents = {sid: deps.store.read_run_source(owner_id, run_id, sid)
                 for sid in dict.fromkeys(s for ids in sources_of.values() for s in ids)}
     source_by_obs: dict[str, Source] = {
         c.observation.id: c.source for c in contents.values() if c.observation is not None}

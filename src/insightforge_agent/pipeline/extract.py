@@ -56,12 +56,13 @@ def extract(
     scope: PassageScope | None = None,
 ) -> ExtractionResult:
     """`scope` limits a Source to the exact Passages a Doc Reader retrieved (by Observation
-    and index); a Source mapped to None, or absent, is read whole from its latest Observation."""
+    and index); a Source mapped to None, or absent, is read whole from this Run's latest
+    Observation of it (never another Run's)."""
     scope = scope or {}
     facts: list[ExtractedFact] = []
     entities: dict[str, None] = {}
     for sid in source_ids:
-        contents = deps.store.read_source(owner_id, sid)
+        contents = deps.store.read_run_source(owner_id, run_id, sid)
         if contents.observation is None:
             continue
         wanted = scope.get(sid)

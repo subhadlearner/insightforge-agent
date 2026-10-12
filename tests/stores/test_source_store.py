@@ -33,10 +33,11 @@ def test_source_id_is_derived_from_kind_and_locator():
 
 
 def test_observation_id_is_derived_from_the_fetch():
-    a = derive_observation_id("alice", "src_1", T0, "body")
-    assert a == derive_observation_id("alice", "src_1", T0, "body")
-    assert a != derive_observation_id("alice", "src_1", T0, "other body")
-    assert a != derive_observation_id("bob", "src_1", T0, "body")
+    a = derive_observation_id("alice", "r1", "src_1", T0, "body")
+    assert a == derive_observation_id("alice", "r1", "src_1", T0, "body")
+    assert a != derive_observation_id("alice", "r1", "src_1", T0, "other body")
+    assert a != derive_observation_id("bob", "r1", "src_1", T0, "body")
+    assert a != derive_observation_id("alice", "r2", "src_1", T0, "body")  # another Run's fetch
 
 
 def test_ingest_web_splits_into_addressable_passages(store):

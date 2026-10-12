@@ -9,7 +9,7 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
 | CP1 | App composition root, persona session, owner-scoped Reports | done |
 | CP2 | Bounded RunExecutor, durable Run creation and admission, `POST /research/run` | done |
 | CP3 | SSE over run_events, clarification router, scheduler, startup sweep | done |
-| CP4 | Cross-Run Observation fix, regressions, full verification, PR | next |
+| CP4 | Cross-Run Observation fix, regressions, full verification, PR | implemented; review + PR next |
 
 ## Decisions so far
 
@@ -56,10 +56,10 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
   passed (1413 passed incl. new); lint-imports 4 kept.
 - CP3: `uv run pytest -q tests/api` -> 60 passed; full offline `uv run pytest -q` -> 1455
   passed, 26 deselected; lint-imports 4 kept.
+- CP4: `uv run pytest -q` -> 1462 passed, 26 deselected; `uv run pytest -q -m integration` -> 19
+  passed (5 pre-existing Docling warnings); focused `uv run pytest -q tests/api
+  tests/pipeline/test_t10_observation_provenance.py` -> 67 passed; lint-imports 4 kept.
 
 ## Next step
 
-CP4: `derive_observation_id(owner, run, source, fetched_at, content)`;
-`SourceStore.read_run_source`; use it in `extract` and `synthesize`; regressions in
-`tests/pipeline/test_t10_observation_provenance.py`; README run section; uvicorn dependency;
-design.md T10 notes; full suites; PR.
+Code review of `main..t10-api`, fix findings, rerun suites, push, open PR (do not merge).
