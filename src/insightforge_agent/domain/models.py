@@ -36,6 +36,26 @@ class RunState(StrEnum):
     FAILED = "FAILED"
 
 
+TERMINAL_STATES = frozenset({RunState.COMPLETE, RunState.FAILED})
+
+
+class Clarification(_Record):
+    """The one clarifying question of a Run (design.md section 2, Clarification). Stored on the
+    Run itself, so the compare-and-set that resolves it also moves the Run out of
+    AWAITING_CLARIFICATION: a Run is never RESUMING without its resolution."""
+
+    question: str
+    asked_at: datetime  # when the Run entered AWAITING_CLARIFICATION
+    deadline: datetime  # asked_at plus the clarification timeout
+    resolution: Literal["answered", "timed_out"] | None = None
+    answer: str | None = None
+    resolved_at: datetime | None = None
+
+    def expired(self, now: datetime) -> bool:
+        """The deadline has passed: only the timeout may resolve the question now."""
+        return now >= self.deadline
+
+
 class Run(_Record):
     id: str
     owner_id: str
@@ -43,6 +63,7 @@ class Run(_Record):
     state: RunState
     created_at: datetime
     watchlist_item_id: str | None = None
+    clarification: Clarification | None = None  # at most one per Run
 
 
 class SubTaskStatus(StrEnum):

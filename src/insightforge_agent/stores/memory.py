@@ -1,11 +1,14 @@
 """In-memory fakes of every repository. Used by default tests: no keys, no Docker."""
 
 import threading
+from datetime import datetime
 
 from insightforge_agent.domain.contracts import ExtractedFact
-from insightforge_agent.domain.errors import NotFoundError
+from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.models import (
+    TERMINAL_STATES,
+    Clarification,
     Observation,
     Passage,
     Report,
@@ -22,6 +25,7 @@ from insightforge_agent.domain.models import (
 class MemoryRunRepository:
     def __init__(self) -> None:
         self._runs: dict[tuple[str, str], Run] = {}
+        self._cas = threading.Lock()  # makes each compare-and-set below atomic, as in SQLite
 
     def add(self, run: Run) -> None:
         if (run.owner_id, run.id) in self._runs:
@@ -42,6 +46,49 @@ class MemoryRunRepository:
         updated = self.get(owner_id, run_id).model_copy(update={"state": state})
         self._runs[(owner_id, run_id)] = updated
         return updated
+
+    def _compare_and_set(self, owner_id: str, run_id: str, holds, update: dict,
+                         conflict: str) -> Run:
+        with self._cas:
+            run = self.get(owner_id, run_id)
+            if not holds(run):
+                raise ClarificationConflict(
+                    f"run {run_id} {conflict} (it is {run.state.value})")
+            updated = run.model_copy(update=update)
+            self._runs[(owner_id, run_id)] = updated
+            return updated
+
+    def open_clarification(self, owner_id: str, run_id: str,
+                           clarification: Clarification) -> Run:
+        return self._compare_and_set(
+            owner_id, run_id,
+            lambda r: r.state == RunState.PLANNING and r.clarification is None,
+            {"state": RunState.AWAITING_CLARIFICATION, "clarification": clarification},
+            "cannot ask a clarifying question")
+
+    def resolve_clarification(self, owner_id: str, run_id: str, *, answer: str | None,
+                              resolved_at: datetime) -> Run:
+        with self._cas:
+            run = self.get(owner_id, run_id)
+            if run.state != RunState.AWAITING_CLARIFICATION:
+                raise ClarificationConflict(
+                    f"run {run_id} is not awaiting a clarification (it is {run.state.value})")
+            resolved = run.clarification.model_copy(update={
+                "resolution": "timed_out" if answer is None else "answered",
+                "answer": answer, "resolved_at": resolved_at})
+            updated = run.model_copy(
+                update={"state": RunState.RESUMING, "clarification": resolved})
+            self._runs[(owner_id, run_id)] = updated
+            return updated
+
+    def claim_resume(self, owner_id: str, run_id: str) -> Run:
+        return self._compare_and_set(
+            owner_id, run_id, lambda r: r.state == RunState.RESUMING,
+            {"state": RunState.PLANNING}, "is not RESUMING")
+
+    def list_unfinished(self) -> list[Run]:
+        return sorted((r for r in self._runs.values() if r.state not in TERMINAL_STATES),
+                      key=lambda r: (r.created_at, r.owner_id, r.id))
 
 
 class MemorySubTaskRepository:

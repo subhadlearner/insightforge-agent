@@ -8,8 +8,10 @@ import threading
 from datetime import datetime
 
 from insightforge_agent.domain.contracts import ExtractedFact
-from insightforge_agent.domain.errors import NotFoundError
+from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.models import (
+    TERMINAL_STATES,
+    Clarification,
     Observation,
     Passage,
     Report,
@@ -27,7 +29,7 @@ from insightforge_agent.domain.plan import SubTask
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     owner_id TEXT NOT NULL, id TEXT NOT NULL, brief TEXT NOT NULL, state TEXT NOT NULL,
-    created_at TEXT NOT NULL, watchlist_item_id TEXT,
+    created_at TEXT NOT NULL, watchlist_item_id TEXT, clarification TEXT,
     PRIMARY KEY (owner_id, id)
 );
 CREATE TABLE IF NOT EXISTS subtasks (
@@ -94,13 +96,18 @@ class _Base:
 
 
 class SqliteRunRepository(_Base):
+    def __init__(self, db: sqlite3.Connection, lock: threading.RLock) -> None:
+        super().__init__(db)
+        self._lock = lock  # the compare-and-set writes may come from several threads
+
     def add(self, run: Run) -> None:
         try:
             with self._db:
                 self._db.execute(
-                    "INSERT INTO runs VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO runs VALUES (?,?,?,?,?,?,?)",
                     (run.owner_id, run.id, run.brief, run.state.value,
-                     run.created_at.isoformat(), run.watchlist_item_id),
+                     run.created_at.isoformat(), run.watchlist_item_id,
+                     run.clarification.model_dump_json() if run.clarification else None),
                 )
         except sqlite3.IntegrityError as e:
             raise ValueError(f"run {run.id} already exists") from e
@@ -108,7 +115,8 @@ class SqliteRunRepository(_Base):
     @staticmethod
     def _row(row) -> Run:
         return Run(owner_id=row[0], id=row[1], brief=row[2], state=RunState(row[3]),
-                   created_at=_dt(row[4]), watchlist_item_id=row[5])
+                   created_at=_dt(row[4]), watchlist_item_id=row[5],
+                   clarification=Clarification.model_validate_json(row[6]) if row[6] else None)
 
     def get(self, owner_id: str, run_id: str) -> Run:
         row = self._db.execute(
@@ -133,6 +141,53 @@ class SqliteRunRepository(_Base):
         if cur.rowcount == 0:
             raise NotFoundError(f"run {run_id}")
         return self.get(owner_id, run_id)
+
+    def _compare_and_set(self, owner_id: str, run_id: str, sql: str, params: tuple,
+                         conflict: str) -> Run:
+        """One conditional UPDATE: SQLite applies it under its write lock, so of two callers
+        whose condition holds when they read, only the first changes the row. The lock only
+        keeps two threads from sharing one transaction on this connection."""
+        with self._lock:
+            with self._db:
+                changed = self._db.execute(sql, (*params, owner_id, run_id)).rowcount
+            run = self.get(owner_id, run_id)  # NotFoundError for an unknown or foreign Run
+        if not changed:
+            raise ClarificationConflict(f"run {run_id} {conflict} (it is {run.state.value})")
+        return run
+
+    def open_clarification(self, owner_id: str, run_id: str,
+                           clarification: Clarification) -> Run:
+        return self._compare_and_set(
+            owner_id, run_id,
+            "UPDATE runs SET state=?, clarification=? WHERE owner_id=? AND id=? "
+            "AND state='PLANNING' AND clarification IS NULL",
+            (RunState.AWAITING_CLARIFICATION.value, clarification.model_dump_json()),
+            "cannot ask a clarifying question")
+
+    def resolve_clarification(self, owner_id: str, run_id: str, *, answer: str | None,
+                              resolved_at: datetime) -> Run:
+        return self._compare_and_set(
+            owner_id, run_id,
+            "UPDATE runs SET state=?, clarification=json_set(clarification, "
+            "'$.resolution', ?, '$.answer', ?, '$.resolved_at', ?) "
+            "WHERE owner_id=? AND id=? AND state='AWAITING_CLARIFICATION'",
+            (RunState.RESUMING.value, "timed_out" if answer is None else "answered", answer,
+             resolved_at.isoformat()),
+            "is not awaiting a clarification")
+
+    def claim_resume(self, owner_id: str, run_id: str) -> Run:
+        return self._compare_and_set(
+            owner_id, run_id,
+            "UPDATE runs SET state=? WHERE owner_id=? AND id=? AND state='RESUMING'",
+            (RunState.PLANNING.value,), "is not RESUMING")
+
+    def list_unfinished(self) -> list[Run]:
+        done = [s.value for s in TERMINAL_STATES]
+        rows = self._db.execute(
+            f"SELECT * FROM runs WHERE state NOT IN ({','.join('?' * len(done))}) "
+            "ORDER BY created_at, owner_id, id", done,
+        ).fetchall()
+        return [self._row(r) for r in rows]
 
 
 class SqliteSubTaskRepository(_Base):
@@ -404,17 +459,27 @@ def sqlite_path(database_url: str) -> str:
     return path or ":memory:"
 
 
+def _migrate(db: sqlite3.Connection) -> None:
+    """Columns added after a table was first created (CREATE TABLE IF NOT EXISTS keeps an
+    existing table as it was)."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(runs)")}
+    if "clarification" not in columns:  # T9
+        with db:
+            db.execute("ALTER TABLE runs ADD COLUMN clarification TEXT")
+
+
 class SqliteRepos:
     """All repositories over one SQLite file (or ":memory:")."""
 
     def __init__(self, path: str = ":memory:") -> None:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(SCHEMA)
+        _migrate(self._db)
         # Callers that use this connection from several threads at once (parallel Researcher
         # tools) serialise their repository calls with this one lock. Re-entrant, because a
         # SourceStore operation makes several repository calls.
         self.lock = threading.RLock()
-        self.runs = SqliteRunRepository(self._db)
+        self.runs = SqliteRunRepository(self._db, self.lock)
         self.subtasks = SqliteSubTaskRepository(self._db)
         self.sources = SqliteSourceRepository(self._db)
         self.observations = SqliteObservationRepository(self._db)

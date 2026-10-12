@@ -2,10 +2,12 @@
 
 A record that does not exist, or belongs to someone else, is a NotFoundError."""
 
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.models import (
+    Clarification,
     Observation,
     Passage,
     Report,
@@ -29,6 +31,29 @@ class RunRepository(Protocol):
         """Oldest first."""
         ...
     def set_state(self, owner_id: str, run_id: str, state: RunState) -> Run: ...
+
+    # Clarification (design.md section 2). Each is one atomic compare-and-set on the Run row;
+    # a caller that loses gets ClarificationConflict and changes nothing.
+    def open_clarification(self, owner_id: str, run_id: str,
+                           clarification: Clarification) -> Run:
+        """PLANNING -> AWAITING_CLARIFICATION with the question stored, only if the Run has
+        never asked one."""
+        ...
+
+    def resolve_clarification(self, owner_id: str, run_id: str, *, answer: str | None,
+                              resolved_at: datetime) -> Run:
+        """AWAITING_CLARIFICATION -> RESUMING, storing the resolution in the same write: the
+        answer, or a timeout when `answer` is None. The first resolver wins."""
+        ...
+
+    def claim_resume(self, owner_id: str, run_id: str) -> Run:
+        """RESUMING -> PLANNING: exactly one caller may carry a resolved Run on."""
+        ...
+
+    def list_unfinished(self) -> list[Run]:
+        """Every User's Runs that are not COMPLETE or FAILED, oldest first. For the startup
+        sweep only, which acts for the system and not for one User."""
+        ...
 
 
 @runtime_checkable

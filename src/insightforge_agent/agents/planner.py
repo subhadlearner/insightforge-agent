@@ -9,7 +9,7 @@ from collections.abc import Callable
 from deepagents import create_deep_agent
 from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
 from insightforge_agent.domain.plan import (
@@ -26,6 +26,13 @@ once with a SubTaskPlan: 3 to 6 Sub-tasks, each with a unique short id (s1, s2, 
 covering exactly one Aspect, every Aspect covered, each with a concrete search query, a
 time horizon in months and a priority (1 is most important). Use only the allowed source
 types. Do NOT call `task` in this phase.
+Vague Brief: if you cannot produce at least 3 Sub-tasks with a concrete scope and time
+horizon from the Brief, call `ask_clarification` with ONE short question for the user instead
+of `submit_plan`, then stop. A Run gets at most one question. When the user message starts
+with PLAN (clarified), the user has answered: plan with the answer. When it starts with
+PLAN (clarification timed out), nobody answered: plan on a best-effort reading of the Brief
+and state the assumption you made in the `assumption` argument of `submit_plan`. Never ask a
+second question.
 Phase RESEARCH: the user message starts with RESEARCH. Call `write_todos` with one todo per
 approved Sub-task, then call the `task` tool once per Sub-task with the subagent_type the
 RESEARCH message names for it ("researcher" for web Sub-tasks, "doc_reader" for documents
@@ -39,9 +46,17 @@ Phase REPAIR: the user message starts with REPAIR and lists missing Sub-tasks. D
 
 
 @tool
-def submit_plan(plan: SubTaskPlan) -> str:
-    """Submit the Sub-task plan for the Brief. Call exactly once in the PLAN phase."""
+def submit_plan(plan: SubTaskPlan, assumption: str = "") -> str:
+    """Submit the Sub-task plan for the Brief. Call exactly once in the PLAN phase.
+    `assumption`: only after a clarification timed out, the reading of the Brief you chose."""
     return "Plan recorded."
+
+
+@tool
+def ask_clarification(question: str) -> str:
+    """Ask the user one clarifying question when the Brief is too vague to plan (fewer than 3
+    Sub-tasks with a concrete scope and time horizon). Only once per Run, in the PLAN phase."""
+    return "Question recorded. Stop now; the answer arrives in a later message."
 
 
 class ApprovedDispatchGuard(AgentMiddleware):
@@ -88,7 +103,7 @@ def build_planner(*, model: BaseChatModel, subagents: list[dict], checkpointer,
         model=model,
         system_prompt=PLANNER_PROMPT,
         subagents=subagents,
-        tools=[submit_plan],
+        tools=[submit_plan, ask_clarification],
         middleware=[TodoListMiddleware(), guard],
         checkpointer=checkpointer,
     )
@@ -105,4 +120,32 @@ def submitted_plan(messages) -> SubTaskPlan:
     raise ValueError("the Planner never called submit_plan")
 
 
+def _latest_call(messages, name: str) -> dict | None:
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            for c in m.tool_calls:
+                if c["name"] == name:
+                    return c
+    return None
 
+
+def plan_assumption(messages) -> str:
+    """The assumption the latest `submit_plan` call stated, or ""."""
+    found = _latest_call(messages, "submit_plan")
+    return str(found["args"].get("assumption") or "").strip() if found else ""
+
+
+def asked_question(messages) -> str | None:
+    """The question the Planner asked in its latest turn (after the last user message), when
+    it asked one and submitted no plan in that turn."""
+    turn = []
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            break
+        turn.append(m)
+    turn.reverse()
+    if _latest_call(turn, "submit_plan") is not None:
+        return None  # a plan takes precedence over a question in the same turn
+    found = _latest_call(turn, "ask_clarification")
+    question = str(found["args"].get("question") or "").strip() if found else ""
+    return question or None

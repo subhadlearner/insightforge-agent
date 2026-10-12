@@ -1,5 +1,6 @@
 """Builds a Run's dependencies from Settings: real models, search, fetching and documents."""
 
+from datetime import timedelta
 from typing import Any
 
 from qdrant_client import QdrantClient
@@ -10,7 +11,7 @@ from insightforge_agent.config import Settings
 from insightforge_agent.domain.evidence import Thresholds
 from insightforge_agent.embeddings import FastEmbedEmbedder
 from insightforge_agent.llm import build_chat_model
-from insightforge_agent.pipeline.deps import Deps
+from insightforge_agent.pipeline.deps import Deps, TimeoutScheduler
 from insightforge_agent.stores.doc_chunks import DocChunkIndex
 from insightforge_agent.stores.report_sections import ReportSectionIndex
 from insightforge_agent.stores.source_store import SourceStore
@@ -24,7 +25,8 @@ def build_qdrant(settings: Settings) -> QdrantClient:
     return QdrantClient(url=settings.qdrant_url)
 
 
-def build_deps(settings: Settings, repos: Any, checkpointer: Any) -> Deps:
+def build_deps(settings: Settings, repos: Any, checkpointer: Any,
+               timeouts: TimeoutScheduler | None = None) -> Deps:
     # One local embedding model for everything that embeds (design.md section 10): Doc Reader
     # search, Memory researcher search, Evidence relevance and Fact-Checker similarity. It
     # loads on first use.
@@ -51,6 +53,8 @@ def build_deps(settings: Settings, repos: Any, checkpointer: Any) -> Deps:
         fact_check_rate=settings.fact_check_rate,
         fact_check_minimum=settings.fact_check_minimum,
         similarity_threshold=settings.similarity_threshold,
+        timeouts=timeouts,
+        clarification_timeout=timedelta(minutes=settings.clarification_timeout_minutes),
         thresholds=Thresholds(
             credibility_high=settings.credibility_high,
             credibility_medium=settings.credibility_medium,

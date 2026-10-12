@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     recency_fresh_days: int = 365
     recency_recent_days: int = 1095
 
+    # Clarification: how long a Run waits for the answer to its one question.
+    clarification_timeout_minutes: int = 30
+
     # Search: ordered; a provider that fails falls through to the next.
     search_providers: Annotated[list[SearchProvider], NoDecode] = ["tavily", "serpapi"]
 

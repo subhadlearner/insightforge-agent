@@ -3,8 +3,8 @@
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol
 
 from langchain_core.language_models import BaseChatModel
 
@@ -17,6 +17,14 @@ from insightforge_agent.pipeline.errors import RunFailed
 from insightforge_agent.stores.doc_chunks import DocChunkIndex
 from insightforge_agent.stores.report_sections import ReportSectionIndex
 from insightforge_agent.stores.source_store import SourceStore
+
+
+class TimeoutScheduler(Protocol):
+    """Durable one-shot clarification timeouts (scheduler/clarification.py in production). A
+    scheduled timeout survives a restart; scheduling the same Run again replaces its job."""
+
+    def schedule(self, owner_id: str, run_id: str, at: datetime) -> None: ...
+    def cancel(self, owner_id: str, run_id: str) -> None: ...
 
 
 @dataclass
@@ -49,6 +57,10 @@ class Deps:
     # Earlier Reports (T8). Without it the memory source type cannot be researched, and Reports
     # are finalised without being indexed, so they never become memory.
     report_index: ReportSectionIndex | None = None
+    # Clarification (T9). Without a timeout scheduler a Run cannot wait for an answer, so the
+    # Planner's question is refused and it must plan from the Brief as given.
+    timeouts: TimeoutScheduler | None = None
+    clarification_timeout: timedelta = timedelta(minutes=30)
 
     _spent: dict[tuple[str, str], int] = field(default_factory=dict, repr=False)
 
