@@ -209,3 +209,16 @@ def test_ownership_is_checked_before_the_cursor(app):
     app.login("alice")
     response, _ = read_stream(app.client, run_id, last_event_id="not-a-number")
     assert response.status_code == 404
+
+
+def test_open_streams_end_at_once_when_the_server_begins_shutting_down(tmp_path):
+    with App(tmp_path, Gate(fakes.FixtureSearch(), open_=False)) as app:
+        app.login("alice")
+        run_id = app.submit().json()["run_id"]
+        stream = LiveStream(app.client.app, run_id, app.runtime.session.sign("alice"))
+        first = stream.frames(limit=1)
+        app.runtime.begin_shutdown()  # what `serve` does on SIGINT / SIGTERM
+        rest = stream.frames(timeout=10)
+        stream.close()
+        assert all(f["event"] == "message" for f in first + rest)  # closed without `end`
+        assert app.run(run_id).state not in (RunState.COMPLETE, RunState.FAILED)

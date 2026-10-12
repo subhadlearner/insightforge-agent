@@ -4,7 +4,10 @@
 `create_app` mounts the routers over it and runs `Runtime.start` and `Runtime.stop` in the
 lifespan, so no request is served before startup has finished, and nothing is closed while a
 request or a Run may still use it. Run it with
-`uvicorn insightforge_agent.api.app:app_from_env --factory`.
+`insightforge-agent serve` (`serve` below), which tells the Runtime the moment uvicorn is asked
+to stop, so open SSE streams end at once instead of holding uvicorn's graceful shutdown for up
+to their lifetime. Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` also works,
+but then shutdown waits up to `SSE_MAX_STREAM_SECONDS` for open streams (measured: 60 s).
 
 Startup (`start`), in order:
 
@@ -25,6 +28,7 @@ to finish; only then are Qdrant, the checkpointer and SQLite closed, last opened
 
 import logging
 import sqlite3
+import threading
 from collections import Counter
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -32,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import anyio
+import uvicorn
 from apscheduler.schedulers.base import BaseScheduler
 from fastapi import FastAPI
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -80,6 +85,7 @@ class Runtime:
     clarifications: ClarificationService
     research: ResearchService
     recovered: Counter = field(default_factory=Counter)  # what the startup sweep did
+    closing: threading.Event = field(default_factory=threading.Event)  # streams end when set
     _closers: list[Callable[[], object]] = field(default_factory=list)
 
     @classmethod
@@ -123,7 +129,13 @@ class Runtime:
         logger.info("startup sweep: %s", dict(self.recovered))
         self.scheduler.resume()
 
+    def begin_shutdown(self) -> None:
+        """The server was asked to stop: open progress streams end now (clients reconnect
+        later with Last-Event-ID), so they do not hold up the graceful shutdown."""
+        self.closing.set()
+
     def stop(self) -> None:
+        self.begin_shutdown()
         if self.scheduler.running:
             self.scheduler.pause()
             self.scheduler.shutdown(wait=True)
@@ -131,6 +143,7 @@ class Runtime:
         self.executor.shutdown()
         for close in reversed(self._closers):
             close()
+        logger.info("runtime stopped: scheduler and executor shut down, resources closed")
 
 
 def create_app(runtime: Runtime) -> FastAPI:
@@ -150,10 +163,29 @@ def create_app(runtime: Runtime) -> FastAPI:
     app.include_router(runtime.session.router())
     app.include_router(research_router(runtime.research, user, runtime.repos.runs,
                                        runtime.repos.events, runtime.settings.sse_poll_seconds,
-                                       runtime.settings.sse_max_stream_seconds))
+                                       runtime.settings.sse_max_stream_seconds,
+                                       runtime.closing))
     app.include_router(clarification_router(runtime.clarifications, user_id))
     app.include_router(reports_router(runtime.repos.reports, user_id))
     return app
+
+
+class _Server(uvicorn.Server):
+    """uvicorn, telling the Runtime as soon as a stop signal arrives (before uvicorn starts
+    waiting for open connections to close)."""
+
+    def __init__(self, config: uvicorn.Config, runtime: Runtime) -> None:
+        super().__init__(config)
+        self._runtime = runtime
+
+    def handle_exit(self, sig, frame) -> None:
+        self._runtime.begin_shutdown()
+        super().handle_exit(sig, frame)
+
+
+def serve(runtime: Runtime, host: str = "127.0.0.1", port: int = 8000) -> None:
+    """Serve the app until SIGINT or SIGTERM (Ctrl+C or Ctrl+Break on Windows)."""
+    _Server(uvicorn.Config(create_app(runtime), host=host, port=port), runtime).run()
 
 
 def app_from_env() -> FastAPI:

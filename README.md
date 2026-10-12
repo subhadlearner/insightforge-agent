@@ -16,8 +16,13 @@ Set the provider and search keys in `.env` (see `.env.example`), plus `SESSION_S
 
 ```
 docker compose up -d qdrant
-uv run uvicorn insightforge_agent.api.app:app_from_env --factory
+uv run insightforge-agent serve --port 8000
 ```
+
+Stop it with Ctrl+C: open progress streams end at once (clients reconnect with
+`Last-Event-ID`), the scheduler and executor stop, running Runs finish, and the databases are
+closed. Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves the same app,
+but on shutdown uvicorn then waits for open streams for up to `SSE_MAX_STREAM_SECONDS` (60 s).
 
 Runs execute in the API process on a bounded pool (`RUN_CONCURRENCY` workers, `RUN_QUEUE_LIMIT`
 queued); a submission beyond that is refused with 503. Endpoints:

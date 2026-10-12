@@ -18,8 +18,9 @@ FAILED when the 503 is sent.
 - The pipeline stores every event of a Run before the Run becomes terminal, so once the stream
   sees COMPLETE or FAILED it drains what is left, sends `event: end` with the final state, and
   closes. A client that connects after the Run ended gets the whole stored history, then `end`.
-- A stream lives at most `max_stream_seconds` while the Run is unfinished, then closes without
-  `end` (so it never holds up a shutdown); EventSource reconnects with `Last-Event-ID`.
+- A stream lives at most `max_stream_seconds` while the Run is unfinished, and ends at once when
+  `closing` is set (the server is stopping); either way it closes without `end`, and
+  EventSource reconnects with `Last-Event-ID`.
 - An unknown Run and another User's Run are the same 404, checked before the cursor.
   Disconnecting only stops the stream; the Run carries on in the RunExecutor."""
 
@@ -27,6 +28,7 @@ import base64
 import binascii
 import json
 import re
+import threading
 from collections.abc import Callable
 
 import anyio
@@ -97,7 +99,8 @@ def end_frame(run_id: str, state: str) -> str:
 
 def research_router(service: ResearchService, current_user: Callable[..., User],
                     runs: RunRepository, events: RunEventRepository,
-                    poll_seconds: float, max_stream_seconds: float) -> APIRouter:
+                    poll_seconds: float, max_stream_seconds: float,
+                    closing: threading.Event | None = None) -> APIRouter:
     router = APIRouter(prefix="/research")
 
     @router.post("/run", status_code=202, response_model=RunAccepted)
@@ -163,6 +166,8 @@ def research_router(service: ResearchService, current_user: Callable[..., User],
                 return
             if await request.is_disconnected():
                 return
+            if closing is not None and closing.is_set():
+                return  # the server is stopping; the client reconnects with Last-Event-ID
             if anyio.current_time() >= ends_at:
                 # A bounded lifetime, so no stream holds up a shutdown (or waits forever on a
                 # Run awaiting its answer); EventSource reconnects with Last-Event-ID.
