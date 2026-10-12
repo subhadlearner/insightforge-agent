@@ -88,14 +88,16 @@ is optional. Omit `max_runs` for unbounded scheduling only at cadences of at lea
 The first tick is one cadence after creation; downtime and overlapping ticks are skipped.
 
 List with `GET /watchlist`, retrieve with `GET /watchlist/{id}`, edit with `PATCH` at that path,
-and delete with `DELETE`. Responses include `item`, `runs_started`, `completed_runs`,
+and delete with `DELETE`. A PATCH includes the `revision` returned by the last read plus the
+fields to change; a stale revision returns 409. Responses include `item`, `runs_started`, `completed_runs`,
 `failed_runs`, `recent_failed_runs` (up to five), and the first-success Baseline seed state.
 The UI can render `runs_started` of `item.max_runs` runs started. Executor capacity refusal
 creates no Run and consumes no slot; a persisted Run that fails or is cancelled consumes one.
 
-An edit resets the next tick and does not reset the Run count. Once any Run has started, use a
-new item to change its Brief. Deleting an item retains its Runs and Reports and lets already
-admitted work finish. All endpoints use the existing owner-scoped 404 behavior.
+A cadence edit resets the next tick; other edits preserve its existing due time. No edit resets
+the Run count. Once any Run has started, use a new item to change its Brief. Deleting an item
+retains its Runs and Reports and lets already admitted work finish. All endpoints use the
+existing owner-scoped 404 behavior.
 
 T11 persists current Claim/Evidence seeds with full provenance on first success, marked
 `normalization_pending=true`. Normalized Finding state, comparisons, Material changes and

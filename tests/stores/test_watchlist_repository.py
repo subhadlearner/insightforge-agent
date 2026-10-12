@@ -86,17 +86,19 @@ def test_every_nonterminal_state_blocks_overlap(repos, state):
         repos.watchlists.start(run("b"), 1)
 
 
-def test_tick_is_consumed_once_missed_ticks_skip_and_revision_rejects(repos):
+def test_tick_uses_cadence_grace_then_skips_older_misfires(repos):
     repo = repos.watchlists
     repo.add(item())
     assert repo.take_tick("alice", "w", 2, NOW) is None
     assert repo.take_tick("alice", "w", 1, NOW) is not None
     assert repo.take_tick("alice", "w", 1, NOW) is None
-    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=16)) is None
+    # Repository contention or scheduler jitter beyond one second is still timely.
+    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=16)) is not None
     assert repo.get("alice", "w").next_tick_at == NOW + timedelta(minutes=30)
-    # APScheduler can itself drop an earlier misfire; the current timely tick still runs.
-    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=60)) is not None
+    # A callback at least one whole cadence late is missed and only advances the clock.
+    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=60)) is None
     assert repo.get("alice", "w").next_tick_at == NOW + timedelta(minutes=75)
+    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=75)) is not None
 
 
 def test_edits_reject_stale_admission_and_immutable_brief_after_start(repos):

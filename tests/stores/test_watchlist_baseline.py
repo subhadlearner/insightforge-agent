@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-import pytest
-
 from insightforge_agent.domain.contracts import (
     Claim,
     EvidenceBundle,
@@ -109,7 +107,7 @@ def prepare(repos, foreign_observation=False, historical_only=False):
         },
     )
     repos.reports.add(report)
-    return WatchlistScheduler(SimpleNamespace(repos=repos), None, None)
+    return WatchlistScheduler(SimpleNamespace(repos=repos, now=lambda: NOW), None, None)
 
 
 def test_initialization_excludes_historical_and_unverified_and_keeps_structured_provenance(
@@ -134,9 +132,56 @@ def test_initialization_excludes_historical_and_unverified_and_keeps_structured_
 
 def test_foreign_run_evidence_cannot_seed_baseline(repos):
     service = prepare(repos, foreign_observation=True)
-    with pytest.raises(ValueError, match="establishing Run"):
-        service.initialize("alice", "w")
+    assert service.initialize("alice", "w") is None
     assert repos.watchlists.baseline("alice", "w") is None
+    assert repos.watchlists.baseline_candidates("alice", "w") == []
+
+
+def test_bad_first_report_is_quarantined_and_next_success_initializes(repos):
+    service = prepare(repos, foreign_observation=True)
+    repos.runs.add(
+        run("second", RunState.COMPLETE).model_copy(
+            update={"created_at": NOW.replace(second=1)}
+        )
+    )
+    first = repos.reports.get("alice", "rep")
+    verified = VerifiedReport.model_validate(first.body["verified"])
+    historical = verified.model_copy(
+        update={
+            "draft": verified.draft.model_copy(
+                update={
+                    "sections": [
+                        section.model_copy(
+                            update={
+                                "claims": [
+                                    claim.model_copy(update={"historical": True})
+                                    for claim in section.claims
+                                ]
+                            }
+                        )
+                        for section in verified.draft.sections
+                    ]
+                }
+            )
+        }
+    )
+    repos.reports.add(
+        Report(
+            id="rep-second",
+            owner_id="alice",
+            run_id="second",
+            created_at=NOW.replace(second=1),
+            body={
+                "verified": historical.model_dump(mode="json"),
+                "evidence": first.body["evidence"],
+            },
+        )
+    )
+
+    baseline = service.initialize("alice", "w")
+    assert baseline.initializing_run_id == "second"
+    assert baseline.seeds == []
+    assert service.initialize("alice", "w") == baseline
 
 
 def test_empty_current_input_is_distinct_from_no_success(repos):

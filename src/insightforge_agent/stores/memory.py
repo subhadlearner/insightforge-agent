@@ -272,4 +272,4 @@ class MemoryRepos:
         self.entities = MemoryEntityRepository()
         self.summaries = MemoryRunSummaryRepository()
         self.lock = threading.RLock()  # same contract as SqliteRepos.lock
-        self.watchlists = MemoryWatchlistRepository(self.runs, self.lock)
+        self.watchlists = MemoryWatchlistRepository(self.runs, self.reports, self.lock)

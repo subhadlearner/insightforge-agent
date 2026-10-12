@@ -11,7 +11,6 @@ import sqlite3
 import threading
 from datetime import datetime
 
-from insightforge_agent.stores.watchlist import SCHEMA as WATCHLIST_SCHEMA, SqliteWatchlistRepository
 from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.models import (
@@ -30,6 +29,11 @@ from insightforge_agent.domain.models import (
 )
 from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.plan import SubTask
+from insightforge_agent.stores.run_rows import insert_run_row
+from insightforge_agent.stores.watchlist import (
+    SCHEMA as WATCHLIST_SCHEMA,
+    SqliteWatchlistRepository,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -119,12 +123,7 @@ class SqliteRunRepository(_Base):
     def add(self, run: Run) -> None:
         try:
             with self._db:
-                self._db.execute(
-                    "INSERT INTO runs VALUES (?,?,?,?,?,?,?)",
-                    (run.owner_id, run.id, run.brief, run.state.value,
-                     run.created_at.isoformat(), run.watchlist_item_id,
-                     run.clarification.model_dump_json() if run.clarification else None),
-                )
+                insert_run_row(self._db, run)
         except sqlite3.IntegrityError as e:
             raise ValueError(f"run {run.id} already exists") from e
 

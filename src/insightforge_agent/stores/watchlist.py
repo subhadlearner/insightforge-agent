@@ -4,16 +4,19 @@ Run rows are the durable counter; no decrement on failure and no disposable in-m
 Deleting an item preserves Runs and Reports. Already admitted work may finish after deletion.
 """
 
+import json
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from insightforge_agent.domain.errors import NotFoundError
-from insightforge_agent.domain.models import Run, RunState
+from insightforge_agent.domain.models import Report, Run, RunState
 from insightforge_agent.domain.watchlist import (
     Baseline,
     WatchlistConflict,
     WatchlistItem,
+    check_watchlist_brief_change,
 )
+from insightforge_agent.stores.run_rows import insert_run_row
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watchlist_items (
@@ -23,6 +26,11 @@ CREATE TABLE IF NOT EXISTS watchlist_items (
 CREATE TABLE IF NOT EXISTS watchlist_baselines (
  owner_id TEXT NOT NULL, item_id TEXT NOT NULL, baseline TEXT NOT NULL,
  PRIMARY KEY(owner_id,item_id)
+);
+CREATE TABLE IF NOT EXISTS watchlist_baseline_failures (
+ owner_id TEXT NOT NULL, item_id TEXT NOT NULL, run_id TEXT NOT NULL,
+ reason TEXT NOT NULL, failed_at TEXT NOT NULL,
+ PRIMARY KEY(owner_id,item_id,run_id)
 );
 CREATE INDEX IF NOT EXISTS watchlist_runs ON runs(owner_id,watchlist_item_id,state);
 """
@@ -85,10 +93,9 @@ class SqliteWatchlistRepository:
                 raise WatchlistConflict(
                     "the Watchlist Item changed; reload before editing"
                 )
-            if old.brief != item.brief and self.counts(item.owner_id, item.id)[0]:
-                raise WatchlistConflict(
-                    "create a new Watchlist Item to change a Brief after Runs started"
-                )
+            check_watchlist_brief_change(
+                old, item, self.counts(item.owner_id, item.id)[0]
+            )
             self._save(item)
 
     def delete(self, owner_id, item_id):
@@ -100,6 +107,10 @@ class SqliteWatchlistRepository:
             )
             self._db.execute(
                 "DELETE FROM watchlist_baselines WHERE owner_id=? AND item_id=?",
+                (owner_id, item_id),
+            )
+            self._db.execute(
+                "DELETE FROM watchlist_baseline_failures WHERE owner_id=? AND item_id=?",
                 (owner_id, item_id),
             )
 
@@ -129,32 +140,25 @@ class SqliteWatchlistRepository:
             ).fetchone()
             if active:
                 raise WatchlistConflict("a Run is already active")
-            self._db.execute(
-                "INSERT INTO runs VALUES (?,?,?,?,?,?,?)",
-                (
-                    run.owner_id,
-                    run.id,
-                    run.brief,
-                    run.state.value,
-                    run.created_at.isoformat(),
-                    run.watchlist_item_id,
-                    None,
-                ),
-            )
+            insert_run_row(self._db, run)
 
     def take_tick(
         self, owner_id, item_id, revision, now: datetime
     ) -> WatchlistItem | None:
-        """Consume a due tick exactly once, even if it overlaps or capacity later refuses it.
-        A callback delayed by more than one second is a missed tick, never catch-up work."""
+        """Consume one due callback and advance past older intervals atomically.
+
+        Dispatch delay shorter than one cadence is ordinary jitter. At least one cadence
+        late is a missed callback: advance the durable clock but admit no Run.
+        """
         with self._write():
             item = self.get(owner_id, item_id)
             if item.revision != revision or now < item.next_tick_at:
                 return None
-            due = item.after(now) - timedelta(minutes=item.cadence_minutes)
-            late = (now - due).total_seconds() > 1
+            missed = (now - item.next_tick_at).total_seconds() >= (
+                item.cadence_minutes * 60
+            )
             self._save(item.model_copy(update={"next_tick_at": item.after(now)}))
-            return None if late else item
+            return None if missed else item
 
     def skip_missed(self, owner_id, item_id, now: datetime) -> WatchlistItem:
         with self._write():
@@ -162,6 +166,49 @@ class SqliteWatchlistRepository:
             item = item.model_copy(update={"next_tick_at": item.after(now)})
             self._save(item)
             return item
+
+    def baseline_candidates(self, owner_id, item_id) -> list[Report]:
+        """Use the Watchlist Run index; never scan every Report belonging to the owner."""
+        with self._lock:
+            self.get(owner_id, item_id)
+            rows = self._db.execute(
+                "SELECT p.owner_id,p.id,p.run_id,p.created_at,p.body "
+                "FROM runs r JOIN reports p ON p.owner_id=r.owner_id AND p.run_id=r.id "
+                "LEFT JOIN watchlist_baseline_failures f "
+                "ON f.owner_id=r.owner_id AND f.item_id=r.watchlist_item_id "
+                "AND f.run_id=r.id "
+                "WHERE r.owner_id=? AND r.watchlist_item_id=? AND r.state='COMPLETE' "
+                "AND f.run_id IS NULL ORDER BY p.created_at,p.id",
+                (owner_id, item_id),
+            ).fetchall()
+        return [
+            Report(
+                owner_id=row[0],
+                id=row[1],
+                run_id=row[2],
+                created_at=datetime.fromisoformat(row[3]),
+                body=json.loads(row[4]),
+            )
+            for row in rows
+        ]
+
+    def reject_baseline_candidate(
+        self, owner_id, item_id, run_id, reason, failed_at
+    ) -> bool:
+        with self._write():
+            self.get(owner_id, item_id)
+            run = self._db.execute(
+                "SELECT state,watchlist_item_id FROM runs WHERE owner_id=? AND id=?",
+                (owner_id, run_id),
+            ).fetchone()
+            if run != (RunState.COMPLETE.value, item_id):
+                raise ValueError("only a COMPLETE Run of this Watchlist Item can be rejected")
+            inserted = self._db.execute(
+                "INSERT OR IGNORE INTO watchlist_baseline_failures "
+                "(owner_id,item_id,run_id,reason,failed_at) VALUES (?,?,?,?,?)",
+                (owner_id, item_id, run_id, reason[:1000], failed_at.isoformat()),
+            )
+            return inserted.rowcount == 1
 
     def baseline(self, owner_id, item_id) -> Baseline | None:
         with self._lock:
@@ -197,10 +244,11 @@ class SqliteWatchlistRepository:
 class MemoryWatchlistRepository:
     """Offline fake with the same first-winner contracts as SQLite."""
 
-    def __init__(self, runs, lock):
-        self._runs, self._lock = runs, lock
+    def __init__(self, runs, reports, lock):
+        self._runs, self._reports, self._lock = runs, reports, lock
         self._items = {}
         self._baselines = {}
+        self._baseline_failures = set()
 
     def get(self, owner_id, item_id):
         with self._lock:
@@ -230,10 +278,9 @@ class MemoryWatchlistRepository:
                 raise WatchlistConflict(
                     "the Watchlist Item changed; reload before editing"
                 )
-            if old.brief != item.brief and self.counts(item.owner_id, item.id)[0]:
-                raise WatchlistConflict(
-                    "create a new Watchlist Item to change a Brief after Runs started"
-                )
+            check_watchlist_brief_change(
+                old, item, self.counts(item.owner_id, item.id)[0]
+            )
             self._items[item.owner_id, item.id] = item.model_copy(deep=True)
 
     def delete(self, owner_id, item_id):
@@ -241,6 +288,9 @@ class MemoryWatchlistRepository:
             self.get(owner_id, item_id)
             del self._items[owner_id, item_id]
             self._baselines.pop((owner_id, item_id), None)
+            self._baseline_failures = {
+                key for key in self._baseline_failures if key[:2] != (owner_id, item_id)
+            }
 
     def counts(self, owner_id, item_id):
         with self._lock:
@@ -279,11 +329,13 @@ class MemoryWatchlistRepository:
             item = self.get(owner_id, item_id)
             if item.revision != revision or now < item.next_tick_at:
                 return None
+            missed = (now - item.next_tick_at).total_seconds() >= (
+                item.cadence_minutes * 60
+            )
             self._items[owner_id, item_id] = item.model_copy(
                 update={"next_tick_at": item.after(now)}
             )
-            due = item.after(now) - timedelta(minutes=item.cadence_minutes)
-            return None if (now - due).total_seconds() > 1 else item
+            return None if missed else item
 
     def skip_missed(self, owner_id, item_id, now):
         with self._lock:
@@ -291,6 +343,36 @@ class MemoryWatchlistRepository:
             item = item.model_copy(update={"next_tick_at": item.after(now)})
             self._items[owner_id, item_id] = item
             return item
+
+    def baseline_candidates(self, owner_id, item_id):
+        with self._lock:
+            self.get(owner_id, item_id)
+            candidates = []
+            for run in self._runs.list_for_owner(owner_id):
+                key = (owner_id, item_id, run.id)
+                if (
+                    run.watchlist_item_id == item_id
+                    and run.state == RunState.COMPLETE
+                    and key not in self._baseline_failures
+                ):
+                    try:
+                        candidates.append(self._reports.get_for_run(owner_id, run.id))
+                    except NotFoundError:
+                        pass
+            return sorted(candidates, key=lambda report: (report.created_at, report.id))
+
+    def reject_baseline_candidate(
+        self, owner_id, item_id, run_id, reason, failed_at
+    ):
+        with self._lock:
+            self.get(owner_id, item_id)
+            run = self._runs.get(owner_id, run_id)
+            if run.state != RunState.COMPLETE or run.watchlist_item_id != item_id:
+                raise ValueError("only a COMPLETE Run of this Watchlist Item can be rejected")
+            key = (owner_id, item_id, run_id)
+            first = key not in self._baseline_failures
+            self._baseline_failures.add(key)
+            return first
 
     def baseline(self, owner_id, item_id):
         with self._lock:

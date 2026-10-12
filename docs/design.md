@@ -390,9 +390,11 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   Brief immediately with 422, before an item, Run, or checkpoint exists. The call has no research
   tools. Updates that change the Brief or source choices repeat this validation. These are model
   calls in production; all T11 tests supply scripted models.
-- **Editing:** cadence, source choices and `max_runs` can change. Edits reset the next tick to one
-  cadence from the edit and increment a revision. After any Run started, changing the standing
-  Brief returns 409: create a new item so its established state and research scope stay aligned.
+- **Editing:** cadence, source choices and `max_runs` can change. PATCH requires the revision from
+  the client's last read; the repository compares it atomically and returns 409 for a stale edit.
+  A cadence change resets the next tick to one new cadence from the edit; other changes preserve
+  the due time. Every successful edit increments the revision. After any Run started, changing the
+  standing Brief returns 409: create a new item so its established state and research scope stay aligned.
   Deletion stops scheduling, removes the item's Baseline input, and retains Runs and Reports.
   A Run admitted before deletion is allowed to finish; it cannot recreate the deleted item.
 - **Admission:** `ResearchService`/`RunExecutor.admit` reserve capacity before `start_run`. The
@@ -402,10 +404,13 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   refusal before persistence consumes none. `AWAITING_CLARIFICATION` and `RESUMING` block overlap.
   `run_brief(watchlist_item_id=...)` now also validates ownership and source restrictions (#49).
 - **Ticks:** persisted APScheduler interval jobs share T9's scheduler/job store. Jobs carry owner,
-  item and revision, with `max_instances=1`, coalescing and a one-second dispatch grace. SQLite
-  consumes each due time once; duplicate, stale, missed and overlapping callbacks do not start
-  another Run. Capacity refusal skips that tick, with no immediate retry. Once the Run limit is
-  reached the interval job is removed. Raising the limit through PATCH restores scheduling.
+  item and revision, with `max_instances=1` and coalescing. The durable `next_tick_at` comparison
+  is the only late/missed decision: dispatch delay shorter than a cadence is accepted, while a
+  callback at least one cadence late advances beyond the missed intervals without starting a Run.
+  SQLite consumes each due time once; duplicate, stale, missed and overlapping callbacks do not
+  start another Run, and each skip is logged. Capacity refusal skips that tick, with no immediate
+  retry. Once the Run limit is reached the interval job is removed. Raising the limit through
+  PATCH restores scheduling.
 - **Recovery/order:** install both handlers while paused, run T9 recovery, repair Watchlist
   completion inputs and persisted schedules, advance due times beyond downtime, then resume.
   Deleted-item jobs are removed. Shutdown closes Watchlist admission, then follows T10's
@@ -421,9 +426,12 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   normalized per-Finding state already exists. Empty current input remains distinguishable from
   no successful Run. Later successes and all failures leave the seed state unchanged.
 - **Completion:** the scheduler's post-processing callback runs after COMPLETE, outside the
-  research graph, including resumed/recovered Runs. Failures are logged without changing the
-  Run. Startup and the next tick retry a missing initialization from the earliest successful
-  Report; an initialization error cannot prevent later research or process startup. No Diff or Alert is created by T11.
+  research graph, including resumed/recovered Runs. Initialization is attempted only from this
+  callback and startup recovery. It queries COMPLETE Runs through the Watchlist index rather than
+  scanning all owner Reports. A structurally unusable Report is recorded once and excluded, so the
+  next successful Report can establish the Baseline; transient infrastructure failures remain
+  retryable. No initialization error can prevent later research or process startup. No Diff or
+  Alert is created by T11.
 - **Dashboard:** `item.max_runs`, `runs_started`, `completed_runs`, `failed_runs`, and the five
   most recent Failed Run records. No Watchlist status is added. Failure details remain available
   through the existing owner-scoped Run events/SSE endpoint.

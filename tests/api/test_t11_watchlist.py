@@ -22,7 +22,8 @@ def test_crud_and_owner_isolation(tmp_path):
         assert len(app.client.get("/watchlist").json()) == 1
         assert app.client.get(f"/watchlist/{iid}").json()["item"] == item
         updated = app.client.patch(
-            f"/watchlist/{iid}", json={"cadence_minutes": 1, "max_runs": 2}
+            f"/watchlist/{iid}",
+            json={"revision": item["revision"], "cadence_minutes": 1, "max_runs": 2},
         )
         assert updated.status_code == 200
         assert updated.json()["item"]["revision"] == 2
@@ -32,7 +33,7 @@ def test_crud_and_owner_isolation(tmp_path):
             assert app.client.get(f"/watchlist/{path}").status_code == 404
             assert (
                 app.client.patch(
-                    f"/watchlist/{path}", json={"brief": VAGUE}
+                    f"/watchlist/{path}", json={"revision": 1, "brief": VAGUE}
                 ).status_code
                 == 404
             )
@@ -84,7 +85,10 @@ def test_update_revalidates_without_replacing_on_failure(tmp_path):
             {"max_runs": None, "cadence_minutes": 1},
         ):
             assert (
-                app.client.patch(f"/watchlist/{item['id']}", json=changes).status_code
+                app.client.patch(
+                    f"/watchlist/{item['id']}",
+                    json={"revision": item["revision"], **changes},
+                ).status_code
                 == 422
             )
             assert app.client.get(f"/watchlist/{item['id']}").json()["item"] == item
@@ -100,3 +104,36 @@ def test_optional_memory_and_short_cadence_with_limit(tmp_path):
             source_toggles={"web": True, "memory": True},
         )
         assert response.status_code == 201
+
+
+def test_update_requires_current_revision_and_preserves_due_time(tmp_path):
+    with App(tmp_path) as app:
+        app.login("alice")
+        item = create(app).json()["item"]
+        due = item["next_tick_at"]
+        updated = app.client.patch(
+            f"/watchlist/{item['id']}",
+            json={"revision": item["revision"], "max_runs": 2},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["item"]["next_tick_at"] == due
+        assert updated.json()["item"]["revision"] == 2
+
+        stale = app.client.patch(
+            f"/watchlist/{item['id']}",
+            json={"revision": item["revision"], "max_runs": 3},
+        )
+        assert stale.status_code == 409
+        assert app.client.get(f"/watchlist/{item['id']}").json()["item"]["max_runs"] == 2
+
+        cleared = app.client.patch(
+            f"/watchlist/{item['id']}", json={"revision": 2, "max_runs": None}
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["item"]["max_runs"] is None
+        assert cleared.json()["item"]["next_tick_at"] == due
+
+        missing = app.client.patch(
+            f"/watchlist/{item['id']}", json={"max_runs": 3}
+        )
+        assert missing.status_code == 422

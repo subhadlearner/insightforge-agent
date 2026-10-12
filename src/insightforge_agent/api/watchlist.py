@@ -1,6 +1,6 @@
 """Owner-scoped Watchlist CRUD, with the existing persona dependency."""
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import ValidationError
 
 from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
@@ -8,6 +8,7 @@ from insightforge_agent.domain.watchlist import (
     WatchlistConfig,
     WatchlistConflict,
     WatchlistDashboard,
+    WatchlistPatch,
 )
 
 
@@ -42,9 +43,11 @@ def watchlist_router(service, current_user_id):
 
     @router.patch("/{item_id}", response_model=WatchlistDashboard)
     def update(
-        item_id: str, changes: dict = Body(...), user_id: str = Depends(current_user_id)
+        item_id: str,
+        patch: WatchlistPatch,
+        user_id: str = Depends(current_user_id),
     ):
-        return invoke(lambda: service.update(user_id, item_id, changes))
+        return invoke(lambda: service.update(user_id, item_id, patch))
 
     @router.delete("/{item_id}", status_code=204)
     def delete(item_id: str, user_id: str = Depends(current_user_id)):

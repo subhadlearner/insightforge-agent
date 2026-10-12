@@ -43,6 +43,30 @@ class WatchlistConfig(BaseModel):
         return Brief(text=self.brief, source_toggles=self.source_toggles)
 
 
+class WatchlistPatch(BaseModel):
+    """Optimistic, partial Watchlist update supplied by an API client."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    revision: int = Field(ge=1, strict=True)
+    brief: str | None = Field(default=None, min_length=1, max_length=10000)
+    cadence_minutes: int | None = Field(default=None, gt=0, le=525600, strict=True)
+    max_runs: int | None = Field(default=None, gt=0, strict=True)
+    source_toggles: dict[Literal["web", "documents", "memory"], bool] | None = None
+
+    @model_validator(mode="after")
+    def has_changes(self):
+        changed = self.model_fields_set - {"revision"}
+        if not changed:
+            raise ValueError("PATCH must include at least one Watchlist field")
+        null_fields = changed.intersection({"brief", "cadence_minutes", "source_toggles"})
+        if any(getattr(self, name) is None for name in null_fields):
+            raise ValueError("only max_runs may be cleared with null")
+        return self
+
+    def changes(self) -> dict:
+        return self.model_dump(exclude={"revision"}, exclude_unset=True)
+
+
 class WatchlistItem(WatchlistConfig):
     id: str
     owner_id: str
@@ -54,6 +78,16 @@ class WatchlistItem(WatchlistConfig):
         """Next anchored tick strictly after now, without replaying missed ticks."""
         step = timedelta(minutes=self.cadence_minutes)
         return self.next_tick_at + max(0, (now - self.next_tick_at) // step + 1) * step
+
+
+def check_watchlist_brief_change(
+    old: WatchlistItem, new: WatchlistItem | WatchlistConfig, runs_started: int
+) -> None:
+    """The transaction-safe immutable-Brief rule shared by service and repositories."""
+    if old.brief != new.brief and runs_started:
+        raise WatchlistConflict(
+            "create a new Watchlist Item to change a Brief after Runs started"
+        )
 
 
 class BaselineSeed(BaseModel):

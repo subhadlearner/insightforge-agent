@@ -18,6 +18,8 @@ from insightforge_agent.domain.watchlist import (
     WatchlistConflict,
     WatchlistDashboard,
     WatchlistItem,
+    WatchlistPatch,
+    check_watchlist_brief_change,
 )
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.pipeline.memory import eligible_report_ids
@@ -80,31 +82,36 @@ class WatchlistService:
                 self.schedules.sync(item)
         return self.dashboard(owner_id, item.id)
 
-    def update(self, owner_id, item_id, changes):
+    def update(self, owner_id, item_id, patch: WatchlistPatch):
         old = self.deps.repos.watchlists.get(owner_id, item_id)
+        if old.revision != patch.revision:
+            raise WatchlistConflict("the Watchlist Item changed; reload before editing")
         fields = WatchlistConfig.model_fields
         config = WatchlistConfig.model_validate(
-            {**{k: getattr(old, k) for k in fields}, **changes}
+            {**{k: getattr(old, k) for k in fields}, **patch.changes()}
         )
-        if (
-            config.brief != old.brief
-            and self.deps.repos.watchlists.counts(owner_id, item_id)[0]
-        ):
-            raise WatchlistConflict(
-                "create a new Watchlist Item to change a Brief after Runs started"
-            )
+        check_watchlist_brief_change(
+            old,
+            config,
+            self.deps.repos.watchlists.counts(owner_id, item_id)[0],
+        )
         if config.brief != old.brief or config.source_toggles != old.source_toggles:
             validate_watchlist_brief(self.deps, owner_id, config, item_id)
+        next_tick_at = (
+            old.next_tick_at
+            if config.cadence_minutes == old.cadence_minutes
+            else self.deps.now() + timedelta(minutes=config.cadence_minutes)
+        )
         item = WatchlistItem(
             **config.model_dump(),
             owner_id=owner_id,
             id=item_id,
             created_at=old.created_at,
-            revision=old.revision + 1,
-            next_tick_at=self.deps.now() + timedelta(minutes=config.cadence_minutes),
+            revision=patch.revision + 1,
+            next_tick_at=next_tick_at,
         )
         with self.deps.repos.lock:
-            self.deps.repos.watchlists.update(item, old.revision)
+            self.deps.repos.watchlists.update(item, patch.revision)
             if self.schedules:
                 self.schedules.sync(item)
         return self.dashboard(owner_id, item_id)

@@ -7,15 +7,15 @@ GitHub independently confirmed PR #51 merged at this commit before branching.
 
 | Checkpoint | Implementation | Evidence |
 |---|---|---|
-| CP1 | Watchlist configuration/repositories, CRUD, Planner-only preflight, owner/source checks | `tests/api/test_t11_watchlist.py`: 16 passed |
+| CP1 | Watchlist configuration/repositories, CRUD, Planner-only preflight, owner/source checks | `tests/api/test_t11_watchlist.py`, including revision-aware PATCH |
 | CP2 | APScheduler interval jobs, durable due-time consumption, atomic Run admission, max_runs | `tests/stores/test_watchlist_repository.py` and `tests/api/test_t11_lifecycle.py` |
 | CP3 | Dashboard counts and first-success initialization input with current Claim/Evidence provenance | `tests/stores/test_watchlist_baseline.py` and lifecycle tests |
-| CP4 | Real scheduler/misfire, cancellation, two-connection races, recovery, clarification, post-processing failure | Final full offline suite: 1,530 passed |
+| CP4 | Real scheduler/misfire, cancellation, two-connection races, recovery, clarification, post-processing failure | Final full offline suite: 1,534 passed |
 
 ## Executed results
 
-- `uv run pytest -q`: **1,530 passed, 26 deselected**, 70.78 seconds. Two Qdrant compatibility-check warnings; no test failures. Includes **61 new T11 tests** and the existing T9/T10 regressions, including both real-Uvicorn shutdown tests on Linux.
-- `uv run pytest -q -m integration`: **19 skipped, 1,529 deselected** at that execution. All 19 tests skipped because the required local model caches were absent; these tests are **not verified** here. This command ran before the final two offline regression tests were added; they do not affect integration selection. Two Docling deprecation warnings.
+- `uv run pytest -q`: **1,534 passed, 26 deselected**, 75.34 seconds. Two Qdrant compatibility-check warnings; no test failures. Includes **65 focused T11 tests** and the existing T9/T10 regressions, including both real-Uvicorn shutdown tests on Linux.
+- `uv run pytest -q -m integration`: **19 skipped, 1,541 deselected**, 8.01 seconds. All 19 tests skipped because the required local model caches were absent; these tests are **not verified** here. Two Docling deprecation warnings.
 - `uv run lint-imports`: **4 kept, 0 broken**.
 - `git diff --check`: clean.
 - No live tests, paid model calls, real search calls, or model-weight downloads were performed.
@@ -45,8 +45,9 @@ uv run pytest -q -m integration
   invariants. Run rows are the durable counter. No counter is incremented for capacity refusal.
 - Startup repairs abandoned Runs before resuming Watchlist schedules; missed ticks are skipped.
 - Deletion preserves admitted Runs and Reports. Post-processing cannot recreate deleted items.
-- A review-found defect (Baseline processing failure preventing a later tick) was fixed and
-  covered by `test_baseline_processing_failure_does_not_block_next_run_or_change_outcomes`.
+- Draft-PR review follow-up fixed cadence-wide dispatch grace, corrupt-candidate quarantine,
+  due-time preservation for non-cadence edits, revision-aware PATCH, lock-free stop signaling,
+  indexed Baseline candidate lookup, shared Run insertion and the shared Brief-change guard.
 - **AC5 scope boundary:** T11 initializes durable provenance-rich current Claim/Evidence seeds,
   marked `normalization_pending=true`. This is the T11 persistence/initialization contract from
   the handover. A fully normalized, established per-Finding Baseline is **not implemented** here;

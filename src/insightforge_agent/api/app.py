@@ -145,8 +145,7 @@ class Runtime:
         """The server was asked to stop: open progress streams end now (clients reconnect
         later with Last-Event-ID), so they do not hold up the graceful shutdown."""
         self.closing.set()
-        with self.repos.lock:
-            self.watchlists.schedules.closing = True
+        self.watchlists.schedules.closing.set()
 
     def stop(self) -> None:
         self.begin_shutdown()

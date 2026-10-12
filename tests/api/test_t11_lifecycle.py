@@ -31,7 +31,7 @@ def test_ticks_overlap_limit_counts_baseline_and_reports_survive_delete(tmp_path
         item = setup(app, cadence_minutes=1, max_runs=2)
         schedules = app.runtime.watchlists.schedules
         job = app.runtime.scheduler.get_job(job_id("alice", item.id))
-        assert job.max_instances == 1 and job.coalesce and job.misfire_grace_time == 1
+        assert job.max_instances == 1 and job.coalesce and job.misfire_grace_time is None
         clock.at = item.next_tick_at
         barrier = threading.Barrier(6)
 
@@ -79,7 +79,8 @@ def test_ticks_overlap_limit_counts_baseline_and_reports_survive_delete(tmp_path
             )
         assert (
             app.client.patch(
-                f"/watchlist/{item.id}", json={"brief": "Different research"}
+                f"/watchlist/{item.id}",
+                json={"revision": item.revision, "brief": "Different research"},
             ).status_code
             == 409
         )
@@ -181,7 +182,8 @@ def test_update_and_delete_reject_pending_tick(tmp_path):
         clock.at = item.next_tick_at
         assert (
             app.client.patch(
-                f"/watchlist/{item.id}", json={"cadence_minutes": 30}
+                    f"/watchlist/{item.id}",
+                    json={"revision": item.revision, "cadence_minutes": 30},
             ).status_code
             == 200
         )
@@ -319,28 +321,23 @@ def test_clarification_wait_and_resume_block_ticks_without_consuming_more_slots(
         assert app.runtime.repos.watchlists.counts("alice", item.id) == (2, 2, 0)
 
 
-def test_real_apscheduler_discards_misfire_without_run_or_counter(tmp_path):
+def test_real_apscheduler_accepts_delay_shorter_than_one_cadence(tmp_path):
     from datetime import UTC, datetime
-    from apscheduler.events import EVENT_JOB_MISSED
 
     with App(tmp_path) as app:
         item = setup(app, max_runs=1)
         scheduler = app.runtime.scheduler
         scheduler.pause()
-        missed = threading.Event()
-        scheduler.add_listener(lambda event: missed.set(), EVENT_JOB_MISSED)
         item = item.model_copy(
             update={"next_tick_at": datetime.now(UTC) - timedelta(seconds=10)}
         )
         app.runtime.repos.watchlists.update(item, item.revision)
         app.runtime.watchlists.schedules.sync(item)
         scheduler.resume()
-        assert missed.wait(10)
-        assert app.runtime.repos.watchlists.counts("alice", item.id) == (0, 0, 0)
-        assert app.runtime.repos.runs.list_for_owner("alice") == []
-        assert scheduler.get_job(job_id("alice", item.id)).next_run_time > datetime.now(
-            UTC
-        )
+        wait_until(lambda: bool(app.runtime.repos.runs.list_for_owner("alice")))
+        started = app.runtime.repos.runs.list_for_owner("alice")[0]
+        assert app.wait(started.id).state == RunState.COMPLETE
+        assert app.runtime.repos.watchlists.counts("alice", item.id) == (1, 1, 0)
 
 
 def test_baseline_processing_failure_does_not_block_next_run_or_change_outcomes(
@@ -371,3 +368,34 @@ def test_baseline_processing_failure_does_not_block_next_run_or_change_outcomes(
             app.runtime.repos.watchlists.baseline("alice", item.id).initializing_run_id
             == first.id
         )
+
+
+def test_begin_shutdown_never_waits_for_repository_lock(tmp_path):
+    with App(tmp_path) as app:
+        locked = threading.Event()
+        release = threading.Event()
+
+        def hold_repository_lock():
+            with app.runtime.repos.lock:
+                locked.set()
+                release.wait(10)
+
+        holder = threading.Thread(target=hold_repository_lock)
+        holder.start()
+        assert locked.wait(5)
+        returned = threading.Event()
+
+        def signal_shutdown():
+            app.runtime.begin_shutdown()
+            returned.set()
+
+        caller = threading.Thread(target=signal_shutdown)
+        caller.start()
+        try:
+            assert returned.wait(1)
+            assert app.runtime.closing.is_set()
+            assert app.runtime.watchlists.schedules.closing.is_set()
+        finally:
+            release.set()
+            holder.join(5)
+            caller.join(5)
