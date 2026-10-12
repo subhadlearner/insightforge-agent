@@ -30,8 +30,8 @@ Current evidence: write one section per bundle section, with its heading, holdin
 cite that section's items with "historical": false.
 Historical background, when given, comes from the user's earlier reports, not from current
 research. Each item shows its heading. A claim citing a historical item (id starting "hist_")
-must set "historical": true, state only what that item says, and end with the item's report
-date exactly as "(reported YYYY-MM-DD)". Put it in the section whose heading is exactly the
+must set "historical": true, state only what that item says, and show the item's report date
+inline exactly as "(reported YYYY-MM-DD)". Put it in the section whose heading is exactly the
 item's heading: the bundle section with that heading if there is one, otherwise a section of
 its own with that heading. Every heading in the historical background needs at least one
 historical claim; you need not use every historical item. Never present historical
