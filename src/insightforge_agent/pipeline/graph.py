@@ -43,6 +43,7 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.domain.documents import Upload, check_uploads, chunk_id, chunk_ids_in
 from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
+from insightforge_agent.domain.ids import derive_report_id
 from insightforge_agent.domain.memory import memory_ref_id, memory_refs_in, render_run_summaries
 from insightforge_agent.domain.models import (
     Report,
@@ -461,7 +462,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
             report = deps.repos.reports.get_for_run(owner, run_id)
         except NotFoundError:
             report = Report(
-                id=f"rep_{deps.new_id()}", owner_id=owner, run_id=run_id, created_at=deps.now(),
+                id=derive_report_id(owner, run_id), owner_id=owner, run_id=run_id, created_at=deps.now(),
                 body={"brief": state["brief"], "draft": draft.model_dump(),
                       "verified": verified.model_dump(), "evidence": state["bundle"],
                       "historical": historical_of(state).model_dump(mode="json")},

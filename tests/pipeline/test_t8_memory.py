@@ -567,6 +567,8 @@ def test_a_crash_after_finalising_but_before_storing_the_report_is_safe(mem_deps
     assert eligible_report_ids(deps, "alice", None) == [stored.id]
     hits = deps.report_index.search("alice", [stored.id], "BYD sales", k=3)
     assert hits and {h.ref.report_id for h in hits} == {stored.id}
+    # The retry finalised the same Report id, so no orphan points were left behind.
+    assert deps.report_index._client.count(COLLECTION).count == len(claims_of(stored)) == 10
 
 
 def test_a_crash_after_storing_the_report_recovers_as_complete_and_eligible(mem_deps):
@@ -633,3 +635,20 @@ def test_an_index_outage_at_completion_fails_the_run_without_a_report(mem_deps):
     run = run_brief(deps, "alice", Brief(text="EV market"))
     assert run.state == RunState.FAILED
     assert deps.repos.reports.list_for_owner("alice") == []
+
+
+def test_a_report_with_no_claim_to_index_is_not_memory(mem_deps):
+    deps = mem_deps()
+    prior = prior_run(deps)
+    report = report_of(deps, prior)
+    # Every Claim marked unverified: none may be reused, so nothing is indexed.
+    verified = dict(report.body["verified"])
+    verified["verdicts"] = [{"section": 0, "claim": n, "verdict": "unverified"} for n in range(10)]
+    deps.repos.runs.add(Run(id="run_bad", owner_id="alice", brief="b", state=RunState.COMPLETE,
+                            created_at=T0))
+    bad = Report(id="rep_bad", owner_id="alice", run_id="run_bad", created_at=T0,
+                 body={**report.body, "verified": verified})
+    summary = finalise_report(deps, deps.repos.runs.get("alice", "run_bad"), bad)
+    deps.repos.reports.add(bad)
+    assert not summary.memory_indexed
+    assert eligible_report_ids(deps, "alice", None) == [report.id]

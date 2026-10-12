@@ -114,7 +114,7 @@ class RunSummary(_Record):
     themes: list[str] = Field(default_factory=list)  # the Report's section headings (Aspects)
     key_entities: list[str] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
-    # The Report's Claims are in `report_sections`, so the Memory researcher can search them.
+    # At least one of the Report's Claims is in `report_sections`, so memory can search it.
     memory_indexed: bool = False
 
 

@@ -175,18 +175,20 @@ def report_finalised(deps: Deps, owner_id: str, run_id: str) -> bool:
 
 
 def finalise_report(deps: Deps, run: Run, report: Report) -> RunSummary:
-    """Index the Report's Claims in `report_sections`, then store the Run summary. Idempotent:
+    """Index the Report's Claims in `report_sections`, then store the Run summary, which marks
+    the Report as memory only if at least one Claim was indexed (none are when every Claim was
+    unverified, or without the index). Idempotent:
     the index upsert rewrites the same points and the first summary stored is kept. Must finish
     before the Report is stored and the Run is COMPLETE, so a COMPLETE Run is always searchable."""
-    index = deps.report_index
+    index, indexed = deps.report_index, 0
     if index is not None:
-        index.index(report.owner_id, report.id, report.run_id, report.created_at.date(),
-                    section_entries(report))
+        indexed = index.index(report.owner_id, report.id, report.run_id,
+                              report.created_at.date(), section_entries(report))
     draft = ReportDraft.model_validate(report.body["draft"])
     summary = build_run_summary(
         owner_id=report.owner_id, run_id=run.id, watchlist_item_id=run.watchlist_item_id,
         created_at=deps.now(), brief=run.brief, themes=[s.heading for s in draft.sections],
-        entities=_key_entities(deps, report), gaps=draft.gaps, memory_indexed=index is not None)
+        entities=_key_entities(deps, report), gaps=draft.gaps, memory_indexed=indexed > 0)
     stored = deps.repos.summaries.add(summary)
     deps.log(report.owner_id, run.id, "run_summary_stored", report_id=report.id,
              memory_indexed=stored.memory_indexed, themes=len(stored.themes))

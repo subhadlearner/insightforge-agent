@@ -26,6 +26,12 @@ def derive_evidence_id(run_id: str, statement: str) -> str:
     return f"ev_{_digest(run_id, ' '.join(statement.lower().split()))}"
 
 
+def derive_report_id(owner_id: str, run_id: str) -> str:
+    """A Run yields at most one Report, so its id follows from the Run: a completion retried
+    after a crash finalises and stores the same Report, never a second one."""
+    return f"rep_{_digest(owner_id, run_id)}"
+
+
 def derive_historical_id(run_id: str, report_id: str, section: int, claim: int) -> str:
     """One earlier Claim used as background in a Run is one Historical item."""
     return f"hist_{_digest(run_id, report_id, str(section), str(claim))}"
