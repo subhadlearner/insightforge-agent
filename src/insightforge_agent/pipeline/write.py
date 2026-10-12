@@ -2,16 +2,21 @@
 
 The Writer never sees Passage text. Every Claim must cite an existing Evidence item and may
 contain only numbers that item contains. A Historical Claim instead cites a Historical item (an
-earlier Report's Claim), is marked historical, shows that Report's date inline and is held to
-the same number and name rules against the earlier statement. Neither kind may pose as the
-other. Violations are retried with the offending Claims listed as a constraint, up to
-`writer_retries` times."""
+earlier Report's Claim), is marked historical, shows that Report's date in a recognised
+annotation, sits in the section of its item's heading and is held to the same number and name
+rules against the earlier statement. Every heading of the Historical context gets at least one
+Historical Claim. Neither kind may pose as the other. Violations are retried with the offending
+Claims listed as a constraint, up to `writer_retries` times."""
 
 import re
 
 from insightforge_agent.agents.llm_json import BadModelReply, ask_json
 from insightforge_agent.domain.contracts import EvidenceBundle, HistoricalContext, ReportDraft
-from insightforge_agent.domain.memory import report_date_text, without_report_date
+from insightforge_agent.domain.memory import (
+    report_date_text,
+    strip_report_date,
+    without_report_date,
+)
 from insightforge_agent.domain.passages import named_entities_in, numbers_in
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.errors import RunFailed
@@ -19,14 +24,18 @@ from insightforge_agent.pipeline.errors import RunFailed
 SYSTEM = """You write a cited intelligence report from an Evidence bundle. Reply with JSON only:
 {"title": str, "summary": str, "sections": [{"heading": str, "claims":
 [{"text": str, "evidence_id": str, "historical": bool}]}]}
-Rules: every claim cites exactly one evidence_id from the bundle and states only what that
-item says; every number and name in a claim must appear in the cited item; use one section
-per bundle section, with its heading. Do not invent evidence ids.
+Rules: every claim cites exactly one evidence_id and states only what that item says; every
+number and name in a claim must appear in the cited item. Do not invent evidence ids.
+Current evidence: write one section per bundle section, with its heading, holding claims that
+cite that section's items with "historical": false.
 Historical background, when given, comes from the user's earlier reports, not from current
-research. A claim citing a historical item (id starting "hist_") must set "historical": true,
-state only what that item says, and show the item's report date inline exactly as
-"(reported YYYY-MM-DD)". Put it in the section with the item's heading. Never present
-historical background as a current fact, and never set "historical": true on a bundle item."""
+research. Each item shows its heading. A claim citing a historical item (id starting "hist_")
+must set "historical": true, state only what that item says, and end with the item's report
+date exactly as "(reported YYYY-MM-DD)". Put it in the section whose heading is exactly the
+item's heading: the bundle section with that heading if there is one, otherwise a section of
+its own with that heading. Every heading in the historical background needs at least one
+historical claim; you need not use every historical item. Never present historical
+background as a current fact, and never set "historical": true on a bundle item."""
 
 
 # Words that begin a sentence without naming anything. Kept to articles, determiners and
@@ -67,39 +76,54 @@ def _grounding(text: str, statement: str, entity: str, cited: str) -> list[str]:
     return problems
 
 
+def _heading_key(heading: str) -> str:
+    return " ".join(heading.split()).casefold()
+
+
 def violations(draft: ReportDraft, bundle: EvidenceBundle,
                historical: HistoricalContext | None = None) -> list[str]:
     items = {i.id: i for s in bundle.sections for i in s.items}
     background = (historical or HistoricalContext()).by_id()
     problems = []
-    claims = [c for s in draft.sections for c in s.claims]
-    if not claims:
+    covered: set[str] = set()  # historical headings with a well-placed Historical Claim
+    if not any(s.claims for s in draft.sections):
         problems.append("the report has no claims")
-    for c in claims:
-        if c.historical:
-            h = background.get(c.evidence_id)
-            if h is None:
-                problems.append(
-                    f"claim {c.text!r} is marked historical but {c.evidence_id!r} is "
-                    + ("current evidence, never historical" if c.evidence_id in items
-                       else "not a historical item"))
+    for section in draft.sections:
+        for c in section.claims:
+            if c.historical:
+                h = background.get(c.evidence_id)
+                if h is None:
+                    problems.append(
+                        f"claim {c.text!r} is marked historical but {c.evidence_id!r} is "
+                        + ("current evidence, never historical" if c.evidence_id in items
+                           else "not a historical item"))
+                    continue
+                if _heading_key(section.heading) == _heading_key(h.heading):
+                    covered.add(_heading_key(h.heading))
+                else:
+                    problems.append(f"historical claim {c.text!r} is under {section.heading!r}; "
+                                    f"it belongs in the section headed {h.heading!r}")
+                if strip_report_date(c.text, h.report_date) is None:
+                    problems.append(f"historical claim {c.text!r} does not show its report date "
+                                    f"inline as (reported {report_date_text(h.report_date)})")
+                problems += _grounding(without_report_date(c.text, h.report_date), h.statement,
+                                       h.entity, f"historical item {h.id}")
                 continue
-            day = report_date_text(h.report_date)
-            if day not in c.text:
-                problems.append(f"historical claim {c.text!r} does not show its report date "
-                                f"inline as (reported {day})")
-            problems += _grounding(without_report_date(c.text, h.report_date), h.statement,
-                                   h.entity, f"historical item {h.id}")
-            continue
-        if c.evidence_id in background:
-            problems.append(f"claim {c.text!r} cites historical item {c.evidence_id!r} as current "
-                            "evidence; set \"historical\": true and show its report date")
-            continue
-        item = items.get(c.evidence_id)
-        if item is None:
-            problems.append(f"claim {c.text!r} cites unknown evidence_id {c.evidence_id!r}")
-            continue
-        problems += _grounding(c.text, item.statement, item.entity, f"evidence {item.id}")
+            if c.evidence_id in background:
+                problems.append(f"claim {c.text!r} cites historical item {c.evidence_id!r} as "
+                                "current evidence; set \"historical\": true and show its report "
+                                "date")
+                continue
+            item = items.get(c.evidence_id)
+            if item is None:
+                problems.append(f"claim {c.text!r} cites unknown evidence_id {c.evidence_id!r}")
+                continue
+            problems += _grounding(c.text, item.statement, item.entity, f"evidence {item.id}")
+    headings = {_heading_key(h.heading): h.heading for h in background.values()}
+    for key, heading in headings.items():
+        if key not in covered:
+            problems.append(f"the historical background headed {heading!r} has no historical "
+                            f"claim; add at least one in a section headed {heading!r}")
     return problems
 
 

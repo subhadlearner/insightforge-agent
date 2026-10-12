@@ -115,7 +115,8 @@ def writer(mode: str = "good", bad_first: int = 0) -> ScriptedChat:
     """Cites every current item as fakes.writer does and every Historical item with its report
     date inline. For the first `bad_first` replies `mode` breaks a rule: "no_date" leaves the
     date out, "as_current" cites a Historical item as a current Claim, "mark_current" marks a
-    current item historical."""
+    current item historical, "omit_all" leaves out every Historical Claim, "omit_one" those of
+    the first historical heading, "wrong_heading" puts Historical Claims under "Findings"."""
     state = {"n": 0}
 
     def reply(messages) -> AIMessage:
@@ -127,7 +128,13 @@ def writer(mode: str = "good", bad_first: int = 0) -> ScriptedChat:
             historical = bad and mode == "mark_current" and n == 0
             sections.setdefault("Findings", []).append(
                 {"text": text, "evidence_id": eid, "historical": historical})
-        for hid, heading, day, statement in HIST_LINE.findall(user):
+        found = HIST_LINE.findall(user)
+        first = found[0][1] if found else None
+        for hid, heading, day, statement in found:
+            if bad and (mode == "omit_all" or (mode == "omit_one" and heading == first)):
+                continue
+            if bad and mode == "wrong_heading":
+                heading = "Findings"
             text = f"{statement.rstrip('.')} (reported {day})."
             claim = {"text": text, "evidence_id": hid, "historical": True}
             if bad and mode == "no_date":
@@ -436,6 +443,7 @@ def test_memory_findings_become_historical_claims_with_original_lineage(mem_deps
     assert {c.evidence_id for c in historical_claims} == set(historical.by_id())
     assert all("(reported 2026-09-01)" in c.text for c in historical_claims)
     assert all(c.evidence_id in current for c in claims if not c.historical)
+    assert_historical_claims_placed(report)  # mixed web + memory
 
 
 def test_historical_claims_cite_and_fact_check_their_original_sources(mem_deps):
@@ -465,6 +473,7 @@ def test_a_memory_only_run_completes_without_current_evidence(mem_deps):
     assert report.body["evidence"] == {"sections": []}
     claims = claims_of(report)
     assert claims and all(c.historical for c in claims)
+    assert_historical_claims_placed(report)  # memory only
     # Its own Claims are indexed in turn, with their lineage flattened to the first Report.
     later = HistoricalContext.model_validate(report.body["historical"])
     assert {h.report_id for h in later.items} == {report_of(deps, deps.repos.runs.list_for_owner(
@@ -489,19 +498,42 @@ def test_a_reused_historical_claim_keeps_its_original_report_and_passage(mem_dep
     assert second.id != first.id
 
 
-@pytest.mark.parametrize("mode, problem", [
-    ("no_date", "does not show its report date inline"),
-    ("as_current", "as current evidence"),
-    ("mark_current", "current evidence, never historical"),
+@pytest.mark.parametrize("mode, tasks, problem", [
+    ("no_date", WEB_AND_MEMORY, "does not show its report date inline"),
+    ("as_current", WEB_AND_MEMORY, "as current evidence"),
+    ("mark_current", WEB_AND_MEMORY, "current evidence, never historical"),
+    # Review round: background ignored while current Claims are valid, one historical Aspect
+    # left out while another is used, and a Historical Claim under the wrong heading.
+    ("omit_all", WEB_AND_MEMORY, "headed 'Earlier findings' has no historical claim"),
+    ("omit_one", MEMORY_ONLY, "has no historical claim"),
+    ("wrong_heading", WEB_AND_MEMORY, "is under 'Findings'; it belongs in the section headed"),
 ])
-def test_writer_retries_when_a_claim_blurs_historical_and_current(mem_deps, mode, problem):
-    deps = mem_deps(writer_model=writer(mode, bad_first=1))
+def test_writer_retries_when_a_claim_blurs_historical_and_current(mem_deps, mode, tasks,
+                                                                   problem):
+    deps = mem_deps()
     prior_run(deps)
     deps.writer_model = writer(mode, bad_first=1)
-    run = memory_run(deps)
+    run = memory_run(deps, tasks, web=tasks is WEB_AND_MEMORY)
     assert run.state == RunState.COMPLETE
     (violation,) = events(deps, run, "writer_violations")
     assert any(problem in p for p in violation["problems"])
+    if mode == "omit_one":  # another heading was used, so only the omitted one is missing
+        headings = {h.heading for h in HistoricalContext.model_validate(
+            report_of(deps, run).body["historical"]).items}
+        missing = [p for p in violation["problems"] if "has no historical claim" in p]
+        assert len(headings) >= 2 and len(missing) == 1
+    assert_historical_claims_placed(report_of(deps, run))  # the retry fixed it
+
+
+def assert_historical_claims_placed(report: Report) -> None:
+    """Every Historical Claim sits under its item's heading, and every heading has one."""
+    items = HistoricalContext.model_validate(report.body["historical"]).by_id()
+    draft = ReportDraft.model_validate(report.body["draft"])
+    placed = {s.heading for s in draft.sections for c in s.claims
+              if c.historical and items[c.evidence_id].heading == s.heading}
+    assert all(items[c.evidence_id].heading == s.heading
+               for s in draft.sections for c in s.claims if c.historical)
+    assert placed == {h.heading for h in items.values()}
 
 
 def test_a_writer_that_never_shows_the_date_fails_the_run(mem_deps):

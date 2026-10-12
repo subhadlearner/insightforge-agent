@@ -15,6 +15,7 @@ from insightforge_agent.domain.memory import (
     memory_refs_in,
     planner_summaries,
     render_run_summaries,
+    strip_report_date,
     without_report_date,
 )
 from insightforge_agent.domain.models import Run, RunState, RunSummary
@@ -117,14 +118,33 @@ def test_memory_references_round_trip_and_are_read_from_a_reply():
     assert memory_refs_in(reply) == [ref, MemoryRef("rep_x9", 0, 11)]
 
 
+DAY = date(2026, 9, 1)
+
+
 @pytest.mark.parametrize("claim, expected", [
+    # The canonical annotation, inline.
     ("BYD sold 4.27 million vehicles in 2025 (reported 2026-09-01).",
      "BYD sold 4.27 million vehicles in 2025."),
+    # The explicit leading annotation.
     ("As reported on 2026-09-01, BYD sold 4.27 million vehicles in 2025.",
      "BYD sold 4.27 million vehicles in 2025."),
-    ("BYD sold 4.27 million vehicles in 2025, as reported 2026-09-01.",
-     "BYD sold 4.27 million vehicles in 2025, as reported ."),
-    ("BYD sold 4.27 million vehicles in 2025.", "BYD sold 4.27 million vehicles in 2025."),
+    # Only the annotation goes: a substantive date equal to the Report date stays.
+    ("BYD sold 4.27 million vehicles on 2026-09-01 (reported 2026-09-01).",
+     "BYD sold 4.27 million vehicles on 2026-09-01."),
 ])
-def test_the_inline_report_date_is_removed_before_comparing_with_evidence(claim, expected):
-    assert without_report_date(claim, date(2026, 9, 1)) == expected
+def test_a_recognised_report_date_annotation_is_accepted_and_stripped(claim, expected):
+    assert strip_report_date(claim, DAY) == expected
+    assert without_report_date(claim, DAY) == expected
+
+
+@pytest.mark.parametrize("claim", [
+    "BYD sold 4.27 million vehicles on 2026-09-01.",  # the date used as a fact
+    "BYD sold 4.27 million vehicles in 2025, 2026-09-01.",  # a bare occurrence
+    "BYD sold 4.27 million vehicles in 2025, as reported 2026-09-01.",  # not a recognised form
+    "BYD sold 4.27 million vehicles in 2025 (as of 2026-09-01).",  # not "reported"
+    "BYD sold 4.27 million vehicles in 2025 (reported 2026-09-02).",  # another date
+    "BYD sold 4.27 million vehicles in 2025.",
+])
+def test_anything_but_a_recognised_annotation_is_never_stripped(claim):
+    assert strip_report_date(claim, DAY) is None
+    assert without_report_date(claim, DAY) == claim  # the date stays part of the Claim

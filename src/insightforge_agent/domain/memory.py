@@ -107,14 +107,26 @@ def report_date_text(day: date) -> str:
     return day.isoformat()
 
 
-def without_report_date(text: str, day: date) -> str:
-    """The Claim without its inline date annotation, for the checks that compare it with the
-    Evidence it came from: a parenthesised note holding the date ("(reported 2026-09-01)"), else
-    a leading clause holding it ("As reported on 2026-09-01, ..."), else the date itself."""
+def _annotations(day: date) -> tuple[str, ...]:
+    """The recognised report-date annotations, and only these: the canonical inline note
+    "(reported 2026-09-01)" and the leading clause "As reported on 2026-09-01, "."""
     iso = re.escape(report_date_text(day))
-    for pattern in (rf"\s*\([^()]*{iso}[^()]*\)", rf"^[^,()]*{iso}[^,()]*,\s*"):
+    return (rf"\s*\(reported {iso}\)", rf"^As reported on {iso},\s*")
+
+
+def strip_report_date(text: str, day: date) -> str | None:
+    """The Claim with its one recognised report-date annotation removed, or None when it has
+    none. Any other mention of the date is substance, never an annotation, and stays."""
+    for pattern in _annotations(day):
         stripped, n = re.subn(pattern, "", text, count=1)
         if n:
-            text = stripped
-            break
-    return " ".join(re.sub(iso, "", text).split())
+            return " ".join(stripped.split())
+    return None
+
+
+def without_report_date(text: str, day: date) -> str:
+    """What the Writer's grounding and the Fact-Checker compare with the earlier statement: the
+    Claim without its recognised annotation, or the whole Claim when it has none (so a bare date
+    is checked as a figure of the Claim, never silently dropped)."""
+    stripped = strip_report_date(text, day)
+    return text if stripped is None else stripped
