@@ -4,6 +4,11 @@ An autonomous research platform: a user submits a research question and receives
 intelligence report. See `docs/design.md` for the design and `CONTEXT.md` for the vocabulary.
 (The full README is T17.)
 
+> **The persona picker is identity selection for the demo. It is not authentication and must
+> not be treated as a security boundary.** Anyone who can reach the API can select any persona
+> in `users.yml`. The session cookie is signed (HMAC with `SESSION_SECRET`) and HttpOnly only so
+> that a browser cannot switch persona by editing it; there are no passwords and no accounts.
+
 ## Offline demo: Extraction and synthesis
 
 Exercise the real Extraction and synthesis stages with seeded Sources and scripted models. No
