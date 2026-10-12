@@ -9,7 +9,7 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
 | CP1 | App composition root, persona session, owner-scoped Reports | done |
 | CP2 | Bounded RunExecutor, durable Run creation and admission, `POST /research/run` | done |
 | CP3 | SSE over run_events, clarification router, scheduler, startup sweep | done |
-| CP4 | Cross-Run Observation fix, regressions, full verification, PR | implemented; review + PR next |
+| CP4 | Cross-Run Observation fix, regressions, full verification, PR | done; reviewed; PR next |
 
 ## Decisions so far
 
@@ -48,6 +48,11 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
 - Observation fix: `derive_observation_id` includes `run_id`; pipeline stages read a Source through
   `SourceStore.read_run_source(owner, run, source)` (the Run's own latest Observation).
 
+- Review fixes: SSE ownership before cursor; bounded stream lifetime (`SSE_MAX_STREAM_SECONDS`)
+  so open streams cannot block shutdown; one shared drain helper; lifespan start/stop off the
+  event loop; failed `Runtime.build` closes what it opened; `PersonaSession.current_user()`
+  returns one object; docstring on the 503 window corrected.
+
 ## Tests
 
 - Baseline on branch before changes: 1395 passed, 26 deselected; lint-imports 4 kept.
@@ -59,7 +64,9 @@ Branch: `t10-api` (from `main` c205a36). Issue #11.
 - CP4: `uv run pytest -q` -> 1462 passed, 26 deselected; `uv run pytest -q -m integration` -> 19
   passed (5 pre-existing Docling warnings); focused `uv run pytest -q tests/api
   tests/pipeline/test_t10_observation_provenance.py` -> 67 passed; lint-imports 4 kept.
+- After review fixes: default 1466 passed, 26 deselected; integration 19 passed; focused 71
+  passed; lint-imports 4 kept.
 
 ## Next step
 
-Code review of `main..t10-api`, fix findings, rerun suites, push, open PR (do not merge).
+Push and open the PR; independent review; remove this file before merge.

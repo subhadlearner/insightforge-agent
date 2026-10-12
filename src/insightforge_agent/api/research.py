@@ -2,7 +2,9 @@
 
 `POST /research/run` answers 202 as soon as the Run is stored and queued on the RunExecutor;
 the pipeline never runs in the request. A Brief that fails the Submission check is 422 and
-creates no Run. A full or closing executor is 503 (with Retry-After) and creates no Run.
+creates no Run. A full or closing executor is 503 (with Retry-After) and creates no Run, except
+in the instant shutdown begins between storing the Run and queueing it: that Run is already
+FAILED when the 503 is sent.
 
 `GET /research/status?run_id=...` is a Server-Sent Events stream of the Run's persisted
 `run_events`, tailed with a cursor; nothing is buffered beyond one bounded batch.
@@ -16,7 +18,9 @@ creates no Run. A full or closing executor is 503 (with Retry-After) and creates
 - The pipeline stores every event of a Run before the Run becomes terminal, so once the stream
   sees COMPLETE or FAILED it drains what is left, sends `event: end` with the final state, and
   closes. A client that connects after the Run ended gets the whole stored history, then `end`.
-- An unknown Run and another User's Run are the same 404, before anything is streamed.
+- A stream lives at most `max_stream_seconds` while the Run is unfinished, then closes without
+  `end` (so it never holds up a shutdown); EventSource reconnects with `Last-Event-ID`.
+- An unknown Run and another User's Run are the same 404, checked before the cursor.
   Disconnecting only stops the stream; the Run carries on in the RunExecutor."""
 
 import base64
@@ -93,7 +97,7 @@ def end_frame(run_id: str, state: str) -> str:
 
 def research_router(service: ResearchService, current_user: Callable[..., User],
                     runs: RunRepository, events: RunEventRepository,
-                    poll_seconds: float) -> APIRouter:
+                    poll_seconds: float, max_stream_seconds: float) -> APIRouter:
     router = APIRouter(prefix="/research")
 
     @router.post("/run", status_code=202, response_model=RunAccepted)
@@ -121,11 +125,11 @@ def research_router(service: ResearchService, current_user: Callable[..., User],
     async def status(request: Request, run_id: str = Query(min_length=1),
                      last_event_id: str | None = Header(default=None),
                      user: User = Depends(current_user)):
-        after = parse_cursor(last_event_id)
-        try:
+        try:  # ownership first: another User's Run is 404 whatever the cursor
             await anyio.to_thread.run_sync(runs.get, user.id, run_id)
         except NotFoundError:
             raise HTTPException(404, f"run {run_id} not found") from None
+        after = parse_cursor(last_event_id)
         return StreamingResponse(
             _stream(request, user.id, run_id, after), media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -134,24 +138,34 @@ def research_router(service: ResearchService, current_user: Callable[..., User],
         return await anyio.to_thread.run_sync(events.read_after, owner_id, run_id, cursor, BATCH)
 
     async def _stream(request: Request, owner_id: str, run_id: str, cursor: int):
-        idle = 0.0
-        while True:
-            batch = await _read(owner_id, run_id, cursor)
+        sent = [cursor]
+
+        def frames(batch: list[RunEvent]):
             for event in batch:
+                sent[0] = event.seq
                 yield event_frame(event)
-                cursor = event.seq
+
+        idle = 0.0
+        ends_at = anyio.current_time() + max_stream_seconds
+        while True:
+            batch = await _read(owner_id, run_id, sent[0])
+            for frame in frames(batch):
+                yield frame
             if len(batch) == BATCH:
                 continue  # more is stored already
             run = await anyio.to_thread.run_sync(runs.get, owner_id, run_id)
             if run.state in TERMINAL_STATES:
                 # Read after the state: every event was stored before it, so this is the rest.
-                while rest := await _read(owner_id, run_id, cursor):
-                    for event in rest:
-                        yield event_frame(event)
-                        cursor = event.seq
+                while rest := await _read(owner_id, run_id, sent[0]):
+                    for frame in frames(rest):
+                        yield frame
                 yield end_frame(run_id, run.state.value)
                 return
             if await request.is_disconnected():
+                return
+            if anyio.current_time() >= ends_at:
+                # A bounded lifetime, so no stream holds up a shutdown (or waits forever on a
+                # Run awaiting its answer); EventSource reconnects with Last-Event-ID.
                 return
             idle = 0.0 if batch else idle + poll_seconds
             if idle >= KEEPALIVE_SECONDS:

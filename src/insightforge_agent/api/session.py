@@ -49,6 +49,8 @@ class PersonaSession:
         self._by_id = {u.id: u for u in personas}
         self._key = secret.encode()
         self._secure = secure
+        self._current_user = self._make_current_user()
+        self._current_user_id = self._make_current_user_id()
 
     @property
     def personas(self) -> list[User]:
@@ -76,7 +78,15 @@ class PersonaSession:
         return self._by_id.get(persona_id)
 
     def current_user(self):
-        """The FastAPI dependency every owner-scoped endpoint uses."""
+        """The FastAPI dependency every owner-scoped endpoint uses (one object, so a test can
+        override it with `app.dependency_overrides`)."""
+        return self._current_user
+
+    def current_user_id(self):
+        """The same, as the User's ID (what the clarification and Report routers take)."""
+        return self._current_user_id
+
+    def _make_current_user(self):
         def dependency(session: str | None = Cookie(default=None, alias=COOKIE_NAME)) -> User:
             user = self.verify(session)
             if user is None:
@@ -84,8 +94,8 @@ class PersonaSession:
             return user
         return dependency
 
-    def current_user_id(self):
-        current = self.current_user()
+    def _make_current_user_id(self):
+        current = self._current_user
 
         def dependency(user: User = Depends(current)) -> str:
             return user.id

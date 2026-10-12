@@ -1,12 +1,14 @@
 """T10 AC2-AC4: persona selection through a signed HttpOnly cookie, the one dependency that
 resolves it, and owner-scoped Report list and retrieve (no delete) through the real app."""
 
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
 from insightforge_agent.api.app import Runtime
 from insightforge_agent.api.session import COOKIE_NAME, PersonaSession
-from insightforge_agent.domain.models import Report, Run, RunState
+from insightforge_agent.domain.models import Report, Run, RunState, User
 from insightforge_agent.stores.personas import load_personas
 from tests.api.support import T0, USERS_YML, App, settings
 
@@ -135,3 +137,28 @@ def test_there_is_no_report_delete_endpoint(client):
         if getattr(route, "path", "").startswith("/reports"):
             assert "DELETE" not in route.methods
     assert client.get(f"/reports/{report.id}").status_code == 200
+
+
+def test_the_persona_dependency_is_one_object_every_router_uses(client):
+    session = client.runtime.session
+    assert session.current_user() is session.current_user()
+    client.app.dependency_overrides[session.current_user()] = lambda: User(
+        id="carol", display_name="Carol")
+    try:
+        assert client.get("/reports").status_code == 200  # no cookie: the override decides
+        assert client.get("/session").json()["id"] == "carol"
+    finally:
+        client.app.dependency_overrides.clear()
+
+
+def test_a_failed_build_closes_what_it_had_opened(tmp_path):
+    opened = []
+
+    def broken(repos, checkpointer, timeouts):
+        opened.append(repos)
+        raise RuntimeError("no models")
+
+    with pytest.raises(RuntimeError, match="no models"):
+        Runtime.build(settings(tmp_path), broken)
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[0].runs.list_for_owner("alice")

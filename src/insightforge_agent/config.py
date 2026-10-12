@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     run_concurrency: int = Field(default=2, ge=1)  # Runs executing at once (RunExecutor)
     run_queue_limit: int = Field(default=2, ge=0)  # new Runs that may wait for a free worker
     sse_poll_seconds: float = Field(default=0.5, gt=0)  # how often the SSE stream tails run_events
+    sse_max_stream_seconds: float = Field(default=60, gt=0)  # then the client reconnects
 
     @field_validator("search_providers", mode="before")
     @classmethod

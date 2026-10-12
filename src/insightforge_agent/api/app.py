@@ -31,6 +31,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+import anyio
 from apscheduler.schedulers.base import BaseScheduler
 from fastapi import FastAPI
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -91,6 +92,16 @@ class Runtime:
                                  settings.session_secret.get_secret_value(),
                                  secure=settings.session_cookie_secure)
         closers: list[Callable[[], object]] = []
+        try:
+            return cls._wire(settings, session, closers, make_deps)
+        except BaseException:
+            for close in reversed(closers):  # nothing half-built stays open
+                close()
+            raise
+
+    @classmethod
+    def _wire(cls, settings: Settings, session: PersonaSession, closers: list,
+              make_deps: MakeDeps | None) -> "Runtime":
         repos = SqliteRepos(sqlite_path(settings.database_url))
         closers.append(repos.close)
         ck = sqlite3.connect(sqlite_path(settings.checkpoint_database_url),
@@ -125,11 +136,12 @@ class Runtime:
 def create_app(runtime: Runtime) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        # Both block (the sweep; waiting for running Runs), so keep them off the event loop.
         try:
-            runtime.start()
+            await anyio.to_thread.run_sync(runtime.start)
             yield
         finally:
-            runtime.stop()
+            await anyio.to_thread.run_sync(runtime.stop)
 
     app = FastAPI(title="InsightForge", lifespan=lifespan)
     app.state.runtime = runtime
@@ -137,7 +149,8 @@ def create_app(runtime: Runtime) -> FastAPI:
     user_id = runtime.session.current_user_id()
     app.include_router(runtime.session.router())
     app.include_router(research_router(runtime.research, user, runtime.repos.runs,
-                                       runtime.repos.events, runtime.settings.sse_poll_seconds))
+                                       runtime.repos.events, runtime.settings.sse_poll_seconds,
+                                       runtime.settings.sse_max_stream_seconds))
     app.include_router(clarification_router(runtime.clarifications, user_id))
     app.include_router(reports_router(runtime.repos.reports, user_id))
     return app

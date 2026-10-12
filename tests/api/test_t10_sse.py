@@ -183,3 +183,29 @@ def test_the_stream_needs_a_persona(app):
     app.client.cookies.clear()
     response, _ = read_stream(app.client, run_id)
     assert response.status_code == 401
+
+
+def test_a_stream_on_an_unfinished_run_closes_after_its_lifetime_and_reconnect_resumes(
+        tmp_path):
+    """No stream outlives `sse_max_stream_seconds`, so none can hold up a shutdown; it closes
+    without `end`, and a reconnect with Last-Event-ID carries on where it stopped."""
+    with App(tmp_path, Gate(fakes.FixtureSearch(), open_=False),
+             sse_max_stream_seconds=0.3) as app:
+        app.login("alice")
+        run_id = app.submit().json()["run_id"]
+        assert app.gate.fetching.wait(30)
+        response, first = read_stream(app.client, run_id)  # returns: the stream ended itself
+        assert response.status_code == 200 and first
+        assert all(f["event"] == "message" for f in first)  # no `end`: the Run is not over
+        app.gate.open()
+        assert app.wait(run_id).state == RunState.COMPLETE
+        _, rest = read_stream(app.client, run_id, last_event_id=first[-1]["id"])
+        assert delivered(first) + delivered(rest) == history(app, run_id)
+        assert rest[-1]["event"] == "end"
+
+
+def test_ownership_is_checked_before_the_cursor(app):
+    run_id = completed_run(app, "bob")
+    app.login("alice")
+    response, _ = read_stream(app.client, run_id, last_event_id="not-a-number")
+    assert response.status_code == 404
