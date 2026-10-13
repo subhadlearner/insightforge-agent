@@ -7,7 +7,10 @@ Run touched. Never the preceding Report: what is compared is per-Finding state.
 Outcomes, per identity:
 
 - `added`: no established Finding, or the established one had the opposite polarity and this
-  Run affirms it again (material).
+  Run affirms it again (material). A first-time *negated* Finding ("X does not offer Y") is
+  also recorded as `added`, so the negative knowledge is established, but it is not material:
+  nothing established was true before, so no real-world change is implied. Only a denial of
+  an established affirmed value (`no_longer_true`) says something stopped being true.
 - `changed`: a single-valued object differs beyond tolerance, from a newer or equal-newest
   period (material).
 - `no_longer_true`: an explicit negated Finding of the established value (material). A fresh
@@ -62,6 +65,8 @@ class DiffEntry(BaseModel):
 
     @property
     def material(self) -> bool:
+        if self.outcome == "added" and self.finding is not None:
+            return self.finding.polarity == "affirmed"
         return self.outcome in MATERIAL
 
 
@@ -155,7 +160,8 @@ def compare(
             touched.add(key)
 
         if current is None:
-            settle("added")
+            settle("added", "" if new.polarity == "affirmed"
+                   else "a first-time denial: recorded, not a change")
             continue
         order = temporal_order(new, previous)
         if order == "older":

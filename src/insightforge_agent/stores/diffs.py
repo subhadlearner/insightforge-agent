@@ -6,7 +6,9 @@ Every decision that must survive a crash or a duplicate callback is a persistent
   `version` is compared and incremented by every committed Diff, so two concurrent Diffs cannot
   both apply.
 - `watchlist_diffs` has one row per Run; `attempts` is incremented durably before each attempt,
-  so a crash loop still ends in a permanent failure, and a terminal row is never reopened.
+  so a crash loop still ends in a permanent failure, and a terminal row is never reopened. A
+  failed attempt stores `retry_after`, the earliest time the retry may run, so no later
+  completion callback or restart can bring the retry forward.
 - A commit applies only to the earliest unfinished Diff of the item (`_next_run`), so a later Run
   never overtakes an earlier one.
 - `watchlist_alerts` is UNIQUE per Run; its delivery row is written in the same transaction.
@@ -17,6 +19,7 @@ The Diff commit (Finding updates, version, Diff record, Alert, delivery) is one 
 import json
 from contextlib import contextmanager
 from datetime import datetime
+from typing import NamedTuple
 
 from insightforge_agent.domain.alerts import (
     Alert,
@@ -44,6 +47,7 @@ CREATE TABLE IF NOT EXISTS watchlist_diffs (
  status TEXT NOT NULL CHECK(status IN ('pending','succeeded','failed')),
  attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
  detail TEXT NOT NULL DEFAULT '{}', alert_id TEXT, updated_at TEXT NOT NULL,
+ retry_after TEXT,
  PRIMARY KEY(owner_id,item_id,run_id)
 );
 CREATE TABLE IF NOT EXISTS watchlist_alerts (
@@ -61,6 +65,12 @@ CREATE TABLE IF NOT EXISTS alert_deliveries (
 """
 
 _ERROR_CHARS = 1000
+
+
+class NextDiff(NamedTuple):
+    run_id: str
+    report_id: str | None
+    retry_after: datetime | None  # set after a failed attempt: not before this time
 
 
 class DiffConflict(Exception):
@@ -137,14 +147,14 @@ class SqliteDiffRepository:
 
     # --- ordered Diff lifecycle -------------------------------------------------------------
 
-    def _next_run(self, owner_id, item_id) -> tuple[str, str | None] | None:
+    def _next_run(self, owner_id, item_id) -> NextDiff | None:
         """The earliest COMPLETE Run after the initializing one whose Diff is unfinished, unless
         an earlier Run of the item is still active (it may yet complete and must go first)."""
         init = self._initializing_run(owner_id, item_id)
         if init is None:
             return None
         row = self._db.execute(
-            "SELECT r.id, p.id, r.created_at FROM runs r "
+            "SELECT r.id, p.id, r.created_at, d.retry_after FROM runs r "
             "JOIN runs i ON i.owner_id=r.owner_id AND i.id=? "
             "LEFT JOIN reports p ON p.owner_id=r.owner_id AND p.run_id=r.id "
             "LEFT JOIN watchlist_diffs d ON d.owner_id=r.owner_id "
@@ -160,9 +170,11 @@ class SqliteDiffRepository:
             "SELECT 1 FROM runs WHERE owner_id=? AND watchlist_item_id=? "
             "AND state NOT IN ('COMPLETE','FAILED') AND (created_at, id) < (?, ?) LIMIT 1",
             (owner_id, item_id, row[2], row[0])).fetchone()
-        return None if active else (row[0], row[1])
+        if active:
+            return None
+        return NextDiff(row[0], row[1], datetime.fromisoformat(row[3]) if row[3] else None)
 
-    def next_run(self, owner_id, item_id) -> tuple[str, str | None] | None:
+    def next_run(self, owner_id, item_id) -> NextDiff | None:
         with self._lock:
             self._item(owner_id, item_id)
             return self._next_run(owner_id, item_id)
@@ -197,15 +209,19 @@ class SqliteDiffRepository:
                 (now.isoformat(), owner_id, item_id, run_id))
             return attempts + 1
 
-    def record_failure(self, owner_id, item_id, run_id, error: str, permanent: bool,
-                       now: datetime) -> None:
-        """A failed attempt never touches the Baseline. Terminal rows are left as they are."""
+    def record_failure(self, owner_id, item_id, run_id, error: str,
+                       retry_after: datetime | None, now: datetime) -> None:
+        """A failed attempt never touches the Baseline. With `retry_after` the Diff stays
+        pending until then; without it the failure is permanent. Terminal rows are left."""
         with self._write():
             self._db.execute(
-                "UPDATE watchlist_diffs SET error=?, updated_at=?, "
-                "status=CASE WHEN ? THEN 'failed' ELSE status END "
+                "UPDATE watchlist_diffs SET error=?, updated_at=?, retry_after=?, "
+                "status=CASE WHEN ? IS NULL THEN 'failed' ELSE status END "
                 "WHERE owner_id=? AND item_id=? AND run_id=? AND status='pending'",
-                (error[:_ERROR_CHARS], now.isoformat(), permanent, owner_id, item_id, run_id))
+                (error[:_ERROR_CHARS], now.isoformat(),
+                 retry_after.isoformat() if retry_after else None,
+                 retry_after.isoformat() if retry_after else None,
+                 owner_id, item_id, run_id))
 
     def intervening_failures(self, owner_id, item_id, run_id) -> list[FailedDiff]:
         """Permanently failed Diffs after the last successful one (or the initializing Run)
@@ -252,7 +268,7 @@ class SqliteDiffRepository:
             if version is None or version[0] != expected_version:
                 raise DiffConflict("the established Baseline changed during this Diff")
             nxt = self._next_run(owner_id, item_id)
-            if nxt is None or nxt[0] != run_id:
+            if nxt is None or nxt.run_id != run_id:
                 raise DiffConflict("an earlier Diff of this Watchlist Item is unfinished")
             self._upsert(owner_id, item_id, result.updates)
             self._db.execute(

@@ -483,6 +483,10 @@ def _migrate(db: sqlite3.Connection) -> None:
         with db:
             db.execute("ALTER TABLE watchlist_baseline_failures "
                        "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0")
+    columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_diffs)")}
+    if "retry_after" not in columns:  # T12 draft databases
+        with db:
+            db.execute("ALTER TABLE watchlist_diffs ADD COLUMN retry_after TEXT")
 
 
 class SqliteRepos:

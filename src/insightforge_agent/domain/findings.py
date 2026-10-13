@@ -216,6 +216,16 @@ class Skipped(BaseModel):
     reason: str
 
 
+class Rejected(BaseModel):
+    """A judge answer that failed the checks: an interpretation that failed, not a Claim known
+    to be unsupported. It fails normalisation (and so the attempt) instead of being skipped."""
+
+    model_config = ConfigDict(frozen=True)
+
+    evidence_id: str
+    reason: str
+
+
 class JudgeRequest(BaseModel):
     """One Claim the Finding judge must read: why, and what the vocabulary already settled."""
 
@@ -333,12 +343,17 @@ def _grounded(value: str, seed: BaselineSeed) -> bool:
 
 def finding_from_judgment(
     request: JudgeRequest, judgment: Judgment, registry: PredicateRegistry
-) -> Finding | Skipped:
+) -> Finding | Skipped | Rejected:
+    """Only an explicit `unsupported` (or an inexact quantity) skips the Claim; an answer
+    that fails the checks is Rejected, so the Claim is never silently dropped."""
     seed = request.seed
     e = seed.evidence
 
     def skip(reason: str) -> Skipped:
         return Skipped(evidence_id=e.id, claim=seed.claim.text, reason=reason)
+
+    def reject(reason: str) -> Rejected:
+        return Rejected(evidence_id=e.id, reason=reason)
 
     if request.reason == "polarity":
         # The vocabulary already fixed the triple; the judge only reads its polarity.
@@ -347,9 +362,9 @@ def finding_from_judgment(
     if judgment.predicate == UNSUPPORTED:
         return skip(f"{request.reason}: the judge found no controlled predicate")
     if judgment.predicate not in registry:
-        return skip(f"the judge answered an unknown predicate {judgment.predicate!r}")
+        return reject(f"the judge answered an unknown predicate {judgment.predicate!r}")
     if not _grounded(judgment.subject, seed) or not _grounded(judgment.object, seed):
-        return skip("the judge's subject or object is not stated by the Claim")
+        return reject("the judge's subject or object is not stated by the Claim")
     return build_finding(seed, registry.get(judgment.predicate), judgment.subject,
                          judgment.object, judgment.polarity, "judge")
 

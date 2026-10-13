@@ -485,9 +485,12 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   or whose predicate the vocabulary marks `polarity_judged` (membership predicates such as
   `offers`, which prose can deny). No tools, no Passage text, a strict JSON schema. Its answer
   must name a vocabulary predicate (or `unsupported`), and its subject and object must be stated
-  by the Claim, the Evidence statement or its structured fields; otherwise the Claim is skipped
-  and logged with the Diff. An invalid reply skips; a transport error retries. A quantity that
-  is not one exact value ("about $100") is skipped, never compared as text.
+  by the Claim, the Evidence statement or its structured fields. Only an explicit `unsupported`
+  answer skips a Claim (logged with the Diff). An invalid reply, a missing judgment or an answer
+  that fails those checks is a failed interpretation: `NormalizationFailed` fails the attempt and
+  the Diff retry lifecycle applies (a failed seed normalisation stays `seed` and is retried), so
+  an eligible Claim never silently counts as Not reconfirmed. A quantity that is not one exact
+  value ("about $100") is skipped, never compared as text.
 - **Seed and established states:** `baseline_state` is `none`, `seed` (T11 input) or
   `established`. The seed is normalised once, before any Diff, into `watchlist_findings`; the
   T11 seed row is never modified. UNKNOWN-period, conflicting and older values never establish.
@@ -498,7 +501,11 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   `older_ignored` (by As-of period end; two derived periods on one day by observation time);
   `ambiguous` (UNKNOWN period, a different value or the opposite polarity for the same stated
   period, or conflicting values in one Run). A negated Finding with no established counterpart
-  is `added`. An ambiguous or older restatement neither confirms nor refutes, so it also counts
+  is recorded as `added` (the negative knowledge is established) but is not material and raises
+  no Alert: nothing established was true before, so no real-world change is implied. Issue #13's
+  "a new Finding" is read as a new affirmed Finding; a denial is material only as
+  `no_longer_true` of an established affirmed value, and affirming what was denied is `added`
+  (material). An ambiguous or older restatement neither confirms nor refutes, so it also counts
   as Not reconfirmed.
 - **Execution** (`scheduler/diff.py`): the completion callback and startup recovery schedule a
   persisted APScheduler job `watchlist-diff:<owner>:<item>`, outside the graph. It processes the
@@ -506,7 +513,8 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   earlier Run is still active. One-shot Runs are never queued. Run status is never written.
 - **Durability** (`stores/diffs.py`): `watchlist_diffs` has one row per Run; each attempt is
   counted before it starts, so a crash loop ends after 2 attempts. A failure is retried once,
-  one minute later, and later Runs wait; a second failure is permanent, leaves the Baseline
+  no earlier than its stored `retry_after` (one minute later), and later Runs wait; another
+  completion callback or a restart cannot bring the retry forward; a second failure is permanent, leaves the Baseline
   unchanged, and the next successful Diff lists it (`intervening_failed`) and shows the net
   change. The commit (Finding updates, Baseline `version`, Diff record, Alert, delivery row) is
   one `BEGIN IMMEDIATE` transaction that checks the Diff is still pending, the version is
@@ -528,8 +536,9 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   deployment is out of scope (the constraints hold across connections, see the tests). A Report
   with a stored-data defect (`InvalidBaselineCandidate`, e.g. a foreign Observation) fails its
   Diff as a whole, after the one retry, rather than skipping the bad Claim; the next Diff shows
-  the net change. A new completion or a restart replaces a pending one-minute retry job with an
-  immediate one (still one retry). A `DiffConflict` (only possible with concurrent writers)
+  the net change. Seed normalisation has no attempt cap: like the T11 Baseline retry, a seed whose
+  interpretation keeps failing is retried every minute and no Diff runs meanwhile. A
+  `DiffConflict` (only possible with concurrent writers)
   consumes an attempt. Ordering relies on T11's one-active-Run admission: Runs of an item
   complete in creation order, so the initializing Run is the earliest non-quarantined success.
 - **Tests:** `tests/domain/test_t12_findings.py`, `tests/domain/test_t12_diff.py`,

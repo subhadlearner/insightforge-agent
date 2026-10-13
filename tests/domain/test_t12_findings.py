@@ -17,9 +17,10 @@ from insightforge_agent.domain.findings import (
     normalize_seed,
     same_object,
 )
-from insightforge_agent.pipeline.findings import normalize_seeds
+from insightforge_agent.pipeline.findings import NormalizationFailed, normalize_seeds
 from tests.domain.t12_builders import finding, seed
 from tests.scripted import ScriptedChat
+from tests.stores.t12_world import unsupported_reply
 
 
 def judge_replying(*judgments, raw=None):
@@ -167,33 +168,47 @@ def test_judge_maps_out_of_vocabulary_claims_and_reads_polarity():
     assert "Jane Roe" in sent and "e2" not in sent
 
 
-def test_judge_answers_are_checked_before_use():
-    seeds = [seed(predicate="vibes", evidence_id=f"e{i}", statement="Acme price is $100.")
-             for i in range(4)]
-    model = judge_replying(
-        {"index": 0, "predicate": "unsupported", "polarity": "affirmed"},
-        {"index": 1, "predicate": "mood", "polarity": "affirmed", "subject": "Acme",
-         "object": "$100"},
-        {"index": 2, "predicate": "price", "polarity": "affirmed", "subject": "Globex",
-         "object": "$100"},
-        {"index": 9, "predicate": "price", "polarity": "affirmed", "subject": "Acme",
-         "object": "$100"},
-    )
-    out = normalize_seeds(seeds, "r1", DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
-    assert out.findings == []
-    reasons = sorted(s.reason for s in out.skipped)
-    assert any("no controlled predicate" in r for r in reasons)
-    assert any("unknown predicate" in r for r in reasons)
-    assert any("not stated by the Claim" in r for r in reasons)
-    assert any("no answer" in r for r in reasons)  # index 3; index 9 was never asked
-
-
-def test_invalid_judge_reply_skips_claims_and_never_guesses():
-    model = judge_replying(raw="not json")
+def test_an_unsupported_answer_skips_the_claim():
+    model = judge_replying({"index": 0, "predicate": "unsupported", "polarity": "affirmed"})
     out = normalize_seeds([seed(predicate="vibes"), seed(evidence_id="e2")], "r1",
                           DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
     assert [f.provenance.evidence_id for f in out.findings] == ["e2"]
-    assert "invalid" in out.skipped[0].reason
+    assert "no controlled predicate" in out.skipped[0].reason
+
+
+@pytest.mark.parametrize("judgment, reason", [
+    ({"index": 0, "predicate": "mood", "polarity": "affirmed", "subject": "Acme",
+      "object": "$100"}, "unknown predicate"),
+    ({"index": 0, "predicate": "price", "polarity": "affirmed", "subject": "Globex",
+      "object": "$100"}, "not stated by the Claim"),
+    ({"index": 9, "predicate": "price", "polarity": "affirmed", "subject": "Acme",
+      "object": "$100"}, "no judgment"),  # an answer for a Claim that was never asked
+])
+def test_an_answer_failing_the_checks_fails_normalisation(judgment, reason):
+    model = judge_replying(judgment)
+    with pytest.raises(NormalizationFailed, match=reason):
+        normalize_seeds([seed(predicate="vibes", statement="Acme price is $100.")], "r1",
+                        DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
+
+
+@pytest.mark.parametrize("raw", ["not json", '{"judgments": [{"index": "x"}]}', ""])
+def test_a_malformed_reply_fails_normalisation_and_never_guesses(raw):
+    model = judge_replying(raw=raw)
+    with pytest.raises(NormalizationFailed, match="reply was invalid"):
+        normalize_seeds([seed(predicate="vibes"), seed(evidence_id="e2")], "r1",
+                        DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
+
+
+def test_a_missing_judgment_fails_normalisation():
+    with pytest.raises(NormalizationFailed, match="e1: no judgment"):
+        normalize_seeds([seed(predicate="offers", value="Model X")], "r1", DEFAULT_REGISTRY,
+                        FindingJudge(judge_replying(), DEFAULT_REGISTRY))
+
+
+def test_no_judge_fails_normalisation_only_when_one_is_needed():
+    assert normalize_seeds([seed()], "r1", DEFAULT_REGISTRY, None).findings
+    with pytest.raises(NormalizationFailed, match="none is configured"):
+        normalize_seeds([seed(predicate="vibes")], "r1", DEFAULT_REGISTRY, None)
 
 
 def test_judge_transport_errors_propagate_for_retry():
@@ -206,6 +221,6 @@ def test_judge_transport_errors_propagate_for_retry():
 
 def test_judge_calls_are_batched():
     seeds = [seed(predicate="vibes", evidence_id=f"e{i}") for i in range(45)]
-    model = judge_replying()
-    normalize_seeds(seeds, "r1", DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
-    assert len(model.seen) == 3
+    model = ScriptedChat(reply=unsupported_reply)
+    out = normalize_seeds(seeds, "r1", DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
+    assert len(model.seen) == 3 and len(out.skipped) == 45

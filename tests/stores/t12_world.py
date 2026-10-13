@@ -30,7 +30,7 @@ from insightforge_agent.domain.models import (
     Source,
 )
 from insightforge_agent.domain.watchlist import WatchlistItem
-from insightforge_agent.scheduler.diff import DiffService
+from insightforge_agent.scheduler.diff import DIFF_RETRY_DELAY, DiffService
 from insightforge_agent.scheduler.watchlist import WatchlistScheduler
 from insightforge_agent.scheduler.webhook import WebhookSender
 from insightforge_agent.stores.sqlite import SqliteRepos
@@ -58,9 +58,17 @@ class FakeScheduler:
         return [SimpleNamespace(id=i) for i in self.jobs]
 
 
+def unsupported_reply(messages):
+    """A well-behaved judge that maps nothing: every Claim it is asked about is unsupported
+    (a polarity-only request therefore reads as affirmed)."""
+    claims = json.loads(str(messages[-1].content))
+    return AIMessage(content=json.dumps({"judgments": [
+        {"index": c["index"], "predicate": "unsupported", "polarity": "affirmed"}
+        for c in claims]}))
+
+
 def empty_judge():
-    return FindingJudge(
-        ScriptedChat(reply=lambda m: AIMessage(content='{"judgments": []}')), DEFAULT_REGISTRY)
+    return FindingJudge(ScriptedChat(reply=unsupported_reply), DEFAULT_REGISTRY)
 
 
 def fact(value="$100", predicate="price", entity="Acme", period="2030-01", scope="US",
@@ -144,6 +152,11 @@ class World:
 
     def process(self):
         self.diffs.process(OWNER, ITEM)
+
+    def retry(self):
+        """The retry job fires once its stored earliest time has come."""
+        self.now += DIFF_RETRY_DELAY
+        self.diffs.run_item(OWNER, ITEM)
 
     # --- reads ----------------------------------------------------------------------------
 

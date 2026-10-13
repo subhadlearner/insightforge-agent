@@ -181,3 +181,14 @@ def test_net_change_after_failed_diffs_compares_with_unchanged_baseline():
     # And a value that went away and came back is no change at all.
     assert compare(base, [run(3, value="$100", period="2030-03")], REG).entries[0].outcome \
         == "reconfirmed"
+
+
+def test_first_time_negated_finding_is_recorded_but_not_material():
+    denied = run(1, predicate="offers", value="Model Y", polarity="negated")
+    result = compare({}, [denied], REG)
+    [entry] = result.entries
+    assert (entry.outcome, entry.material, result.material) == ("added", False, [])
+    assert result.updates[denied.key].finding.polarity == "negated"
+    affirmed = compare(result.updates, [run(2, predicate="offers", value="Model Y",
+                                            period="2030-03")], REG)
+    assert [e.outcome for e in affirmed.material] == ["added"]

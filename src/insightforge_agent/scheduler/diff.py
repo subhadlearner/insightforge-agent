@@ -74,17 +74,18 @@ class DiffService:
         self._locks: dict[tuple[str, str], threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
-    def schedule(self, owner_id, item_id, delay: timedelta = timedelta(0)):
-        """Never raises: startup recovery schedules every item again."""
+    def schedule(self, owner_id, item_id, at=None):
+        """Never raises: startup recovery schedules every item again. Bringing a job forward
+        is harmless: `process` honours a failed Diff's stored `retry_after`."""
         if self.closing.is_set() or self.scheduler is None:
             return
         try:
             self.scheduler.add_job(
                 f"{__name__}:fire_diff",
                 trigger="date",
-                # Immediate work runs on the scheduler's own clock; a retry is anchored to
-                # the application clock, like the T11 Baseline retry.
-                run_date=self.deps.now() + delay if delay else None,
+                # Immediate work (None) runs on the scheduler's own clock; a retry is
+                # anchored to the application clock, like the T11 Baseline retry.
+                run_date=at,
                 args=[owner_id, item_id],
                 id=diff_job_id(owner_id, item_id),
                 replace_existing=True,
@@ -103,7 +104,7 @@ class DiffService:
             return  # the item was deleted; its Runs and Reports remain
         except Exception:
             logger.exception("Diff processing deferred for %s/%s", owner_id, item_id)
-            self.schedule(owner_id, item_id, self.retry_delay)
+            self.schedule(owner_id, item_id, self.deps.now() + self.retry_delay)
 
     def _lock(self, owner_id, item_id) -> threading.Lock:
         with self._locks_guard:
@@ -118,7 +119,11 @@ class DiffService:
                 nxt = repo.next_run(owner_id, item_id)
                 if nxt is None:
                     return
-                run_id, report_id = nxt
+                run_id, report_id, retry_after = nxt
+                if retry_after is not None and self.deps.now() < retry_after:
+                    # A retry is pending: neither it nor any later Run may start before then.
+                    self.schedule(owner_id, item_id, retry_after)
+                    return
                 attempt = repo.begin_attempt(owner_id, item_id, run_id, report_id,
                                              MAX_DIFF_ATTEMPTS, self.deps.now())
                 if attempt is None:
@@ -131,14 +136,14 @@ class DiffService:
                     logger.info("Diff %s/%s/%s recomputed: %s", owner_id, item_id, run_id,
                                 error)
                 except Exception as error:
-                    permanent = attempt >= MAX_DIFF_ATTEMPTS
+                    now = self.deps.now()
+                    retry_at = now + self.retry_delay if attempt < MAX_DIFF_ATTEMPTS else None
                     repo.record_failure(owner_id, item_id, run_id,
-                                        f"{type(error).__name__}: {error}", permanent,
-                                        self.deps.now())
-                    if not permanent:
-                        logger.warning("Diff %s/%s/%s failed; retrying once", owner_id,
-                                       item_id, run_id, exc_info=True)
-                        self.schedule(owner_id, item_id, self.retry_delay)
+                                        f"{type(error).__name__}: {error}", retry_at, now)
+                    if retry_at is not None:
+                        logger.warning("Diff %s/%s/%s failed; retrying once at %s", owner_id,
+                                       item_id, run_id, retry_at, exc_info=True)
+                        self.schedule(owner_id, item_id, retry_at)
                         return  # later Runs wait for this one
                     logger.error("Diff %s/%s/%s failed permanently; Baseline unchanged",
                                  owner_id, item_id, run_id, exc_info=True)

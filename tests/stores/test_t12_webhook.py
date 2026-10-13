@@ -161,7 +161,7 @@ def test_payload_notes_intervening_failed_diffs(tmp_path, monkeypatch):
     world.complete("r2", 2, fact("$110", period="2030-02"))
     world.complete("r3", 3, fact("$120", period="2030-03"))
     world.process()
-    world.diffs.run_item(OWNER, ITEM)
+    world.retry()
     [alert] = world.alerts()
     text = slack_payload(alert)["text"]
     assert "Diffs failed for Runs r2" in text and "net change" in text
