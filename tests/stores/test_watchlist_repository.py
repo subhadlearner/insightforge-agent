@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+import sqlite3
 import threading
 
 import pytest
@@ -86,17 +87,18 @@ def test_every_nonterminal_state_blocks_overlap(repos, state):
         repos.watchlists.start(run("b"), 1)
 
 
-def test_tick_uses_cadence_grace_then_skips_older_misfires(repos):
+def test_tick_tolerates_early_jitter_and_only_misses_after_a_full_cadence(repos):
     repo = repos.watchlists
     repo.add(item())
     assert repo.take_tick("alice", "w", 2, NOW) is None
-    assert repo.take_tick("alice", "w", 1, NOW) is not None
+    assert repo.take_tick("alice", "w", 1, NOW - timedelta(seconds=2)) is None
+    assert repo.get("alice", "w").next_tick_at == NOW
+    assert repo.take_tick("alice", "w", 1, NOW - timedelta(milliseconds=500)) is not None
     assert repo.take_tick("alice", "w", 1, NOW) is None
-    # Repository contention or scheduler jitter beyond one second is still timely.
-    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=16)) is not None
-    assert repo.get("alice", "w").next_tick_at == NOW + timedelta(minutes=30)
-    # A callback at least one whole cadence late is missed and only advances the clock.
-    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=60)) is None
+    # A callback exactly one cadence late is accepted; only more than a cadence is missed.
+    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=30)) is not None
+    assert repo.get("alice", "w").next_tick_at == NOW + timedelta(minutes=45)
+    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=61)) is None
     assert repo.get("alice", "w").next_tick_at == NOW + timedelta(minutes=75)
     assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=75)) is not None
 
@@ -106,14 +108,41 @@ def test_edits_reject_stale_admission_and_immutable_brief_after_start(repos):
     original = item()
     repo.add(original)
     updated = original.model_copy(update={"revision": 2, "max_runs": 1})
-    repo.update(updated, 1)
+    repo.update(updated, 1, NOW)
     with pytest.raises(WatchlistConflict):
         repo.start(run("a"), 1)
     repo.start(run("a"), 2)
     with pytest.raises(WatchlistConflict):
-        repo.update(updated.model_copy(update={"brief": "changed", "revision": 3}), 2)
+        repo.update(
+            updated.model_copy(update={"brief": "changed", "revision": 3}),
+            2,
+            NOW,
+        )
     with pytest.raises(WatchlistConflict):
-        repo.update(updated, 1)
+        repo.update(updated, 1, NOW)
+
+
+def test_patch_merges_current_due_time_and_reenables_a_stale_schedule(repos):
+    repo = repos.watchlists
+    repo.add(item(max_runs=1))
+    stale = repo.get("alice", "w")
+    assert repo.take_tick("alice", "w", stale.revision, NOW) is not None
+    updated = stale.model_copy(update={"revision": 2, "max_runs": 2})
+    merged = repo.update(updated, 1, NOW)
+    assert merged.next_tick_at == NOW + timedelta(minutes=15)
+
+    overdue = merged.model_copy(update={"revision": 3, "max_runs": 3})
+    later = NOW + timedelta(hours=1)
+    merged = repo.update(overdue, 2, later)
+    assert merged.next_tick_at == later + timedelta(minutes=15)
+
+
+def test_shutdown_guard_is_checked_inside_run_admission(repos):
+    repo = repos.watchlists
+    repo.add(item())
+    with pytest.raises(WatchlistConflict, match="shutting down"):
+        repo.start(run("a"), 1, lambda: False)
+    assert repos.runs.list_for_owner("alice") == []
 
 
 def test_two_connections_admit_only_one_and_counter_survives_restart(tmp_path):
@@ -169,7 +198,7 @@ def test_checked_run_is_rejected_after_concurrent_deletion_or_edit(tmp_path):
     a, b = SqliteRepos(path), SqliteRepos(path)
     a.watchlists.add(item())
     snapshot = a.watchlists.get("alice", "w")
-    b.watchlists.update(snapshot.model_copy(update={"revision": 2}), 1)
+    b.watchlists.update(snapshot.model_copy(update={"revision": 2}), 1, NOW)
     with pytest.raises(WatchlistConflict):
         a.watchlists.start(run("edited"), snapshot.revision)
     snapshot = a.watchlists.get("alice", "w")
@@ -179,3 +208,27 @@ def test_checked_run_is_rejected_after_concurrent_deletion_or_edit(tmp_path):
     assert a.runs.list_for_owner("alice") == []
     a.close()
     b.close()
+
+
+def test_existing_quarantine_table_gets_schema_version_migration(tmp_path):
+    path = str(tmp_path / "old-watchlist.db")
+    db = sqlite3.connect(path)
+    db.execute(
+        "CREATE TABLE watchlist_baseline_failures ("
+        "owner_id TEXT NOT NULL, item_id TEXT NOT NULL, run_id TEXT NOT NULL, "
+        "reason TEXT NOT NULL, failed_at TEXT NOT NULL, "
+        "PRIMARY KEY(owner_id,item_id,run_id))"
+    )
+    db.close()
+
+    repos = SqliteRepos(path)
+    try:
+        columns = {
+            row[1]
+            for row in repos._db.execute(
+                "PRAGMA table_info(watchlist_baseline_failures)"
+            )
+        }
+        assert "schema_version" in columns
+    finally:
+        repos.close()

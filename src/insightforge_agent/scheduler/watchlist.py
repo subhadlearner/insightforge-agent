@@ -5,6 +5,7 @@ creates no Run; admission itself atomically checks revision, overlap and max_run
 """
 
 import logging
+import sqlite3
 import threading
 from collections.abc import Callable
 
@@ -14,6 +15,7 @@ from insightforge_agent.domain.contracts import EvidenceBundle, VerifiedReport
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.domain.watchlist import (
+    BASELINE_SEED_SCHEMA_VERSION,
     Baseline,
     BaselineSeed,
     WatchlistConflict,
@@ -22,6 +24,7 @@ from insightforge_agent.pipeline.executor import WorkNotAccepted
 
 logger = logging.getLogger(__name__)
 _handler: Callable | None = None
+_RETRY_BASELINE = object()
 
 
 def install_watchlist_handler(handler):
@@ -41,9 +44,9 @@ def job_id(owner_id, item_id):
 
 
 class WatchlistScheduler:
-    def __init__(self, deps, scheduler, research):
+    def __init__(self, deps, scheduler, research, closing=None):
         self.deps, self.scheduler, self.research = deps, scheduler, research
-        self.closing = threading.Event()
+        self.closing = closing if closing is not None else threading.Event()
 
     def cancel(self, owner_id, item_id):
         try:
@@ -51,11 +54,16 @@ class WatchlistScheduler:
         except JobLookupError:
             pass
 
-    def sync(self, item):
+    def sync(self, item, force_baseline_retry=False):
         if self.closing.is_set():
             return
         started = self.deps.repos.watchlists.counts(item.owner_id, item.id)[0]
-        if item.max_runs is not None and started >= item.max_runs:
+        if (
+            item.max_runs is not None
+            and started >= item.max_runs
+            and not force_baseline_retry
+            and not self._baseline_retry_pending(item.owner_id, item.id)
+        ):
             self.cancel(item.owner_id, item.id)
             return
         self.scheduler.add_job(
@@ -84,7 +92,7 @@ class WatchlistScheduler:
             if job.id.startswith("watchlist:") and job.id not in live:
                 self.scheduler.remove_job(job.id)
         for item in items:
-            self._initialize_quietly(item.owner_id, item.id)
+            initialization = self._initialize_quietly(item.owner_id, item.id)
             try:
                 current = repo.skip_missed(item.owner_id, item.id, self.deps.now())
             except NotFoundError:
@@ -98,7 +106,7 @@ class WatchlistScheduler:
                     item.next_tick_at,
                     current.next_tick_at,
                 )
-            self.sync(current)
+            self.sync(current, force_baseline_retry=initialization is _RETRY_BASELINE)
 
     def tick(self, owner_id, item_id, revision):
         # Capture callback time before any repository lock contention. The store consumes
@@ -126,8 +134,16 @@ class WatchlistScheduler:
                     item_id,
                 )
                 return None
+            # Retry only an indexed, unquarantined successful candidate. This avoids the
+            # old owner-wide Report scan while ensuring a transient persistence failure is
+            # not stranded after the final allowed Run.
+            self._initialize_quietly(owner_id, item_id)
             return self.research.submit(
-                owner_id, item.as_brief(), watchlist_item_id=item_id
+                owner_id,
+                item.as_brief(),
+                watchlist_item_id=item_id,
+                watchlist_revision=item.revision,
+                admission_open=lambda: not self.closing.is_set(),
             )
         except (NotFoundError, WatchlistConflict, WorkNotAccepted) as error:
             logger.info("Skipped Watchlist tick %s/%s: %s", owner_id, item_id, error)
@@ -139,14 +155,24 @@ class WatchlistScheduler:
                     current.max_runs is not None
                     and repo.counts(owner_id, item_id)[0] >= current.max_runs
                 ):
-                    self.cancel(owner_id, item_id)
+                    self.sync(current)
             except NotFoundError:
                 self.cancel(owner_id, item_id)
 
     def completed(self, run):
         """Outside the research graph, including after clarification resumption/recovery."""
         if run.state == RunState.COMPLETE and run.watchlist_item_id:
-            self._initialize_quietly(run.owner_id, run.watchlist_item_id)
+            initialization = self._initialize_quietly(
+                run.owner_id, run.watchlist_item_id
+            )
+            if initialization is _RETRY_BASELINE:
+                try:
+                    item = self.deps.repos.watchlists.get(
+                        run.owner_id, run.watchlist_item_id
+                    )
+                    self.sync(item, force_baseline_retry=True)
+                except NotFoundError:
+                    pass
 
     def _initialize_quietly(self, owner_id, item_id):
         try:
@@ -159,7 +185,15 @@ class WatchlistScheduler:
             logger.exception(
                 "Baseline initialization deferred for %s/%s", owner_id, item_id
             )
-            return None
+            return _RETRY_BASELINE
+
+    def _baseline_retry_pending(self, owner_id, item_id):
+        repo = self.deps.repos.watchlists
+        return repo.baseline(owner_id, item_id) is None and bool(
+            repo.baseline_candidates(
+                owner_id, item_id, BASELINE_SEED_SCHEMA_VERSION
+            )
+        )
 
     def initialize(self, owner_id, item_id):
         """Persist the earliest successful Run's current Claim/Evidence state exactly once.
@@ -170,16 +204,21 @@ class WatchlistScheduler:
         existing = repo.baseline(owner_id, item_id)
         if existing is not None:
             return existing
-        for report in repo.baseline_candidates(owner_id, item_id):
+        for report in repo.baseline_candidates(
+            owner_id, item_id, BASELINE_SEED_SCHEMA_VERSION
+        ):
             try:
                 baseline = self._baseline_from_report(owner_id, item_id, report)
-            except (KeyError, NotFoundError, ValueError) as error:
+            except sqlite3.OperationalError:
+                raise
+            except Exception as error:
                 first = repo.reject_baseline_candidate(
                     owner_id,
                     item_id,
                     report.run_id,
                     str(error),
                     deps.now(),
+                    BASELINE_SEED_SCHEMA_VERSION,
                 )
                 if first:
                     logger.warning(

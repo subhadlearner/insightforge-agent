@@ -125,12 +125,14 @@ class Runtime:
             repos, SqliteSaver(ck), ApsTimeoutScheduler(scheduler))
         executor = BoundedRunExecutor(settings.run_concurrency, settings.run_queue_limit)
         research = ResearchService(deps, executor)
-        schedules = WatchlistScheduler(deps, scheduler, research)
+        closing = threading.Event()
+        schedules = WatchlistScheduler(deps, scheduler, research, closing)
         deps.on_complete = schedules.completed
         return cls(settings=settings, session=session, repos=repos, deps=deps,
                    scheduler=scheduler, executor=executor,
                    clarifications=ClarificationService(deps, submit=executor.submit),
-                   research=research, watchlists=WatchlistService(deps, schedules), _closers=closers)
+                   research=research, watchlists=WatchlistService(deps, schedules),
+                   closing=closing, _closers=closers)
 
     def start(self) -> None:
         self.scheduler.start(paused=True)
@@ -145,7 +147,6 @@ class Runtime:
         """The server was asked to stop: open progress streams end now (clients reconnect
         later with Last-Event-ID), so they do not hold up the graceful shutdown."""
         self.closing.set()
-        self.watchlists.schedules.closing.set()
 
     def stop(self) -> None:
         self.begin_shutdown()

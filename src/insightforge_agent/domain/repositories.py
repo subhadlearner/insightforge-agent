@@ -2,6 +2,7 @@
 
 A record that does not exist, or belongs to someone else, is a NotFoundError."""
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -166,20 +167,38 @@ class WatchlistRepository(Protocol):
     def get(self, owner_id: str, item_id: str) -> "WatchlistItem": ...
     def list_for_owner(self, owner_id: str) -> list["WatchlistItem"]: ...
     def list_all(self) -> list["WatchlistItem"]: ...
-    def update(self, item: "WatchlistItem", expected_revision: int) -> None: ...
+    def update(
+        self,
+        item: "WatchlistItem",
+        expected_revision: int,
+        now: datetime | Callable[[], datetime],
+    ) -> "WatchlistItem": ...
     def delete(self, owner_id: str, item_id: str) -> None: ...
     def counts(self, owner_id: str, item_id: str) -> tuple[int, int, int]: ...
-    def start(self, run: Run, expected_revision: int) -> None:
+    def start(
+        self,
+        run: Run,
+        expected_revision: int,
+        admission_open: Callable[[], bool] | None = None,
+    ) -> None:
         """Store a Run only when owned, current, below max_runs and without an active Run."""
         ...
     def take_tick(self, owner_id: str, item_id: str, revision: int,
                   now: datetime) -> "WatchlistItem | None": ...
     def skip_missed(self, owner_id: str, item_id: str, now: datetime) -> "WatchlistItem": ...
-    def baseline_candidates(self, owner_id: str, item_id: str) -> list[Report]:
+    def baseline_candidates(
+        self, owner_id: str, item_id: str, schema_version: int
+    ) -> list[Report]:
         """Usable COMPLETE Reports for this item, oldest first."""
         ...
     def reject_baseline_candidate(
-        self, owner_id: str, item_id: str, run_id: str, reason: str, failed_at: datetime
+        self,
+        owner_id: str,
+        item_id: str,
+        run_id: str,
+        reason: str,
+        failed_at: datetime,
+        schema_version: int,
     ) -> bool:
         """Persist a corrupt candidate once; return whether this call first recorded it."""
         ...

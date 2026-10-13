@@ -97,21 +97,20 @@ class WatchlistService:
         )
         if config.brief != old.brief or config.source_toggles != old.source_toggles:
             validate_watchlist_brief(self.deps, owner_id, config, item_id)
-        next_tick_at = (
-            old.next_tick_at
-            if config.cadence_minutes == old.cadence_minutes
-            else self.deps.now() + timedelta(minutes=config.cadence_minutes)
-        )
         item = WatchlistItem(
             **config.model_dump(),
             owner_id=owner_id,
             id=item_id,
             created_at=old.created_at,
             revision=patch.revision + 1,
-            next_tick_at=next_tick_at,
+            # The repository merges this with the current durable due time under its
+            # transaction, so a concurrent tick cannot be overwritten by this snapshot.
+            next_tick_at=old.next_tick_at,
         )
         with self.deps.repos.lock:
-            self.deps.repos.watchlists.update(item, patch.revision)
+            item = self.deps.repos.watchlists.update(
+                item, patch.revision, self.deps.now
+            )
             if self.schedules:
                 self.schedules.sync(item)
         return self.dashboard(owner_id, item_id)

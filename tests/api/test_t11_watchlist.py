@@ -83,6 +83,9 @@ def test_update_revalidates_without_replacing_on_failure(tmp_path):
             {"cadence_minutes": 1},
             {"owner_id": "bob"},
             {"max_runs": None, "cadence_minutes": 1},
+            {"max_runs": True},
+            {"cadence_minutes": 1.5},
+            {"source_toggles": {"web": True, "bogus": True}},
         ):
             assert (
                 app.client.patch(

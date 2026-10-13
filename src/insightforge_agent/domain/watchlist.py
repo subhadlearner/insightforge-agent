@@ -1,9 +1,9 @@
 """Watchlist configuration and the durable first-success Baseline input (T11)."""
 
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from insightforge_agent.domain.contracts import Brief, Claim, EvidenceItem
 from insightforge_agent.domain.errors import SubmissionRejected
@@ -43,15 +43,11 @@ class WatchlistConfig(BaseModel):
         return Brief(text=self.brief, source_toggles=self.source_toggles)
 
 
-class WatchlistPatch(BaseModel):
+class _WatchlistPatchBase(BaseModel):
     """Optimistic, partial Watchlist update supplied by an API client."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     revision: int = Field(ge=1, strict=True)
-    brief: str | None = Field(default=None, min_length=1, max_length=10000)
-    cadence_minutes: int | None = Field(default=None, gt=0, le=525600, strict=True)
-    max_runs: int | None = Field(default=None, gt=0, strict=True)
-    source_toggles: dict[Literal["web", "documents", "memory"], bool] | None = None
 
     @model_validator(mode="after")
     def has_changes(self):
@@ -65,6 +61,23 @@ class WatchlistPatch(BaseModel):
 
     def changes(self) -> dict:
         return self.model_dump(exclude={"revision"}, exclude_unset=True)
+
+
+# The PATCH contract has exactly the configuration fields and constraints, made optional.
+# Building it from WatchlistConfig prevents create/PATCH validation from drifting apart.
+WatchlistPatch = create_model(
+    "WatchlistPatch",
+    __base__=_WatchlistPatchBase,
+    **{
+        name: (
+            Annotated[field.annotation | None, *field.metadata]
+            if field.metadata
+            else field.annotation | None,
+            None,
+        )
+        for name, field in WatchlistConfig.model_fields.items()
+    },
+)
 
 
 class WatchlistItem(WatchlistConfig):
@@ -112,6 +125,11 @@ class Baseline(BaseModel):
     initializing_run_id: str
     normalization_pending: Literal[True] = True
     seeds: list[BaselineSeed]
+
+
+# Quarantines are scoped to the validator/schema that rejected a candidate. Incrementing
+# this version makes older candidates eligible for re-evaluation after compatibility fixes.
+BASELINE_SEED_SCHEMA_VERSION = 1
 
 
 class WatchlistDashboard(BaseModel):

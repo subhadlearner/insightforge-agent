@@ -1,8 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+import sqlite3
 import threading
 
 from insightforge_agent.domain.models import RunState
+from insightforge_agent.domain.watchlist import BASELINE_SEED_SCHEMA_VERSION
 from insightforge_agent.scheduler.watchlist import job_id
 from tests.api.support import App, BRIEF, Gate, T0, wait_until
 from tests.api.test_t11_watchlist import create
@@ -22,6 +24,17 @@ def tick(app, clock, item):
     current = app.runtime.repos.watchlists.get("alice", item.id)
     clock.at = current.next_tick_at
     return app.runtime.watchlists.schedules.tick("alice", item.id, current.revision)
+
+
+def set_due(app, item, due):
+    """Arrange a real APScheduler timing test without invoking PATCH merge semantics."""
+    item = item.model_copy(update={"next_tick_at": due})
+    with app.runtime.repos.lock, app.runtime.repos._db:
+        app.runtime.repos._db.execute(
+            "UPDATE watchlist_items SET item=? WHERE owner_id=? AND id=?",
+            (item.model_dump_json(), item.owner_id, item.id),
+        )
+    return item
 
 
 def test_ticks_overlap_limit_counts_baseline_and_reports_survive_delete(tmp_path):
@@ -223,8 +236,7 @@ def test_real_apscheduler_fires_through_bounded_executor(tmp_path):
     with App(tmp_path) as app:
         item = setup(app, max_runs=1)
         due = datetime.now(UTC) + timedelta(seconds=0.3)
-        item = item.model_copy(update={"next_tick_at": due})
-        app.runtime.repos.watchlists.update(item, item.revision)
+        item = set_due(app, item, due)
         app.runtime.watchlists.schedules.sync(item)
         wait_until(lambda: bool(app.runtime.repos.runs.list_for_owner("alice")))
         run = app.runtime.repos.runs.list_for_owner("alice")[0]
@@ -328,10 +340,11 @@ def test_real_apscheduler_accepts_delay_shorter_than_one_cadence(tmp_path):
         item = setup(app, max_runs=1)
         scheduler = app.runtime.scheduler
         scheduler.pause()
-        item = item.model_copy(
-            update={"next_tick_at": datetime.now(UTC) - timedelta(seconds=10)}
+        item = set_due(
+            app,
+            item,
+            datetime.now(UTC) - timedelta(seconds=10),
         )
-        app.runtime.repos.watchlists.update(item, item.revision)
         app.runtime.watchlists.schedules.sync(item)
         scheduler.resume()
         wait_until(lambda: bool(app.runtime.repos.runs.list_for_owner("alice")))
@@ -399,3 +412,97 @@ def test_begin_shutdown_never_waits_for_repository_lock(tmp_path):
             release.set()
             holder.join(5)
             caller.join(5)
+
+
+def test_tick_revision_rejects_old_brief_after_concurrent_patch(
+    tmp_path, monkeypatch
+):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=1)
+        submit = app.runtime.research.submit
+
+        def patch_then_submit(owner_id, brief, **kwargs):
+            response = app.client.patch(
+                f"/watchlist/{item.id}",
+                json={"revision": item.revision, "brief": f"{BRIEF} Updated scope."},
+            )
+            assert response.status_code == 200, response.text
+            return submit(owner_id, brief, **kwargs)
+
+        monkeypatch.setattr(app.runtime.research, "submit", patch_then_submit)
+        assert tick(app, clock, item) is None
+        assert app.runtime.repos.watchlists.counts("alice", item.id) == (0, 0, 0)
+        assert app.runtime.repos.watchlists.get("alice", item.id).revision == 2
+
+
+def test_shutdown_between_tick_and_submit_creates_no_run(tmp_path, monkeypatch):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=1)
+        submit = app.runtime.research.submit
+
+        def stop_then_submit(owner_id, brief, **kwargs):
+            app.runtime.begin_shutdown()
+            return submit(owner_id, brief, **kwargs)
+
+        monkeypatch.setattr(app.runtime.research, "submit", stop_then_submit)
+        assert tick(app, clock, item) is None
+        assert app.runtime.repos.watchlists.counts("alice", item.id) == (0, 0, 0)
+
+
+def test_raising_limit_restarts_from_a_future_tick_not_stale_due_time(tmp_path):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=1)
+        first = tick(app, clock, item)
+        assert app.wait(first.id).state == RunState.COMPLETE
+        wait_until(lambda: app.runtime.executor.in_flight == 0)
+        assert app.runtime.scheduler.get_job(job_id("alice", item.id)) is None
+
+        clock.at += timedelta(hours=2)
+        current = app.runtime.repos.watchlists.get("alice", item.id)
+        response = app.client.patch(
+            f"/watchlist/{item.id}",
+            json={"revision": current.revision, "max_runs": 2},
+        )
+        assert response.status_code == 200, response.text
+        due = app.runtime.repos.watchlists.get("alice", item.id).next_tick_at
+        assert due == clock.at + timedelta(minutes=item.cadence_minutes)
+        assert app.runtime.scheduler.get_job(job_id("alice", item.id)).next_run_time == due
+        assert app.runtime.repos.watchlists.counts("alice", item.id) == (1, 1, 0)
+
+
+def test_last_allowed_run_retries_temporary_baseline_failure_on_tick(
+    tmp_path, monkeypatch
+):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=1)
+        schedules = app.runtime.watchlists.schedules
+        initialize = schedules.initialize
+        failed_once = False
+
+        def flaky(owner_id, item_id):
+            nonlocal failed_once
+            candidates = app.runtime.repos.watchlists.baseline_candidates(
+                owner_id, item_id, BASELINE_SEED_SCHEMA_VERSION
+            )
+            if candidates and not failed_once:
+                failed_once = True
+                raise sqlite3.OperationalError("database is locked")
+            return initialize(owner_id, item_id)
+
+        monkeypatch.setattr(schedules, "initialize", flaky)
+        run = tick(app, clock, item)
+        assert app.wait(run.id).state == RunState.COMPLETE
+        wait_until(lambda: app.runtime.executor.in_flight == 0)
+        assert failed_once
+        assert app.runtime.repos.watchlists.baseline("alice", item.id) is None
+        assert app.runtime.scheduler.get_job(job_id("alice", item.id)) is not None
+
+        assert tick(app, clock, item) is None  # retry succeeds; max_runs blocks admission
+        baseline = app.runtime.repos.watchlists.baseline("alice", item.id)
+        assert baseline is not None and baseline.initializing_run_id == run.id
+        assert app.runtime.repos.watchlists.counts("alice", item.id) == (1, 1, 0)
+        assert app.runtime.scheduler.get_job(job_id("alice", item.id)) is None

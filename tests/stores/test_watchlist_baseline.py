@@ -18,6 +18,7 @@ from insightforge_agent.domain.models import (
     Source,
     RunState,
 )
+from insightforge_agent.domain.watchlist import BASELINE_SEED_SCHEMA_VERSION
 from insightforge_agent.scheduler.watchlist import WatchlistScheduler
 from tests.stores.test_watchlist_repository import NOW, item, run
 
@@ -134,10 +135,24 @@ def test_foreign_run_evidence_cannot_seed_baseline(repos):
     service = prepare(repos, foreign_observation=True)
     assert service.initialize("alice", "w") is None
     assert repos.watchlists.baseline("alice", "w") is None
-    assert repos.watchlists.baseline_candidates("alice", "w") == []
+    assert (
+        repos.watchlists.baseline_candidates(
+            "alice", "w", BASELINE_SEED_SCHEMA_VERSION
+        )
+        == []
+    )
+    # A validator/schema upgrade makes the candidate eligible for re-evaluation.
+    assert [
+        report.run_id
+        for report in repos.watchlists.baseline_candidates(
+            "alice", "w", BASELINE_SEED_SCHEMA_VERSION + 1
+        )
+    ] == ["first"]
 
 
-def test_bad_first_report_is_quarantined_and_next_success_initializes(repos):
+def test_any_non_temporary_candidate_error_is_quarantined_and_next_success_initializes(
+    repos, monkeypatch
+):
     service = prepare(repos, foreign_observation=True)
     repos.runs.add(
         run("second", RunState.COMPLETE).model_copy(
@@ -178,6 +193,14 @@ def test_bad_first_report_is_quarantined_and_next_success_initializes(repos):
         )
     )
 
+    convert = service._baseline_from_report
+
+    def malformed(owner_id, item_id, report):
+        if report.run_id == "first":
+            raise TypeError("malformed Report body")
+        return convert(owner_id, item_id, report)
+
+    monkeypatch.setattr(service, "_baseline_from_report", malformed)
     baseline = service.initialize("alice", "w")
     assert baseline.initializing_run_id == "second"
     assert baseline.seeds == []

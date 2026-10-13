@@ -393,27 +393,35 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Editing:** cadence, source choices and `max_runs` can change. PATCH requires the revision from
   the client's last read; the repository compares it atomically and returns 409 for a stale edit.
   A cadence change resets the next tick to one new cadence from the edit; other changes preserve
-  the due time. Every successful edit increments the revision. After any Run started, changing the
-  standing Brief returns 409: create a new item so its established state and research scope stay aligned.
+  a future due time. An overdue item, including one re-enabled after its due time, restarts one
+  cadence from the edit. The
+  due-time merge and revision check use the current row in one repository transaction, so a PATCH
+  cannot overwrite a tick's newer due time. Every successful edit increments the revision. After
+  any Run started, changing the standing Brief returns 409: create a new item so its established
+  state and research scope stay aligned.
   Deletion stops scheduling, removes the item's Baseline input, and retains Runs and Reports.
   A Run admitted before deletion is allowed to finish; it cannot recreate the deleted item.
 - **Admission:** `ResearchService`/`RunExecutor.admit` reserve capacity before `start_run`. The
   Watchlist repository stores the Run in a `BEGIN IMMEDIATE` transaction only if the item belongs
   to that owner, its revision is current, no Run is non-terminal, and `max_runs` allows it. Run
-  rows themselves are the durable count. Failed and queued-then-cancelled Runs consume a slot;
-  refusal before persistence consumes none. `AWAITING_CLARIFICATION` and `RESUMING` block overlap.
+  rows themselves are the durable count. The tick's revision is carried through Brief checking
+  into that transaction, so an intervening edit cannot start the old Brief or source choices.
+  Shutdown admission is checked in the same transaction. Failed and queued-then-cancelled Runs
+  consume a slot; refusal before persistence consumes none. `AWAITING_CLARIFICATION` and `RESUMING` block overlap.
   `run_brief(watchlist_item_id=...)` now also validates ownership and source restrictions (#49).
 - **Ticks:** persisted APScheduler interval jobs share T9's scheduler/job store. Jobs carry owner,
   item and revision, with `max_instances=1` and coalescing. The durable `next_tick_at` comparison
-  is the only late/missed decision: dispatch delay shorter than a cadence is accepted, while a
-  callback at least one cadence late advances beyond the missed intervals without starting a Run.
+  is the only late/missed decision: a callback up to one second early and dispatch delay through
+  one cadence are accepted, while a callback more than one cadence late advances beyond the
+  missed intervals without starting a Run.
   SQLite consumes each due time once; duplicate, stale, missed and overlapping callbacks do not
   start another Run, and each skip is logged. Capacity refusal skips that tick, with no immediate
   retry. Once the Run limit is reached the interval job is removed. Raising the limit through
   PATCH restores scheduling.
 - **Recovery/order:** install both handlers while paused, run T9 recovery, repair Watchlist
   completion inputs and persisted schedules, advance due times beyond downtime, then resume.
-  Deleted-item jobs are removed. Shutdown closes Watchlist admission, then follows T10's
+  Deleted-item jobs are removed. One lock-free event closes both SSE and Watchlist admission;
+  the admission transaction rechecks it, then shutdown follows T10's
   scheduler → executor → resources order. Waiting on active worker threads is unchanged.
 - **Baseline boundary with T12:** T11 persists the first successful Run's initialization input
   exactly once in `watchlist_baselines`: current Claims, their structured Evidence, Passage refs,
@@ -426,12 +434,14 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   normalized per-Finding state already exists. Empty current input remains distinguishable from
   no successful Run. Later successes and all failures leave the seed state unchanged.
 - **Completion:** the scheduler's post-processing callback runs after COMPLETE, outside the
-  research graph, including resumed/recovered Runs. Initialization is attempted only from this
-  callback and startup recovery. It queries COMPLETE Runs through the Watchlist index rather than
-  scanning all owner Reports. A structurally unusable Report is recorded once and excluded, so the
-  next successful Report can establish the Baseline; transient infrastructure failures remain
-  retryable. No initialization error can prevent later research or process startup. No Diff or
-  Alert is created by T11.
+  research graph, including resumed/recovered Runs. Initialization is attempted from this
+  callback and startup recovery; a pending transient failure is retried on a later tick, even
+  after the last allowed Run. It queries COMPLETE Runs through the Watchlist index rather than
+  scanning all owner Reports. Any non-temporary conversion failure quarantines that Report for
+  the current Baseline seed schema so the next successful Report can establish the Baseline.
+  Incrementing the schema version makes old candidates eligible for re-evaluation after a
+  compatibility fix. No initialization error can prevent later research or process startup. No
+  Diff or Alert is created by T11.
 - **Dashboard:** `item.max_runs`, `runs_started`, `completed_runs`, `failed_runs`, and the five
   most recent Failed Run records. No Watchlist status is added. Failure details remain available
   through the existing owner-scoped Run events/SSE endpoint.

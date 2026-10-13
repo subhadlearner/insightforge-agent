@@ -10,23 +10,24 @@ GitHub independently confirmed PR #51 merged at this commit before branching.
 | CP1 | Watchlist configuration/repositories, CRUD, Planner-only preflight, owner/source checks | `tests/api/test_t11_watchlist.py`, including revision-aware PATCH |
 | CP2 | APScheduler interval jobs, durable due-time consumption, atomic Run admission, max_runs | `tests/stores/test_watchlist_repository.py` and `tests/api/test_t11_lifecycle.py` |
 | CP3 | Dashboard counts and first-success initialization input with current Claim/Evidence provenance | `tests/stores/test_watchlist_baseline.py` and lifecycle tests |
-| CP4 | Real scheduler/misfire, cancellation, two-connection races, recovery, clarification, post-processing failure | Final full offline suite: 1,534 passed |
+| CP4 | Real scheduler/misfire, cancellation, two-connection races, recovery, clarification, post-processing failure | Final full offline suite: 1,543 passed |
 
 ## Executed results
 
-- `uv run pytest -q`: **1,534 passed, 26 deselected**, 75.34 seconds. Two Qdrant compatibility-check warnings; no test failures. Includes **65 focused T11 tests** and the existing T9/T10 regressions, including both real-Uvicorn shutdown tests on Linux.
-- `uv run pytest -q -m integration`: **19 skipped, 1,541 deselected**, 8.01 seconds. All 19 tests skipped because the required local model caches were absent; these tests are **not verified** here. Two Docling deprecation warnings.
+- `uv run pytest -q`: **1,543 passed, 26 deselected**, 85.50 seconds. Two Qdrant compatibility-check warnings; no test failures. Includes **75 focused T11/T10 shutdown tests** and the existing T9/T10 regressions, including both real-Uvicorn shutdown tests on Linux.
+- `uv run pytest -q -m integration`: **19 skipped, 1,550 deselected**, 9.17 seconds. All 19 tests skipped because the required local model caches were absent; these tests are **not verified** here. Two Docling deprecation warnings.
 - `uv run lint-imports`: **4 kept, 0 broken**.
 - `git diff --check`: clean.
 - No live tests, paid model calls, real search calls, or model-weight downloads were performed.
 
-The first full run encountered seven environment-only failures because the environment sets a
-SOCKS proxy but the locked environment did not have `socksio`. Installed `socksio==1.0.0` only
-in the local venv (no dependency or lockfile change), and set `NO_PROXY`/`no_proxy` to
-`127.0.0.1,localhost` for loopback subprocess tests. Final command:
+An impacted-suite run encountered two environment-only failures because the environment's
+`ALL_PROXY` took precedence for loopback HTTPX calls and the locked environment does not include
+`socksio`. No project dependency was changed. Removing proxy variables for the offline test
+process made both real-Uvicorn tests pass. Final commands used the same prefix:
 
 ```bash
-NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost uv run pytest -q
+env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy \
+  -u HTTPS_PROXY -u https_proxy -u FTP_PROXY -u ftp_proxy uv run pytest -q
 ```
 
 The test suite's existing offline network guard remained enabled. Model-client construction
@@ -48,6 +49,12 @@ uv run pytest -q -m integration
 - Draft-PR review follow-up fixed cadence-wide dispatch grace, corrupt-candidate quarantine,
   due-time preservation for non-cadence edits, revision-aware PATCH, lock-free stop signaling,
   indexed Baseline candidate lookup, shared Run insertion and the shared Brief-change guard.
+- The second review pass is covered by transactional due-time merging, end-to-end tick revision
+  admission, a shutdown guard inside admission, one-second early-fire tolerance, strict
+  more-than-one-cadence misfire handling, final-run Baseline retry, broad non-temporary candidate
+  quarantine, and schema-versioned quarantine re-evaluation. The service's shared early Brief
+  predicate remains intentionally: it avoids a Planner call before the repository repeats the
+  authoritative guard in its transaction.
 - **AC5 scope boundary:** T11 initializes durable provenance-rich current Claim/Evidence seeds,
   marked `normalization_pending=true`. This is the T11 persistence/initialization contract from
   the handover. A fully normalized, established per-Finding Baseline is **not implemented** here;

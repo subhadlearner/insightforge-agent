@@ -5,8 +5,9 @@ Deleting an item preserves Runs and Reports. Already admitted work may finish af
 """
 
 import json
+from collections.abc import Callable
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.models import Report, Run, RunState
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS watchlist_baselines (
 );
 CREATE TABLE IF NOT EXISTS watchlist_baseline_failures (
  owner_id TEXT NOT NULL, item_id TEXT NOT NULL, run_id TEXT NOT NULL,
- reason TEXT NOT NULL, failed_at TEXT NOT NULL,
+ reason TEXT NOT NULL, failed_at TEXT NOT NULL, schema_version INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(owner_id,item_id,run_id)
 );
 CREATE INDEX IF NOT EXISTS watchlist_runs ON runs(owner_id,watchlist_item_id,state);
@@ -39,6 +40,18 @@ CREATE INDEX IF NOT EXISTS watchlist_runs ON runs(owner_id,watchlist_item_id,sta
 class SqliteWatchlistRepository:
     def __init__(self, db, lock):
         self._db, self._lock = db, lock
+        columns = {
+            row[1]
+            for row in self._db.execute(
+                "PRAGMA table_info(watchlist_baseline_failures)"
+            )
+        }
+        if "schema_version" not in columns:
+            with self._db:
+                self._db.execute(
+                    "ALTER TABLE watchlist_baseline_failures "
+                    "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0"
+                )
 
     @contextmanager
     def _write(self):
@@ -86,8 +99,14 @@ class SqliteWatchlistRepository:
             (item.model_dump_json(), item.owner_id, item.id),
         )
 
-    def update(self, item: WatchlistItem, expected_revision: int):
+    def update(
+        self,
+        item: WatchlistItem,
+        expected_revision: int,
+        now: datetime | Callable[[], datetime],
+    ) -> WatchlistItem:
         with self._write():
+            now = now() if callable(now) else now
             old = self.get(item.owner_id, item.id)
             if old.revision != expected_revision:
                 raise WatchlistConflict(
@@ -96,7 +115,12 @@ class SqliteWatchlistRepository:
             check_watchlist_brief_change(
                 old, item, self.counts(item.owner_id, item.id)[0]
             )
+            next_tick_at = old.next_tick_at
+            if item.cadence_minutes != old.cadence_minutes or old.next_tick_at <= now:
+                next_tick_at = now + timedelta(minutes=item.cadence_minutes)
+            item = item.model_copy(update={"next_tick_at": next_tick_at})
             self._save(item)
+            return item
 
     def delete(self, owner_id, item_id):
         with self._write():
@@ -124,12 +148,19 @@ class SqliteWatchlistRepository:
             ).fetchone()
             return tuple(row)
 
-    def start(self, run: Run, expected_revision: int):
+    def start(
+        self,
+        run: Run,
+        expected_revision: int,
+        admission_open: Callable[[], bool] | None = None,
+    ):
         """Admission and counting are one commit, after executor capacity was reserved."""
         with self._write():
             item = self.get(run.owner_id, run.watchlist_item_id)
             if item.revision != expected_revision:
                 raise WatchlistConflict("the Watchlist Item changed before admission")
+            if admission_open is not None and not admission_open():
+                raise WatchlistConflict("the process is shutting down")
             started = self.counts(item.owner_id, item.id)[0]
             if item.max_runs is not None and started >= item.max_runs:
                 raise WatchlistConflict("max_runs reached")
@@ -147,17 +178,23 @@ class SqliteWatchlistRepository:
     ) -> WatchlistItem | None:
         """Consume one due callback and advance past older intervals atomically.
 
-        Dispatch delay shorter than one cadence is ordinary jitter. At least one cadence
-        late is a missed callback: advance the durable clock but admit no Run.
+        Dispatch delay through one cadence is ordinary jitter. More than one cadence late is
+        a missed callback: advance the durable clock but admit no Run. An APScheduler fire up
+        to one second early is accepted; an earlier callback leaves the due time untouched.
         """
         with self._write():
             item = self.get(owner_id, item_id)
-            if item.revision != revision or now < item.next_tick_at:
+            if item.revision != revision:
                 return None
-            missed = (now - item.next_tick_at).total_seconds() >= (
+            if now < item.next_tick_at - timedelta(seconds=1):
+                return None
+            effective_now = max(now, item.next_tick_at)
+            missed = (effective_now - item.next_tick_at).total_seconds() > (
                 item.cadence_minutes * 60
             )
-            self._save(item.model_copy(update={"next_tick_at": item.after(now)}))
+            self._save(
+                item.model_copy(update={"next_tick_at": item.after(effective_now)})
+            )
             return None if missed else item
 
     def skip_missed(self, owner_id, item_id, now: datetime) -> WatchlistItem:
@@ -167,7 +204,7 @@ class SqliteWatchlistRepository:
             self._save(item)
             return item
 
-    def baseline_candidates(self, owner_id, item_id) -> list[Report]:
+    def baseline_candidates(self, owner_id, item_id, schema_version) -> list[Report]:
         """Use the Watchlist Run index; never scan every Report belonging to the owner."""
         with self._lock:
             self.get(owner_id, item_id)
@@ -176,10 +213,10 @@ class SqliteWatchlistRepository:
                 "FROM runs r JOIN reports p ON p.owner_id=r.owner_id AND p.run_id=r.id "
                 "LEFT JOIN watchlist_baseline_failures f "
                 "ON f.owner_id=r.owner_id AND f.item_id=r.watchlist_item_id "
-                "AND f.run_id=r.id "
+                "AND f.run_id=r.id AND f.schema_version=? "
                 "WHERE r.owner_id=? AND r.watchlist_item_id=? AND r.state='COMPLETE' "
                 "AND f.run_id IS NULL ORDER BY p.created_at,p.id",
-                (owner_id, item_id),
+                (schema_version, owner_id, item_id),
             ).fetchall()
         return [
             Report(
@@ -193,7 +230,7 @@ class SqliteWatchlistRepository:
         ]
 
     def reject_baseline_candidate(
-        self, owner_id, item_id, run_id, reason, failed_at
+        self, owner_id, item_id, run_id, reason, failed_at, schema_version
     ) -> bool:
         with self._write():
             self.get(owner_id, item_id)
@@ -203,12 +240,27 @@ class SqliteWatchlistRepository:
             ).fetchone()
             if run != (RunState.COMPLETE.value, item_id):
                 raise ValueError("only a COMPLETE Run of this Watchlist Item can be rejected")
-            inserted = self._db.execute(
-                "INSERT OR IGNORE INTO watchlist_baseline_failures "
-                "(owner_id,item_id,run_id,reason,failed_at) VALUES (?,?,?,?,?)",
-                (owner_id, item_id, run_id, reason[:1000], failed_at.isoformat()),
+            current = self._db.execute(
+                "SELECT schema_version FROM watchlist_baseline_failures "
+                "WHERE owner_id=? AND item_id=? AND run_id=?",
+                (owner_id, item_id, run_id),
+            ).fetchone()
+            self._db.execute(
+                "INSERT INTO watchlist_baseline_failures "
+                "(owner_id,item_id,run_id,reason,failed_at,schema_version) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(owner_id,item_id,run_id) DO UPDATE SET "
+                "reason=excluded.reason, failed_at=excluded.failed_at, "
+                "schema_version=excluded.schema_version",
+                (
+                    owner_id,
+                    item_id,
+                    run_id,
+                    reason[:1000],
+                    failed_at.isoformat(),
+                    schema_version,
+                ),
             )
-            return inserted.rowcount == 1
+            return current is None or current[0] != schema_version
 
     def baseline(self, owner_id, item_id) -> Baseline | None:
         with self._lock:
@@ -271,8 +323,9 @@ class MemoryWatchlistRepository:
                 raise ValueError("Watchlist Item already exists")
             self._items[key] = item.model_copy(deep=True)
 
-    def update(self, item, expected_revision):
+    def update(self, item, expected_revision, now):
         with self._lock:
+            now = now() if callable(now) else now
             old = self.get(item.owner_id, item.id)
             if old.revision != expected_revision:
                 raise WatchlistConflict(
@@ -281,7 +334,12 @@ class MemoryWatchlistRepository:
             check_watchlist_brief_change(
                 old, item, self.counts(item.owner_id, item.id)[0]
             )
+            next_tick_at = old.next_tick_at
+            if item.cadence_minutes != old.cadence_minutes or old.next_tick_at <= now:
+                next_tick_at = now + timedelta(minutes=item.cadence_minutes)
+            item = item.model_copy(update={"next_tick_at": next_tick_at})
             self._items[item.owner_id, item.id] = item.model_copy(deep=True)
+            return item
 
     def delete(self, owner_id, item_id):
         with self._lock:
@@ -306,11 +364,13 @@ class MemoryWatchlistRepository:
                 sum(r.state == RunState.FAILED for r in runs),
             )
 
-    def start(self, run, expected_revision):
+    def start(self, run, expected_revision, admission_open=None):
         with self._lock:
             item = self.get(run.owner_id, run.watchlist_item_id)
             if item.revision != expected_revision:
                 raise WatchlistConflict("the Watchlist Item changed before admission")
+            if admission_open is not None and not admission_open():
+                raise WatchlistConflict("the process is shutting down")
             if (
                 item.max_runs is not None
                 and self.counts(item.owner_id, item.id)[0] >= item.max_runs
@@ -327,13 +387,16 @@ class MemoryWatchlistRepository:
     def take_tick(self, owner_id, item_id, revision, now):
         with self._lock:
             item = self.get(owner_id, item_id)
-            if item.revision != revision or now < item.next_tick_at:
+            if item.revision != revision:
                 return None
-            missed = (now - item.next_tick_at).total_seconds() >= (
+            if now < item.next_tick_at - timedelta(seconds=1):
+                return None
+            effective_now = max(now, item.next_tick_at)
+            missed = (effective_now - item.next_tick_at).total_seconds() > (
                 item.cadence_minutes * 60
             )
             self._items[owner_id, item_id] = item.model_copy(
-                update={"next_tick_at": item.after(now)}
+                update={"next_tick_at": item.after(effective_now)}
             )
             return None if missed else item
 
@@ -344,12 +407,12 @@ class MemoryWatchlistRepository:
             self._items[owner_id, item_id] = item
             return item
 
-    def baseline_candidates(self, owner_id, item_id):
+    def baseline_candidates(self, owner_id, item_id, schema_version):
         with self._lock:
             self.get(owner_id, item_id)
             candidates = []
             for run in self._runs.list_for_owner(owner_id):
-                key = (owner_id, item_id, run.id)
+                key = (owner_id, item_id, run.id, schema_version)
                 if (
                     run.watchlist_item_id == item_id
                     and run.state == RunState.COMPLETE
@@ -362,14 +425,14 @@ class MemoryWatchlistRepository:
             return sorted(candidates, key=lambda report: (report.created_at, report.id))
 
     def reject_baseline_candidate(
-        self, owner_id, item_id, run_id, reason, failed_at
+        self, owner_id, item_id, run_id, reason, failed_at, schema_version
     ):
         with self._lock:
             self.get(owner_id, item_id)
             run = self._runs.get(owner_id, run_id)
             if run.state != RunState.COMPLETE or run.watchlist_item_id != item_id:
                 raise ValueError("only a COMPLETE Run of this Watchlist Item can be rejected")
-            key = (owner_id, item_id, run_id)
+            key = (owner_id, item_id, run_id, schema_version)
             first = key not in self._baseline_failures
             self._baseline_failures.add(key)
             return first
