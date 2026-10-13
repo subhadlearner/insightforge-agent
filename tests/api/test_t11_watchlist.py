@@ -1,0 +1,168 @@
+import pytest
+from insightforge_agent.domain.contracts import Brief
+from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
+from insightforge_agent.pipeline.graph import check_brief, run_brief
+from tests.api.support import App, BRIEF, VAGUE
+
+
+def create(app, **kw):
+    return app.client.post(
+        "/watchlist", json={"brief": BRIEF, "cadence_minutes": 15, **kw}
+    )
+
+
+def test_crud_and_owner_isolation(tmp_path):
+    with App(tmp_path) as app:
+        app.login("alice")
+        response = create(app)
+        assert response.status_code == 201, response.text
+        item = response.json()["item"]
+        iid = item["id"]
+        assert response.json()["runs_started"] == 0
+        assert len(app.client.get("/watchlist").json()) == 1
+        assert app.client.get(f"/watchlist/{iid}").json()["item"] == item
+        updated = app.client.patch(
+            f"/watchlist/{iid}",
+            json={"revision": item["revision"], "cadence_minutes": 1, "max_runs": 2},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["item"]["revision"] == 2
+        app.login("bob")
+        assert app.client.get("/watchlist").json() == []
+        for path in (iid, "missing"):
+            assert app.client.get(f"/watchlist/{path}").status_code == 404
+            assert (
+                app.client.patch(
+                    f"/watchlist/{path}", json={"revision": 1, "brief": VAGUE}
+                ).status_code
+                == 404
+            )
+            assert app.client.delete(f"/watchlist/{path}").status_code == 404
+        with pytest.raises(NotFoundError):
+            run_brief(app.runtime.deps, "bob", Brief(text=BRIEF), watchlist_item_id=iid)
+        assert app.runtime.repos.runs.list_for_owner("bob") == []
+        app.login("alice")
+        assert app.client.delete(f"/watchlist/{iid}").status_code == 204
+        assert app.client.get("/watchlist").json() == []
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"brief": VAGUE},
+        {"brief": " "},
+        {"source_toggles": {"web": False}},
+        {"source_toggles": {"web": True, "documents": True}},
+        {"documents": [{"name": "bad.pdf"}]},
+        {"document_ids": ["a"]},
+        {"cadence_minutes": 0},
+        {"cadence_minutes": 1},
+        {"max_runs": 0},
+        {"max_runs": -1},
+        {"max_runs": True},
+        {"cadence_minutes": 1.5},
+        {"source_toggles": {"web": True, "bogus": True}},
+    ],
+)
+def test_reject_before_storing(tmp_path, changes):
+    with App(tmp_path) as app:
+        app.login("alice")
+        response = create(app, **changes)
+        assert response.status_code == 422, response.text
+        assert app.runtime.repos.watchlists.list_all() == []
+        assert app.runtime.repos.runs.list_for_owner("alice") == []
+
+
+def test_update_revalidates_without_replacing_on_failure(tmp_path):
+    with App(tmp_path) as app:
+        app.login("alice")
+        item = create(app).json()["item"]
+        for changes in (
+            {"brief": VAGUE},
+            {"source_toggles": {"web": False}},
+            {"cadence_minutes": 1},
+            {"owner_id": "bob"},
+            {"max_runs": None, "cadence_minutes": 1},
+            {"max_runs": True},
+            {"cadence_minutes": 1.5},
+            {"source_toggles": {"web": True, "bogus": True}},
+        ):
+            assert (
+                app.client.patch(
+                    f"/watchlist/{item['id']}",
+                    json={"revision": item["revision"], **changes},
+                ).status_code
+                == 422
+            )
+            assert app.client.get(f"/watchlist/{item['id']}").json()["item"] == item
+
+
+def test_optional_memory_and_short_cadence_with_limit(tmp_path):
+    with App(tmp_path) as app:
+        app.login("alice")
+        response = create(
+            app,
+            cadence_minutes=1,
+            max_runs=1,
+            source_toggles={"web": True, "memory": True},
+        )
+        assert response.status_code == 201
+
+
+def test_update_requires_current_revision_and_preserves_due_time(tmp_path):
+    with App(tmp_path) as app:
+        app.login("alice")
+        item = create(app).json()["item"]
+        due = item["next_tick_at"]
+        updated = app.client.patch(
+            f"/watchlist/{item['id']}",
+            json={"revision": item["revision"], "max_runs": 2},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["item"]["next_tick_at"] == due
+        assert updated.json()["item"]["revision"] == 2
+
+        stale = app.client.patch(
+            f"/watchlist/{item['id']}",
+            json={"revision": item["revision"], "max_runs": 3},
+        )
+        assert stale.status_code == 409
+        assert app.client.get(f"/watchlist/{item['id']}").json()["item"]["max_runs"] == 2
+
+        cleared = app.client.patch(
+            f"/watchlist/{item['id']}", json={"revision": 2, "max_runs": None}
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["item"]["max_runs"] is None
+        assert cleared.json()["item"]["next_tick_at"] == due
+
+        missing = app.client.patch(
+            f"/watchlist/{item['id']}", json={"max_runs": 3}
+        )
+        assert missing.status_code == 422
+
+
+def test_watchlist_run_must_match_standing_brief_and_source_configuration(tmp_path):
+    with App(tmp_path) as app:
+        app.login("alice")
+        response = create(app, source_toggles={"web": True, "memory": False})
+        assert response.status_code == 201, response.text
+        iid = response.json()["item"]["id"]
+        deps = app.runtime.deps
+        for brief in [
+            Brief(text="An unrelated Brief about solar panels"),
+            Brief(text=BRIEF, source_toggles={"web": True, "memory": True}),
+            Brief(text=BRIEF, source_toggles={"web": True, "documents": True}),
+            Brief(text=BRIEF, document_ids=["doc_1"]),
+        ]:
+            with pytest.raises(SubmissionRejected):
+                check_brief(deps, "alice", brief, watchlist_item_id=iid)
+            with pytest.raises(SubmissionRejected):
+                run_brief(deps, "alice", brief, watchlist_item_id=iid)
+        assert app.runtime.repos.watchlists.counts("alice", iid) == (0, 0, 0)
+        # False and omitted toggles mean the same configuration.
+        for toggles in [{"web": True}, {"web": True, "memory": False, "documents": False}]:
+            checked = check_brief(
+                deps, "alice", Brief(text=BRIEF, source_toggles=toggles), watchlist_item_id=iid
+            )
+            assert checked.watchlist_item_id == iid

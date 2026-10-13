@@ -29,6 +29,11 @@ from insightforge_agent.domain.models import (
 )
 from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.plan import SubTask
+from insightforge_agent.stores.run_rows import insert_run_row, run_from_row
+from insightforge_agent.stores.watchlist import (
+    SCHEMA as WATCHLIST_SCHEMA,
+    SqliteWatchlistRepository,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -118,20 +123,11 @@ class SqliteRunRepository(_Base):
     def add(self, run: Run) -> None:
         try:
             with self._db:
-                self._db.execute(
-                    "INSERT INTO runs VALUES (?,?,?,?,?,?,?)",
-                    (run.owner_id, run.id, run.brief, run.state.value,
-                     run.created_at.isoformat(), run.watchlist_item_id,
-                     run.clarification.model_dump_json() if run.clarification else None),
-                )
+                insert_run_row(self._db, run)
         except sqlite3.IntegrityError as e:
             raise ValueError(f"run {run.id} already exists") from e
 
-    @staticmethod
-    def _row(row) -> Run:
-        return Run(owner_id=row[0], id=row[1], brief=row[2], state=RunState(row[3]),
-                   created_at=_dt(row[4]), watchlist_item_id=row[5],
-                   clarification=Clarification.model_validate_json(row[6]) if row[6] else None)
+    _row = staticmethod(run_from_row)
 
     def get(self, owner_id: str, run_id: str) -> Run:
         row = self._db.execute(
@@ -481,6 +477,11 @@ def _migrate(db: sqlite3.Connection) -> None:
     if "clarification" not in columns:  # T9
         with db:
             db.execute("ALTER TABLE runs ADD COLUMN clarification TEXT")
+    columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_baseline_failures)")}
+    if "schema_version" not in columns:  # T11 draft databases
+        with db:
+            db.execute("ALTER TABLE watchlist_baseline_failures "
+                       "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0")
 
 
 class SqliteRepos:
@@ -488,12 +489,13 @@ class SqliteRepos:
 
     def __init__(self, path: str = ":memory:") -> None:
         self._db = sqlite3.connect(path, check_same_thread=False)
-        self._db.executescript(SCHEMA)
+        self._db.executescript(SCHEMA + WATCHLIST_SCHEMA)
         _migrate(self._db)
         # Every repository method takes this one lock (see `_Base`), and callers that need
         # several calls to be atomic (a SourceStore operation) hold it around them. Re-entrant
         # for exactly that.
         self.lock = threading.RLock()
+        self.watchlists = SqliteWatchlistRepository(self._db, self.lock)
         self.runs = SqliteRunRepository(self._db, self.lock)
         self.subtasks = SqliteSubTaskRepository(self._db, self.lock)
         self.sources = SqliteSourceRepository(self._db, self.lock)

@@ -11,6 +11,8 @@ The order is what keeps every Run accounted for:
 4. A created Run whose work is cancelled before it starts (the process is shutting down) is
    settled FAILED with the reason in its log, never left in its first state."""
 
+from collections.abc import Callable
+
 from insightforge_agent.domain.contracts import Brief
 from insightforge_agent.domain.documents import Upload
 from insightforge_agent.domain.models import Run
@@ -32,13 +34,28 @@ class ResearchService:
         self._deps = deps
         self._executor = executor
 
-    def submit(self, owner_id: str, brief: Brief, uploads: list[Upload] | None = None,
-               watchlist_item_id: str | None = None) -> Run:
+    def submit(
+        self,
+        owner_id: str,
+        brief: Brief,
+        uploads: list[Upload] | None = None,
+        watchlist_item_id: str | None = None,
+        watchlist_revision: int | None = None,
+        admission_open: Callable[[], bool] | None = None,
+    ) -> Run:
         """The new Run as stored, before any of it has run. Raises SubmissionRejected (no Run),
         or the executor's WorkNotAccepted (no Run, except a Run created just as shutdown began,
         which is then already FAILED)."""
         deps = self._deps
-        checked = check_brief(deps, owner_id, brief, uploads, watchlist_item_id)
+        checked = check_brief(
+            deps,
+            owner_id,
+            brief,
+            uploads,
+            watchlist_item_id,
+            watchlist_revision,
+            admission_open,
+        )
         started = self._executor.admit(lambda: start_run(deps, checked),
                                        lambda s: carry_run(deps, s),
                                        self._not_started)

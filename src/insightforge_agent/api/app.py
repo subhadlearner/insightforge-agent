@@ -47,6 +47,8 @@ from insightforge_agent.api.clarify import clarification_router
 from insightforge_agent.api.reports import reports_router
 from insightforge_agent.api.research import research_router
 from insightforge_agent.api.session import PersonaSession
+from insightforge_agent.api.watchlist import watchlist_router
+from insightforge_agent.pipeline.watchlist import WatchlistService
 from insightforge_agent.config import Settings
 from insightforge_agent.pipeline.clarification import ClarificationService
 from insightforge_agent.pipeline.deps import Deps, TimeoutScheduler
@@ -54,6 +56,7 @@ from insightforge_agent.pipeline.executor import BoundedRunExecutor
 from insightforge_agent.pipeline.recovery import startup_sweep
 from insightforge_agent.pipeline.research import ResearchService
 from insightforge_agent.pipeline.wiring import build_deps, build_qdrant
+from insightforge_agent.scheduler.watchlist import WatchlistScheduler, install_watchlist_handler
 from insightforge_agent.scheduler.clarification import (
     ApsTimeoutScheduler,
     build_scheduler,
@@ -86,6 +89,7 @@ class Runtime:
     executor: BoundedRunExecutor
     clarifications: ClarificationService
     research: ResearchService
+    watchlists: WatchlistService
     recovered: Counter = field(default_factory=Counter)  # what the startup sweep did
     # Set once, when the process is stopping: open streams end. A Runtime is not restarted.
     closing: threading.Event = field(default_factory=threading.Event)
@@ -120,16 +124,25 @@ class Runtime:
         deps = (make_deps or _production_deps(settings, closers))(
             repos, SqliteSaver(ck), ApsTimeoutScheduler(scheduler))
         executor = BoundedRunExecutor(settings.run_concurrency, settings.run_queue_limit)
+        research = ResearchService(deps, executor)
+        closing = threading.Event()
+        schedules = WatchlistScheduler(deps, scheduler, research, closing)
+        deps.on_complete = schedules.completed
         return cls(settings=settings, session=session, repos=repos, deps=deps,
                    scheduler=scheduler, executor=executor,
                    clarifications=ClarificationService(deps, submit=executor.submit),
-                   research=ResearchService(deps, executor), _closers=closers)
+                   research=research, watchlists=WatchlistService(deps, schedules),
+                   closing=closing, _closers=closers)
 
     def start(self) -> None:
         self.scheduler.start(paused=True)
         install_timeout_handler(self.clarifications.time_out)
+        install_watchlist_handler(
+            self.watchlists.schedules.tick, self.watchlists.schedules.retry_baseline
+        )
         self.recovered = startup_sweep(self.deps, self.clarifications)
         logger.info("startup sweep: %s", dict(self.recovered))
+        self.watchlists.schedules.recover()
         self.scheduler.resume()
 
     def begin_shutdown(self) -> None:
@@ -143,6 +156,7 @@ class Runtime:
             self.scheduler.pause()
             self.scheduler.shutdown(wait=True)
         install_timeout_handler(None)
+        install_watchlist_handler(None)
         self.executor.shutdown()
         for close in reversed(self._closers):
             close()
@@ -169,6 +183,7 @@ def create_app(runtime: Runtime) -> FastAPI:
                                        runtime.settings.sse_max_stream_seconds,
                                        runtime.closing))
     app.include_router(clarification_router(runtime.clarifications, user_id))
+    app.include_router(watchlist_router(runtime.watchlists, user_id))
     app.include_router(reports_router(runtime.repos.reports, user_id))
     return app
 

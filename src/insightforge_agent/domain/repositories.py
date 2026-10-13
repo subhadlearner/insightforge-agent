@@ -2,9 +2,11 @@
 
 A record that does not exist, or belongs to someone else, is a NotFoundError."""
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from insightforge_agent.domain.watchlist import Baseline, WatchlistItem
 from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.models import (
     Clarification,
@@ -154,3 +156,56 @@ class EntityRepository(Protocol):
     def list_for_run(self, owner_id: str, run_id: str) -> list[ExtractedFact]:
         """In the order first stored."""
         ...
+
+
+@runtime_checkable
+class WatchlistRepository(Protocol):
+    """Configuration and atomic admission; Run rows are the durable max_runs counter.
+    System-only list_all is for startup reconciliation, never an API owner lookup.
+    """
+    def add(self, item: "WatchlistItem") -> None: ...
+    def get(self, owner_id: str, item_id: str) -> "WatchlistItem": ...
+    def list_for_owner(self, owner_id: str) -> list["WatchlistItem"]: ...
+    def list_all(self) -> list["WatchlistItem"]: ...
+    def update(
+        self,
+        item: "WatchlistItem",
+        expected_revision: int,
+        now: datetime | Callable[[], datetime],
+    ) -> "WatchlistItem": ...
+    def delete(self, owner_id: str, item_id: str) -> None: ...
+    def counts(self, owner_id: str, item_id: str) -> tuple[int, int, int]: ...
+    def recent_failed_runs(
+        self, owner_id: str, item_id: str, limit: int = 5
+    ) -> list[Run]:
+        """This item's newest Failed Runs, newest first, without scanning the owner's Runs."""
+        ...
+    def start(
+        self,
+        run: Run,
+        expected_revision: int,
+        admission_open: Callable[[], bool] | None = None,
+    ) -> None:
+        """Store a Run only when owned, current, below max_runs and without an active Run."""
+        ...
+    def take_tick(self, owner_id: str, item_id: str, revision: int,
+                  now: datetime) -> "WatchlistItem | None": ...
+    def skip_missed(self, owner_id: str, item_id: str, now: datetime) -> "WatchlistItem": ...
+    def baseline_candidates(
+        self, owner_id: str, item_id: str, schema_version: int
+    ) -> list[Report]:
+        """Usable COMPLETE Reports for this item, oldest first."""
+        ...
+    def reject_baseline_candidate(
+        self,
+        owner_id: str,
+        item_id: str,
+        run_id: str,
+        reason: str,
+        failed_at: datetime,
+        schema_version: int,
+    ) -> bool:
+        """Persist a corrupt candidate once; return whether this call first recorded it."""
+        ...
+    def baseline(self, owner_id: str, item_id: str) -> "Baseline | None": ...
+    def initialize_baseline(self, baseline: "Baseline") -> "Baseline": ...
