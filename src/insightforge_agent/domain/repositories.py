@@ -8,6 +8,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from insightforge_agent.domain.watchlist import Baseline, WatchlistItem
 from insightforge_agent.domain.contracts import ExtractedFact
+from insightforge_agent.domain.retention import FailureRecord
 from insightforge_agent.domain.models import (
     Clarification,
     Observation,
@@ -33,6 +34,16 @@ class RunRepository(Protocol):
         """Oldest first."""
         ...
     def set_state(self, owner_id: str, run_id: str, state: RunState) -> Run: ...
+
+    def fail(self, owner_id: str, run_id: str, *, reason: str, error_codes: list[str],
+             failed_at: datetime) -> Run:
+        """Run -> FAILED together with its failure record (one atomic write). The record's
+        stage is the state the Run was in; a Run that already has a record keeps it."""
+        ...
+
+    def failure(self, owner_id: str, run_id: str) -> FailureRecord:
+        """The Failed Run's compact record, which retention never removes."""
+        ...
 
     # Clarification (design.md section 2). Each is one atomic compare-and-set on the Run row;
     # a caller that loses gets ClarificationConflict and changes nothing.
@@ -134,7 +145,8 @@ class RunSummaryRepository(Protocol):
 @runtime_checkable
 class RunEventRepository(Protocol):
     def append(self, event: RunEvent) -> RunEvent:
-        """Assigns `seq`, which increases per append. Events are never changed or removed."""
+        """Assigns `seq`, which increases per append. Events are never changed. Retention
+        removes an expired Run's detailed events, keeping its stage and failure events."""
         ...
 
     def read_after(

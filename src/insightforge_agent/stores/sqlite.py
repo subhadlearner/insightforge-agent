@@ -28,8 +28,10 @@ from insightforge_agent.domain.models import (
     SubTaskStatus,
 )
 from insightforge_agent.domain.passages import check_passages
+from insightforge_agent.domain.retention import FailureRecord
 from insightforge_agent.domain.plan import SubTask
 from insightforge_agent.stores.diffs import SCHEMA as DIFF_SCHEMA, SqliteDiffRepository
+from insightforge_agent.stores.retention import SqliteRetentionRepository
 from insightforge_agent.stores.run_rows import insert_run_row, run_from_row
 from insightforge_agent.stores.watchlist import (
     SCHEMA as WATCHLIST_SCHEMA,
@@ -82,6 +84,11 @@ CREATE TABLE IF NOT EXISTS run_events (
 CREATE TABLE IF NOT EXISTS entities (
     owner_id TEXT NOT NULL, run_id TEXT NOT NULL, id TEXT NOT NULL, fact TEXT NOT NULL,
     PRIMARY KEY (owner_id, run_id, id)
+);
+CREATE TABLE IF NOT EXISTS run_failures (
+    owner_id TEXT NOT NULL, run_id TEXT NOT NULL, retention_starts_at TEXT NOT NULL,
+    failure TEXT NOT NULL,
+    PRIMARY KEY (owner_id, run_id)
 );
 CREATE TABLE IF NOT EXISTS run_summaries (
     owner_id TEXT NOT NULL, run_id TEXT NOT NULL, watchlist_item_id TEXT,
@@ -153,6 +160,35 @@ class SqliteRunRepository(_Base):
         if cur.rowcount == 0:
             raise NotFoundError(f"run {run_id}")
         return self.get(owner_id, run_id)
+
+    def fail(self, owner_id: str, run_id: str, *, reason: str, error_codes: list[str],
+             failed_at: datetime) -> Run:
+        """Mark the Run FAILED and store its failure record in one transaction, so a Failed
+        Run never lacks its record. The stage is the state the Run was in. A Run that already
+        has a record keeps the first one."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            with self._db:
+                row = self._db.execute(
+                    "SELECT * FROM runs WHERE owner_id=? AND id=?", (owner_id, run_id)).fetchone()
+                if row is None:
+                    raise NotFoundError(f"run {run_id}")
+                record = FailureRecord.at_failure(self._row(row), reason=reason,
+                                                  error_codes=error_codes, failed_at=failed_at)
+                self._db.execute("UPDATE runs SET state=? WHERE owner_id=? AND id=?",
+                                 (RunState.FAILED.value, owner_id, run_id))
+                self._db.execute(
+                    "INSERT OR IGNORE INTO run_failures VALUES (?,?,?,?)",
+                    (owner_id, run_id, failed_at.isoformat(), record.model_dump_json()))
+            return self.get(owner_id, run_id)
+
+    def failure(self, owner_id: str, run_id: str) -> FailureRecord:
+        row = self._db.execute(
+            "SELECT failure FROM run_failures WHERE owner_id=? AND run_id=?", (owner_id, run_id)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"failure record for run {run_id}")
+        return FailureRecord.model_validate_json(row[0])
 
     def _compare_and_set(self, owner_id: str, run_id: str, sql: str, params: tuple,
                          conflict: str) -> Run:
@@ -512,6 +548,7 @@ class SqliteRepos:
         self.events = SqliteRunEventRepository(self._db, self.lock)
         self.entities = SqliteEntityRepository(self._db, self.lock)
         self.summaries = SqliteRunSummaryRepository(self._db, self.lock)
+        self.retention = SqliteRetentionRepository(self._db, self.lock)
 
     def close(self) -> None:
         with self.lock:

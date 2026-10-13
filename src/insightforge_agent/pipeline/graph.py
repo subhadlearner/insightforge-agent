@@ -66,6 +66,7 @@ from insightforge_agent.domain.models import (
     SubTaskRecord,
     SubTaskStatus,
 )
+from insightforge_agent.domain import retention
 from insightforge_agent.domain.plan import (
     AGENT_FOR_SOURCE_TYPE,
     MAX_ASPECTS,
@@ -727,7 +728,8 @@ def resume_run(deps: Deps, owner_id: str, run_id: str,
     config = outer_config(run_thread_id(owner_id, run_id))
     if not graph.get_state(config).interrupts:
         return settle_interrupted(deps, owner_id, run_id,
-                                  "the Run's checkpoint holds no question to resume")
+                                  "the Run's checkpoint holds no question to resume",
+                                  retention.CHECKPOINT_MISSING)
     return drive(deps, owner_id, run_id, graph,
                  Command(resume={"question": c.question, "resolution": c.resolution,
                                  "answer": c.answer}),
@@ -754,8 +756,10 @@ def drive(deps: Deps, owner_id: str, run_id: str, graph, graph_input, config: di
             if on_state:
                 on_state({k: v for k, v in snapshot.items() if k != "__interrupt__"})
     except Exception as e:  # noqa: BLE001 - any failure ends the Run, with its reason logged
-        reason = str(e) if isinstance(e, RunFailed) else f"{type(e).__name__}: {e}"
-        return settle_interrupted(deps, owner_id, run_id, reason)
+        if isinstance(e, RunFailed):
+            return settle_interrupted(deps, owner_id, run_id, str(e), retention.PIPELINE_FAILURE)
+        return settle_interrupted(deps, owner_id, run_id, f"{type(e).__name__}: {e}",
+                                  retention.UNEXPECTED_ERROR)
     pending = graph.get_state(config).interrupts
     if pending:
         return await_clarification(deps, owner_id, run_id, pending[0].value["question"])
@@ -772,7 +776,8 @@ def await_clarification(deps: Deps, owner_id: str, run_id: str, question: str) -
     try:
         run = deps.repos.runs.open_clarification(owner_id, run_id, clarification)
     except ClarificationConflict as e:
-        return settle_interrupted(deps, owner_id, run_id, f"cannot wait for an answer: {e}")
+        return settle_interrupted(deps, owner_id, run_id, f"cannot wait for an answer: {e}",
+                                  retention.CLARIFICATION_CONFLICT)
     deps.log(owner_id, run_id, "stage", state=RunState.AWAITING_CLARIFICATION.value)
     deps.log(owner_id, run_id, "clarification_requested", question=question,
              deadline=clarification.deadline.isoformat())
@@ -784,21 +789,27 @@ def await_clarification(deps: Deps, owner_id: str, run_id: str, question: str) -
     return run
 
 
-def settle_interrupted(deps: Deps, owner_id: str, run_id: str, reason: str) -> Run:
+def settle_interrupted(deps: Deps, owner_id: str, run_id: str, reason: str,
+                       code: str = retention.UNEXPECTED_ERROR) -> Run:
     """The final state of a Run whose graph stopped with an error. A Run that already stored its
     Report is COMPLETE, never FAILED with a Report, but only once that Report is finalised
     (summarised and indexed as memory): finalisation is retried here, and a Report that still
-    cannot be finalised leaves the Run FAILED, so it never feeds memory half-finished."""
+    cannot be finalised leaves the Run FAILED, so it never feeds memory half-finished. Every
+    FAILED Run gets its failure record (reason, stage, `code`) in the same write."""
     try:
         report = deps.repos.reports.get_for_run(owner_id, run_id)
         if not report_finalised(deps, owner_id, run_id):
             finalise_report(deps, deps.repos.runs.get(owner_id, run_id), report)
     except NotFoundError:
         deps.log(owner_id, run_id, "run_failed", reason=reason)
-        return deps.repos.runs.set_state(owner_id, run_id, RunState.FAILED)
+        return deps.repos.runs.fail(owner_id, run_id, reason=reason, error_codes=[code],
+                                    failed_at=deps.now())
     except Exception as finalising:  # noqa: BLE001 - Qdrant or the repository unavailable
-        deps.log(owner_id, run_id, "run_failed", reason=f"{reason}; the Report could not be "
-                 f"finalised: {type(finalising).__name__}: {finalising}")
-        return deps.repos.runs.set_state(owner_id, run_id, RunState.FAILED)
+        reason = (f"{reason}; the Report could not be finalised: "
+                  f"{type(finalising).__name__}: {finalising}")
+        deps.log(owner_id, run_id, "run_failed", reason=reason)
+        return deps.repos.runs.fail(owner_id, run_id, reason=reason,
+                                    error_codes=[code, retention.REPORT_NOT_FINALISED],
+                                    failed_at=deps.now())
     deps.log(owner_id, run_id, "completion_recovered", detail=reason)
     return deps.completed(deps.repos.runs.set_state(owner_id, run_id, RunState.COMPLETE))

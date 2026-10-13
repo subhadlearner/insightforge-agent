@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # Diff (T12): consecutive Not reconfirmed Diffs after which a Finding shows as unconfirmed.
     not_reconfirmed_threshold: int = Field(default=3, ge=1)
 
+    # Retention (T13): days after a terminal Run (its Report, or its failure) before its
+    # unreferenced raw material may be removed by the daily sweep.
+    retention_days: int = Field(default=30, gt=0)
+
     # Search: ordered; a provider that fails falls through to the next.
     search_providers: Annotated[list[SearchProvider], NoDecode] = ["tavily", "serpapi"]
 

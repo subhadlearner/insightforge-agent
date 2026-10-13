@@ -14,6 +14,7 @@ from insightforge_agent.api import app as app_module
 from insightforge_agent.domain.models import Run, RunState
 from insightforge_agent.pipeline.executor import ExecutorClosed
 from insightforge_agent.scheduler import clarification as timeouts_module
+from insightforge_agent.scheduler.retention import JOB_ID as RETENTION_JOB
 from insightforge_agent.scheduler.clarification import JOB_TABLE, ApsTimeoutScheduler, job_id
 from tests.api.support import QUESTION, T0, VAGUE, App, Gate, wait_until
 from tests.pipeline import fakes
@@ -24,11 +25,15 @@ ANSWER = "Electric vehicles in China and the US, 2025: BYD and Tesla sales and p
 
 
 def stored_jobs(tmp_path) -> list[str]:
+    """The stored jobs other than the app's daily retention job (T13), which is always there
+    once the app has started."""
     db = sqlite3.connect(tmp_path / "app.db")
     try:
-        return [r[0] for r in db.execute(f"SELECT id FROM {JOB_TABLE}")]
+        ids = [r[0] for r in db.execute(f"SELECT id FROM {JOB_TABLE}")]
     finally:
         db.close()
+    assert RETENTION_JOB in ids
+    return [i for i in ids if i != RETENTION_JOB]
 
 
 def awaiting(app: App, persona: str = "alice") -> str:

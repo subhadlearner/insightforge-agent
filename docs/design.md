@@ -88,7 +88,7 @@ Graph state carries IDs and small structured values only, never Source bodies or
 - **Web Search.** The provider is chosen by setting. Fetches the full body of the top 5 results, splits it into Passages, scores credibility, skips paywalled pages and logs them. The one-line summary is written inside the fetch tool.
 - **Doc Reader.** Semantic search over `doc_chunks`, k = 8, returning chunk IDs and never text.
 - **Memory researcher.** Searches `report_sections` for the User's prior completed Reports. It never searches Failed Runs, and in a Watchlist Run it never searches Reports from the same Watchlist Item. What it finds is background only: it produces Historical Claims, never current Evidence.
-- **Extractor.** Works one Source at a time in Passage batches. It persists entities and structured facts with their Passage references to the `entities` collection as it goes. Conflicts are then detected over the structured facts grouped by entity, never over raw text, and marked `conflict: true`.
+- **Extractor.** Works one Source at a time in Passage batches. It persists entities and structured facts with their Passage references to the SQLite `entities` table as it goes. Conflicts are then detected over the structured facts grouped by entity, never over raw text, and marked `conflict: true`.
 - **Synthesis.** Works one Sub-task at a time over that Sub-task's Passages and drafts Evidence items, each with its supporting Passage IDs, `as_of_period` and scope. After all Sub-tasks are done, it deduplicates and merges over the structured items, then ranks and compresses to budget.
   - **Validation.** Every candidate Passage first passes a deterministic provenance check and a literal-value check (every number and named entity in the item appears in the Passage). Then one bounded entailment call per Evidence item judges its candidates as `SUPPORTED`, `CONTRADICTED` or `INSUFFICIENT_EVIDENCE`. The call is chunked if the candidates exceed the per-call cap and counts against the Run's token cap.
   - **Confidence and primary Passage.** Only `SUPPORTED` Passages count toward Confidence. The primary Passage is the supported one with the highest Source credibility, then the highest relevance to the item, then the lowest Passage ID. An item with no supported Passage is dropped and logged.
@@ -102,13 +102,14 @@ Graph state carries IDs and small structured values only, never Source bodies or
 ## 6. Persistence
 
 - **Database (SQLite behind repository interfaces).** Users' Runs, Sub-tasks, Sources, Observations, Passages, Reports, Watchlist Items, Baselines, the Diff log, Alerts, `run_events`, failure records, revoked share links, and the APScheduler job store.
-- **Qdrant.** `doc_chunks`, `entities` (cross-run), `report_sections` (prior Reports). One configurable embedding model, with its name recorded in each collection's metadata. Every query is filtered by `owner_id` inside the repository. `doc_chunks` is Run-scoped for visibility only: a Run searches only its own uploads, but chunks are kept while a Report cites them.
-- **Progress.** The pipeline appends to `run_events`. The SSE endpoint tails it with a cursor (`Last-Event-ID`), so a reconnecting client loses nothing.
+- **Qdrant.** `doc_chunks` and `report_sections` (prior Reports). Extracted entities and facts are in the SQLite `entities` table; there is no Qdrant `entities` collection. One configurable embedding model, with its name recorded in each collection's metadata. Every query is filtered by `owner_id` inside the repository. `doc_chunks` is Run-scoped for visibility only: a Run searches only its own uploads, but chunks are kept while a Report cites them.
+- **Progress.** The pipeline appends to `run_events`. The SSE endpoint tails it with a cursor (`Last-Event-ID`), so a reconnecting client loses nothing. Retention later removes an expired Run's detailed events and keeps its stage trail and failure events (T13 notes).
 - **Retention.** A periodic sweep removes material based on what still refers to it, not on the originating Run's status.
   - **Protected material.** A Source, Observation, Passage or document chunk cited by a Report, or by the evidence behind a Baseline Finding, is never removed.
   - **Failed Runs.** Their raw material expires after a configurable retention period. A small failure record survives it: the reason, timestamps, the stage, and error codes. Failed Run material never reaches the memory researcher.
   - **Completed Runs.** Material from a completed Run that nothing retained refers to becomes eligible for removal after the same period.
   - **Entities.** An extracted entity whose underlying Passage is removed keeps the entity with its provenance marked unavailable, never a dangling reference.
+  - **Implementation.** The cutoff, the protected records, the failure record and the cross-store crash behaviour are in the T13 notes.
 
 ## 7. Credibility, Confidence and fact-checking
 
@@ -168,7 +169,7 @@ One typed settings object (pydantic-settings, from the environment and `.env`). 
   - **Startup validation.** At startup at least one listed search provider must be usable, meaning it has its credentials. A missing key for an optional fallback does not stop the app while another listed provider is usable, and that provider is logged as skipped. If every listed provider lacks credentials, the app refuses to start.
 - **Tests.** The default `pytest` run uses fake or scripted chat models, recorded search fixtures and in-memory Qdrant, so it needs no keys or Docker. Tests that need a real model or server carry a `live` marker and run on demand. Dev uses `docker compose` for a Qdrant server.
 - Provider keys, Qdrant URL, database URL, personas file path.
-- Evidence token budget 6,000, per-call Passage token cap, Sub-tasks 3 to 6, Fact-Checker rate 20% (minimum 5) and similarity threshold 0.85, recency and credibility bucket thresholds, clarification timeout 30 minutes, Not reconfirmed display threshold 3, retention period, share-link TTL 7 days, JWT secret.
+- Evidence token budget 6,000, per-call Passage token cap, Sub-tasks 3 to 6, Fact-Checker rate 20% (minimum 5) and similarity threshold 0.85, recency and credibility bucket thresholds, clarification timeout 30 minutes, Not reconfirmed display threshold 3, retention period (`RETENTION_DAYS`, default 30), share-link TTL 7 days, JWT secret.
 - Limits, all configurable: Run wall-clock timeout, per-Sub-task timeout, per-fetch timeout (also applied to Fact-Checker re-fetches), LLM token cap per Run, `task` recursion depth. A Sub-task limit fails the Sub-task. A Run limit fails the Run with the reason in the Run log.
 - Runtime estimate shown before submit is `base + n_pdfs x ingest_cost + per-source costs`, refined live once the real Sub-task count arrives.
 
@@ -272,7 +273,7 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 
 ### T5 notes: Extraction and synthesis
 
-- **Extraction** (`pipeline/extract.py`): one light-model call per Passage batch, one Source at a time. Each fact carries `entity, predicate, value, scope, period` plus its Passage reference and is stored in the `entities` repository (`EntityRepository`, SQLite or in memory; Qdrant arrives with T7/T8) after each Source. Conflict detection (`domain/extraction.py`) groups facts by normalised entity, predicate and scope and flags different values for overlapping periods, with no model call. An UNKNOWN or unreadable period (`domain/periods.py`) overlaps nothing.
+- **Extraction** (`pipeline/extract.py`): one light-model call per Passage batch, one Source at a time. Each fact carries `entity, predicate, value, scope, period` plus its Passage reference and is stored in the `entities` repository (`EntityRepository`, SQLite or in memory; it stays in SQLite, there is no Qdrant collection for it) after each Source. Conflict detection (`domain/extraction.py`) groups facts by normalised entity, predicate and scope and flags different values for overlapping periods, with no model call. An UNKNOWN or unreadable period (`domain/periods.py`) overlaps nothing.
 - **Synthesis** (`pipeline/synthesize.py`): draft per Sub-task in Passage batches, merge candidates with the same structured key (the most important Sub-task keeps the item; since F4 an UNKNOWN-period key also names the Observations cited, see below), then validate each item. Provenance gates every candidate. The literal-value check (every number, declared entity and capitalised non-initial word must appear in the Passage) decides which Passages may *support* an item; one that fails it can still be judged `CONTRADICTED`. One entailment call per item, chunked at the per-call cap. A `SUPPORTED` verdict on a Passage that failed the literal check is ignored.
 - **Contradictions** need Extraction facts at the contradicting Passage with the item's entity, predicate and scope and an overlapping period; otherwise the Passage is logged as `contradiction_ignored`. An item with no structured entity/predicate therefore never becomes conflicting.
 - **As-of period:** stated, else derived from the Observation date for a present-state assertion from a Source with no publication date (`derived_from = observation_date`, logged as `as_of_derived`), else `UNKNOWN` with `temporally_ambiguous`. A Source that has a publication date but states no period is `UNKNOWN`, as the spec words it.
@@ -328,7 +329,7 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Embeddings**: `FastEmbedEmbedder` (`BAAI/bge-small-en-v1.5`, 384 dimensions) is wired in production for Doc Reader search, Evidence relevance and Fact-Checker span retrieval (one model, section 10). Model files download once on first use, or up front with `insightforge-agent models download`.
 - **Credibility**: an uploaded PDF scores 0.7 (`UPLOADED_DOCUMENT_CREDIBILITY`), a user-supplied primary document; document type and date are not inferred yet.
 - **Concurrency**: parallel Web and Document Researchers share one repository connection. The repositories object owns one re-entrant lock (`SqliteRepos.lock`, `MemoryRepos.lock`); both Researcher tools and the dispatch guard's rejection log take it only around repository calls, never around search, fetching, embedding or model calls.
-- **Retention**: nothing deletes a chunk; a later Run cannot search earlier uploads (visibility), while a Report's citations keep resolving. The sweep that removes uncited chunks is T13.
+- **Retention**: a later Run cannot search earlier uploads (visibility), while a Report's citations keep resolving. Since T13 the retention sweep removes the chunks (Passages and `doc_chunks` points) of an expired Run's uploads that nothing retained refers to (see the T13 notes).
 - **Tests**: scripted end to end with in-memory Qdrant (`tests/pipeline/test_t7_documents.py`); real Docling, fastembed and Qdrant offline from the local model cache (`tests/integration`, `-m integration`, excluded by default and in CI).
 
 ### T6 notes: Writer, Fact-Checker and citations
@@ -549,3 +550,79 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Tests:** `tests/domain/test_t12_findings.py`, `tests/domain/test_t12_diff.py`,
   `tests/stores/test_t12_diff_lifecycle.py`, `tests/stores/test_t12_webhook.py`,
   `tests/api/test_t12_diff_app.py`.
+
+### T13 notes: Retention sweep
+
+- **Cutoff** (`domain/retention.py`): `cutoff = now - RETENTION_DAYS` (default 30, a positive
+  integer), on the injectable UTC clock. A terminal Run is expired when its terminal timestamp
+  is at or before the cutoff: a COMPLETE Run's Report `created_at`, a FAILED Run's failure
+  record `retention_starts_at`. A non-terminal Run, a COMPLETE Run without a Report and a FAILED
+  Run without a record are never candidates, however old.
+- **Protected references** (`ProtectedRefs`, per User): every persisted Report (Evidence item
+  `primary`, `supporting`, `contradicting`; Historical item `primary`, `supporting`; verdict
+  `original`, `matched`; a FAILED Run's stored Report too), every Baseline seed, established
+  Finding, Baseline-normalisation detail and Diff log entry (both its Finding and the previous
+  one), and Alerts. Each record is validated against its model and then walked whole, so a
+  reference in a field the collector does not name is still protected. A record that is not
+  JSON or fails validation raises `MalformedRetentionRoot`, and the sweep removes nothing of
+  that User; so does a Passage `index` that is not a non-negative integer. A protected Passage
+  keeps its Observation and that Observation's Source; an Observation named only by
+  `observation_dates` keeps its row; a reference to an Observation with no Passage index keeps
+  every Passage of it.
+- **What goes** (`stores/retention.py`), only for an expired Run: unprotected Passages of its
+  Observations (a web Observation Passage by Passage; an uploaded document only whole, because a
+  document Claim is fact-checked against every stored chunk of its Observation); an Observation
+  and its split marker once no Passage is left and nothing names it; its Sub-task rows; its
+  links to Sources it no longer holds an Observation of (a link to retained material stays, so
+  `SourceRepository.list_for_run` still lists the Sources behind an expired Run's citations);
+  its progress events except `stage`, `run_failed` and `completion_recovered`; a Source with no
+  Observation, no Run link and no reference. `sources.run_id` decides nothing.
+  Runs, Reports, Run summaries, failure records, extracted facts, Baseline seeds, established
+  Findings, the Diff log, Alerts and `report_sections` points are never removed.
+- **Extracted facts**: `ExtractedFact.provenance` is `available` (Source and Passage set) or
+  `unavailable` (both None), enforced by a validator. When a Passage is removed, its facts are
+  rewritten as unavailable in the same transaction; their substantive fields are unchanged.
+  Rows stored before T13 read as `available`. Extraction and conflict detection are unchanged.
+- **Failure records** (`FailureRecord`, table `run_failures`): owner, Run, Run creation time,
+  failure time, `retention_starts_at`, stage (the state the Run failed in), reason (at most
+  1,000 characters) and error codes. `RunRepository.fail` writes the record and FAILED in one
+  `BEGIN IMMEDIATE` transaction; the first record is kept. Every path to FAILED goes through
+  `settle_interrupted` with a code: `pipeline_failure` (RunFailed), `unexpected_error`,
+  `process_interrupted` (startup sweep), `not_started` (shutdown cancellation),
+  `checkpoint_missing`, `clarification_conflict`, plus `report_not_finalised` when a stored
+  Report could not be finalised. A FAILED Run from before T13 is backfilled by the next sweep:
+  `backfilled`, no failure time or stage, the logged `run_failed` reason when there is one,
+  code `legacy_unrecorded`, and retention starting at backfill time (never `Run.created_at`).
+- **Batches and atomicity**: per User, about 100 Passages per batch (an uploaded document is
+  never split, so its batch may be larger). The User's retained records are read under the
+  shared lock once per sweep and interpreted outside it, to plan; `apply` re-reads protection
+  and eligibility and deletes in one `BEGIN IMMEDIATE` transaction, so a Report, Diff commit or
+  Source link written meanwhile is seen. The lock is not held between batches.
+- **Qdrant and SQLite** (`DocChunkIndex.delete`): exact point IDs (owner, Run, Observation,
+  index), filtered by owner and Run, idempotent. Inside `apply`, after the re-check and before
+  the SQLite delete, so a chunk that became protected is never removed from Qdrant; this holds
+  the lock for one Qdrant call per batch that has document chunks, bounded by
+  `DELETE_TIMEOUT_SECONDS` (10 s, applied to the HTTP request and as the server-side timeout). If Qdrant fails,
+  those Observations are kept and skipped for the rest of the sweep. If the process fails after
+  Qdrant and before SQLite commits, SQLite is unchanged and the next sweep removes the same
+  chunks again; a missing point is not an error. Without a `doc_chunks` index wired, document
+  chunks are kept.
+- **Scheduling** (`scheduler/retention.py`): one persisted APScheduler interval job,
+  `retention-sweep`, daily, first run 10 minutes after it is first stored, coalesced, one
+  instance. Startup installs the handler while paused and adds the job only if the job store
+  lacks it, so restarts never postpone it, and a missed run fires once after startup. Shutdown
+  sets the closing event (the sweep stops between batches) and removes the handler. A
+  re-entrant call returns at once. A sweep with nothing newly expired changes nothing.
+- **Limitations**: there is no endpoint or UI for failure records yet (T15); the Watchlist
+  dashboard still lists Failed Runs from Run rows. LangGraph checkpoints are not compacted, so
+  a Run's checkpoint may still hold IDs of removed Passages (never their text). Passages and
+  split markers left by a crash before their Observation row was stored carry no Run and are
+  not swept. `apply` re-reads all of a User's retained records per batch, so a sweep's cost
+  grows with the User's Reports and Watchlist history. The in-memory repositories have failure
+  records but no sweep.
+- **Tests**: `tests/stores/test_t13_retention.py` (each protection rule, boundaries, Qdrant
+  failures, crash between stores, idempotency, restart, owner isolation, malformed records,
+  writes racing a batch), `tests/stores/test_t13_watchlist_regression.py` (Baseline seeding,
+  Diffs and Alerts after sweeps), `tests/pipeline/test_t13_retention_pipeline.py` (failure
+  records on every path; citations, memory and inherited fact-checks after a sweep of real
+  Runs) and `tests/test_t13_scheduler.py` (job store, restart, app registration).

@@ -21,6 +21,10 @@ from insightforge_agent.stores.vector_collections import ensure_collection
 COLLECTION = "doc_chunks"
 DEFAULT_K = 8
 _NAMESPACE = uuid.UUID("6f1c2a52-3c1e-4d0b-9a35-0d6c1f0e7a11")
+# The retention sweep deletes while holding the repositories' lock and an open SQLite
+# transaction, so the call must end in bounded time whatever the client's own default. Applied
+# to the HTTP request and as the server-side operation timeout.
+DELETE_TIMEOUT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -87,3 +91,19 @@ class DocChunkIndex:
                                index=p.payload["passage_index"]),
             source_id=p.payload["source_id"], source_filename=p.payload["source_filename"],
             page=p.payload["page"], relevance_score=round(p.score, 6)) for p in found]
+
+    def delete(self, owner_id: str, run_id: str, refs: list[PassageRef]) -> None:
+        """Remove exactly these chunks of one Run's uploads: the points `index` wrote for them,
+        and only while they carry this owner and Run. Idempotent: a chunk with no point (never
+        indexed, or already removed) is not an error. Raises if Qdrant fails, and then the
+        caller must keep the Passages. Bounded by `DELETE_TIMEOUT_SECONDS`; a timeout raises."""
+        self._ensure_collection()
+        if not refs:
+            return
+        ids = [self._point_id(owner_id, run_id, ref) for ref in refs]
+        self._client.delete(COLLECTION, points_selector=models.FilterSelector(
+            filter=models.Filter(must=[
+                models.HasIdCondition(has_id=ids),
+                models.FieldCondition(key="owner_id", match=models.MatchValue(value=owner_id)),
+                models.FieldCondition(key="run_id", match=models.MatchValue(value=run_id)),
+            ])), wait=True, timeout=DELETE_TIMEOUT_SECONDS)
