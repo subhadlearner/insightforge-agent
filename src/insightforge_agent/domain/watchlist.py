@@ -161,3 +161,6 @@ class WatchlistDashboard(BaseModel):
     failed_runs: int
     recent_failed_runs: list[Run]
     baseline: Baseline | None = None
+    # none: no successful Run; seed: T11 input awaiting normalisation; established: the
+    # normalised per-Finding state that Diffs compare against (T12).
+    baseline_state: Literal["none", "seed", "established"] = "none"

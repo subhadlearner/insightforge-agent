@@ -134,6 +134,12 @@ class SqliteWatchlistRepository:
                 "DELETE FROM watchlist_baseline_failures WHERE owner_id=? AND item_id=?",
                 (owner_id, item_id),
             )
+            # T12 established state goes with the seed; the Diff log and Alerts are kept.
+            for table in ("watchlist_findings", "watchlist_baseline_state"):
+                self._db.execute(
+                    f"DELETE FROM {table} WHERE owner_id=? AND item_id=?",
+                    (owner_id, item_id),
+                )
 
     def counts(self, owner_id, item_id) -> tuple[int, int, int]:
         with self._lock:
@@ -278,6 +284,17 @@ class SqliteWatchlistRepository:
                 (owner_id, item_id),
             ).fetchone()
             return Baseline.model_validate_json(row[0]) if row else None
+
+    def baseline_state(self, owner_id, item_id) -> str:
+        with self._lock:
+            self.get(owner_id, item_id)
+            established = self._db.execute(
+                "SELECT 1 FROM watchlist_baseline_state WHERE owner_id=? AND item_id=?",
+                (owner_id, item_id),
+            ).fetchone()
+            if established:
+                return "established"
+            return "seed" if self.baseline(owner_id, item_id) else "none"
 
     def initialize_baseline(self, baseline: Baseline) -> Baseline:
         with self._write():
@@ -459,6 +476,10 @@ class MemoryWatchlistRepository:
             self.get(owner_id, item_id)
             baseline = self._baselines.get((owner_id, item_id))
             return baseline.model_copy(deep=True) if baseline else None
+
+    def baseline_state(self, owner_id, item_id):
+        """The fake has no Diff store (T12 runs on SQLite only): never established."""
+        return "seed" if self.baseline(owner_id, item_id) else "none"
 
     def initialize_baseline(self, baseline):
         with self._lock:

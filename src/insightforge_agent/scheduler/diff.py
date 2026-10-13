@@ -1,0 +1,193 @@
+"""The Diff Agent: per Watchlist Item, after COMPLETE, outside the research graph (section 8).
+
+Work for an item is the ordered queue of its COMPLETE Runs after the initializing one whose
+Diff is unfinished. A persisted APScheduler job (`watchlist-diff:<owner>:<item>`) processes it:
+
+1. The T11 seed is normalised into established Findings first (idempotently), before any Diff.
+2. Each Run in order: its current Claims are normalised (the same eligibility as the seed),
+   compared with the established state, and the result, the Baseline update and any Alert are
+   committed in one transaction (`SqliteDiffRepository.commit`).
+3. A failed attempt is retried once, after `retry_delay`, and later Runs wait for it. A second
+   failure is permanent: the Baseline is unchanged and the next Diff reports the net change.
+
+Nothing here changes a Run's status. Every step that matters is decided by persistent
+constraints; the per-item lock only avoids duplicate work inside this process.
+"""
+
+import logging
+import threading
+from collections.abc import Callable
+from datetime import timedelta
+
+from insightforge_agent.agents.finding_judge import FindingJudge
+from insightforge_agent.domain.alerts import (
+    MAX_DIFF_ATTEMPTS,
+    Alert,
+    WebhookDelivery,
+    alert_change,
+    alert_id,
+)
+from insightforge_agent.domain.diff import DEFAULT_UNCONFIRMED_AFTER, compare, establish
+from insightforge_agent.domain.errors import NotFoundError
+from insightforge_agent.domain.findings import DEFAULT_REGISTRY, PredicateRegistry
+from insightforge_agent.pipeline.findings import normalize_seeds
+from insightforge_agent.scheduler.watchlist import diff_job_id, report_seeds
+from insightforge_agent.stores.diffs import DiffConflict
+
+logger = logging.getLogger(__name__)
+_handler: Callable | None = None
+DIFF_RETRY_DELAY = timedelta(minutes=1)
+
+
+def install_diff_handler(handler):
+    global _handler
+    _handler = handler
+
+
+def fire_diff(owner_id, item_id):
+    if _handler is None:
+        logger.error("Diff fired with no handler: %s/%s", owner_id, item_id)
+        return
+    _handler(owner_id, item_id)
+
+
+class DiffService:
+    def __init__(
+        self,
+        deps,
+        scheduler,
+        closing=None,
+        *,
+        registry: PredicateRegistry = DEFAULT_REGISTRY,
+        judge: FindingJudge | None = None,
+        webhooks=None,
+        webhook_url_for: Callable[[str], str | None] = lambda owner_id: None,
+        unconfirmed_after: int = DEFAULT_UNCONFIRMED_AFTER,
+        retry_delay: timedelta = DIFF_RETRY_DELAY,
+    ):
+        self.deps, self.scheduler = deps, scheduler
+        self.closing = closing if closing is not None else threading.Event()
+        self.registry = registry
+        self.judge = judge if judge is not None else FindingJudge(deps.light_model, registry)
+        self.webhooks, self.webhook_url_for = webhooks, webhook_url_for
+        self.unconfirmed_after, self.retry_delay = unconfirmed_after, retry_delay
+        self._locks: dict[tuple[str, str], threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def schedule(self, owner_id, item_id, delay: timedelta = timedelta(0)):
+        """Never raises: startup recovery schedules every item again."""
+        if self.closing.is_set() or self.scheduler is None:
+            return
+        try:
+            self.scheduler.add_job(
+                f"{__name__}:fire_diff",
+                trigger="date",
+                # Immediate work runs on the scheduler's own clock; a retry is anchored to
+                # the application clock, like the T11 Baseline retry.
+                run_date=self.deps.now() + delay if delay else None,
+                args=[owner_id, item_id],
+                id=diff_job_id(owner_id, item_id),
+                replace_existing=True,
+                misfire_grace_time=None,
+            )
+        except Exception:
+            logger.exception("Could not schedule Diff for %s/%s", owner_id, item_id)
+
+    def run_item(self, owner_id, item_id):
+        """The job callback. Never raises into the scheduler or a Run."""
+        if self.closing.is_set():
+            return
+        try:
+            self.process(owner_id, item_id)
+        except NotFoundError:
+            return  # the item was deleted; its Runs and Reports remain
+        except Exception:
+            logger.exception("Diff processing deferred for %s/%s", owner_id, item_id)
+            self.schedule(owner_id, item_id, self.retry_delay)
+
+    def _lock(self, owner_id, item_id) -> threading.Lock:
+        with self._locks_guard:
+            return self._locks.setdefault((owner_id, item_id), threading.Lock())
+
+    def process(self, owner_id, item_id):
+        with self._lock(owner_id, item_id):
+            if not self.ensure_established(owner_id, item_id):
+                return
+            repo = self.deps.repos.diffs
+            while not self.closing.is_set():
+                nxt = repo.next_run(owner_id, item_id)
+                if nxt is None:
+                    return
+                run_id, report_id = nxt
+                attempt = repo.begin_attempt(owner_id, item_id, run_id, report_id,
+                                             MAX_DIFF_ATTEMPTS, self.deps.now())
+                if attempt is None:
+                    continue  # already terminal (or attempts exhausted by a crash)
+                try:
+                    self._diff(owner_id, item_id, run_id, report_id)
+                except NotFoundError:
+                    raise
+                except DiffConflict as error:
+                    logger.info("Diff %s/%s/%s recomputed: %s", owner_id, item_id, run_id,
+                                error)
+                except Exception as error:
+                    permanent = attempt >= MAX_DIFF_ATTEMPTS
+                    repo.record_failure(owner_id, item_id, run_id,
+                                        f"{type(error).__name__}: {error}", permanent,
+                                        self.deps.now())
+                    if not permanent:
+                        logger.warning("Diff %s/%s/%s failed; retrying once", owner_id,
+                                       item_id, run_id, exc_info=True)
+                        self.schedule(owner_id, item_id, self.retry_delay)
+                        return  # later Runs wait for this one
+                    logger.error("Diff %s/%s/%s failed permanently; Baseline unchanged",
+                                 owner_id, item_id, run_id, exc_info=True)
+
+    def ensure_established(self, owner_id, item_id) -> bool:
+        """Normalise the T11 seed into established Findings, exactly once. False when there is
+        no successful Run yet. Raises (and is retried) if normalisation fails."""
+        repo = self.deps.repos.diffs
+        state = self.deps.repos.watchlists.baseline_state(owner_id, item_id)
+        if state != "seed":
+            return state == "established"
+        baseline = self.deps.repos.watchlists.baseline(owner_id, item_id)
+        normalized = normalize_seeds(baseline.seeds, baseline.initializing_run_id,
+                                     self.registry, self.judge)
+        result = establish(normalized.findings, self.registry)
+        if repo.establish(owner_id, item_id, baseline.initializing_run_id, result,
+                          normalized.skipped, self.deps.now()):
+            logger.info("Baseline established for %s/%s: %s Findings, %s skipped", owner_id,
+                        item_id, len(result.updates), len(normalized.skipped))
+        return True
+
+    def _diff(self, owner_id, item_id, run_id, report_id):
+        deps, repo = self.deps, self.deps.repos.diffs
+        if report_id is None:
+            raise ValueError(f"COMPLETE Run {run_id} has no Report")
+        report = deps.repos.reports.get(owner_id, report_id)
+        normalized = normalize_seeds(report_seeds(deps, owner_id, report), run_id,
+                                     self.registry, self.judge)
+        version, established = repo.findings(owner_id, item_id)
+        result = compare(established, normalized.findings, self.registry,
+                         self.unconfirmed_after)
+        intervening = repo.intervening_failures(owner_id, item_id, run_id)
+        now = deps.now()
+        alert = delivery = None
+        if result.material:
+            item = deps.repos.watchlists.get(owner_id, item_id)
+            alert = Alert(id=alert_id(run_id), owner_id=owner_id, watchlist_item_id=item_id,
+                          run_id=run_id, report_id=report_id, brief=item.brief,
+                          created_at=now, changes=[alert_change(e) for e in result.material],
+                          failed_diffs=intervening)
+            url = self.webhook_url_for(owner_id)
+            if url:
+                delivery = WebhookDelivery(owner_id=owner_id, alert_id=alert.id, url=url,
+                                           next_attempt_at=now)
+        committed = repo.commit(owner_id, item_id, run_id, version, result,
+                                normalized.skipped, intervening, alert, delivery, now)
+        if not committed:
+            return
+        logger.info("Diff %s/%s/%s: %s material change(s)%s", owner_id, item_id, run_id,
+                    len(result.material), f", Alert {alert.id}" if alert else "")
+        if delivery is not None and self.webhooks is not None:
+            self.webhooks.schedule(owner_id, alert.id)

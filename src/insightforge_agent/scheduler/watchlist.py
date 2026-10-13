@@ -26,6 +26,12 @@ from insightforge_agent.domain.watchlist import (
 )
 from insightforge_agent.pipeline.executor import WorkNotAccepted
 
+DIFF_JOB_PREFIX = "watchlist-diff"
+
+
+def diff_job_id(owner_id, item_id):
+    return f"{DIFF_JOB_PREFIX}:{owner_id}:{item_id}"
+
 logger = logging.getLogger(__name__)
 _handler: Callable | None = None
 _baseline_handler: Callable | None = None
@@ -67,13 +73,22 @@ class WatchlistScheduler:
         research,
         closing=None,
         baseline_retry_delay=BASELINE_RETRY_DELAY,
+        diffs=None,
     ):
         self.deps, self.scheduler, self.research = deps, scheduler, research
         self.closing = closing if closing is not None else threading.Event()
         self.baseline_retry_delay = baseline_retry_delay
+        self.diffs = diffs  # T12 DiffService; None leaves T11 behaviour unchanged
+
+    def _job_ids(self, owner_id, item_id):
+        return (
+            job_id(owner_id, item_id),
+            baseline_job_id(owner_id, item_id),
+            diff_job_id(owner_id, item_id),
+        )
 
     def cancel(self, owner_id, item_id):
-        for job in (job_id(owner_id, item_id), baseline_job_id(owner_id, item_id)):
+        for job in self._job_ids(owner_id, item_id):
             self._remove(job)
 
     def _remove(self, job):
@@ -123,11 +138,7 @@ class WatchlistScheduler:
         """While paused: repair missing jobs, remove deleted/exhausted ones, skip downtime."""
         repo = self.deps.repos.watchlists
         items = repo.list_all()
-        live = {
-            job
-            for i in items
-            for job in (job_id(i.owner_id, i.id), baseline_job_id(i.owner_id, i.id))
-        }
+        live = {job for i in items for job in self._job_ids(i.owner_id, i.id)}
         for job in self.scheduler.get_jobs():
             if job.id.startswith("watchlist") and job.id not in live:
                 self.scheduler.remove_job(job.id)
@@ -147,6 +158,13 @@ class WatchlistScheduler:
                     current.next_tick_at,
                 )
             self.sync(current)
+            self._diff_soon(item.owner_id, item.id)
+
+    def _diff_soon(self, owner_id, item_id):
+        """The Diff job normalises the seed, then diffs every unfinished COMPLETE Run in
+        order; with nothing to do it returns at once."""
+        if self.diffs is not None:
+            self.diffs.schedule(owner_id, item_id)
 
     def tick(self, owner_id, item_id, revision):
         # Capture callback time before any repository lock contention. The store consumes
@@ -205,12 +223,14 @@ class WatchlistScheduler:
         """Outside the research graph, including after clarification resumption/recovery."""
         if run.state == RunState.COMPLETE and run.watchlist_item_id:
             self._initialize_quietly(run.owner_id, run.watchlist_item_id)
+            self._diff_soon(run.owner_id, run.watchlist_item_id)
 
     def retry_baseline(self, owner_id, item_id):
         """The one-shot retry job's callback; it reschedules itself while still failing."""
         if self.closing.is_set():
             return  # startup recovery retries every item
-        self._initialize_quietly(owner_id, item_id)
+        if self._initialize_quietly(owner_id, item_id) is not None:
+            self._diff_soon(owner_id, item_id)
 
     def _initialize_quietly(self, owner_id, item_id):
         try:
@@ -281,80 +301,87 @@ class WatchlistScheduler:
         return None
 
     def _baseline_from_report(self, owner_id, item_id, report):
-        """Raises InvalidBaselineCandidate only for defects of the Report's own stored data;
-        anything else (a store outage, a bug) propagates and is retried."""
-        deps = self.deps
-        body = report.body
-        if not isinstance(body, dict) or not {"verified", "evidence"} <= body.keys():
-            raise InvalidBaselineCandidate("Report body lacks verified Report and Evidence")
-        try:
-            verified = VerifiedReport.model_validate(body["verified"])
-            evidence = EvidenceBundle.model_validate(body["evidence"])
-        except ValidationError as error:
-            raise InvalidBaselineCandidate(f"malformed Report body: {error}") from error
-        items = {i.id: i for section in evidence.sections for i in section.items}
-
-        def stored(kind, read, *key):
-            try:
-                return read(owner_id, *key)
-            except NotFoundError as error:
-                raise InvalidBaselineCandidate(f"missing {kind} {key[0]}") from error
-
-        rejected = {
-            (v.section, v.claim)
-            for v in verified.verdicts
-            if v.verdict == "unverified"
-        }
-        seeds = []
-        for si, section in enumerate(verified.draft.sections):
-            for ci, claim in enumerate(section.claims):
-                if claim.historical or (si, ci) in rejected:
-                    continue
-                item = items.get(claim.evidence_id)
-                if item is None:
-                    raise InvalidBaselineCandidate(
-                        f"Claim cites missing Evidence {claim.evidence_id}"
-                    )
-                refs = list(dict.fromkeys([item.primary, *item.supporting]))
-                observations = [
-                    stored("Observation", deps.repos.observations.get, p.observation_id)
-                    for p in refs
-                ]
-                if not observations or any(
-                    o.run_id != report.run_id for o in observations
-                ):
-                    raise InvalidBaselineCandidate(
-                        "Baseline Evidence must be fetched in the establishing Run"
-                    )
-                for observation in observations:
-                    source = stored(
-                        "Source", deps.repos.sources.get, observation.source_id
-                    )
-                    if source.kind != "web":
-                        raise InvalidBaselineCandidate(
-                            "Watchlist Baseline Evidence must be web-sourced"
-                        )
-                for passage in refs:
-                    stored(
-                        "Passage",
-                        deps.repos.passages.get,
-                        passage.observation_id,
-                        passage.index,
-                    )
-                seeds.append(
-                    BaselineSeed(
-                        claim=claim,
-                        evidence=item,
-                        observation_dates={o.id: o.fetched_at for o in observations},
-                        source_ids=sorted({o.source_id for o in observations}),
-                        report_id=report.id,
-                        run_id=report.run_id,
-                    )
-                )
         return Baseline(
             owner_id=owner_id,
             watchlist_item_id=item_id,
             initializing_run_id=report.run_id,
             initialized_at=report.created_at,
-            seeds=seeds,
+            seeds=report_seeds(self.deps, owner_id, report),
         )
+
+
+def report_seeds(deps, owner_id, report) -> list[BaselineSeed]:
+    """A successful Report's current Claims with their structured Evidence and provenance.
+    Used for the Baseline seed and, by the Diff, for every later Run: the same eligibility
+    (current Claims only, never Historical or unverified ones; every supporting Observation
+    fetched by this Run from a web Source). Raises InvalidBaselineCandidate only for defects of
+    the Report's own stored data; anything else (a store outage, a bug) propagates and is
+    retried."""
+    body = report.body
+    if not isinstance(body, dict) or not {"verified", "evidence"} <= body.keys():
+        raise InvalidBaselineCandidate("Report body lacks verified Report and Evidence")
+    try:
+        verified = VerifiedReport.model_validate(body["verified"])
+        evidence = EvidenceBundle.model_validate(body["evidence"])
+    except ValidationError as error:
+        raise InvalidBaselineCandidate(f"malformed Report body: {error}") from error
+    items = {i.id: i for section in evidence.sections for i in section.items}
+
+    def stored(kind, read, *key):
+        try:
+            return read(owner_id, *key)
+        except NotFoundError as error:
+            raise InvalidBaselineCandidate(f"missing {kind} {key[0]}") from error
+
+    rejected = {
+        (v.section, v.claim)
+        for v in verified.verdicts
+        if v.verdict == "unverified"
+    }
+    seeds = []
+    for si, section in enumerate(verified.draft.sections):
+        for ci, claim in enumerate(section.claims):
+            if claim.historical or (si, ci) in rejected:
+                continue
+            item = items.get(claim.evidence_id)
+            if item is None:
+                raise InvalidBaselineCandidate(
+                    f"Claim cites missing Evidence {claim.evidence_id}"
+                )
+            refs = list(dict.fromkeys([item.primary, *item.supporting]))
+            observations = [
+                stored("Observation", deps.repos.observations.get, p.observation_id)
+                for p in refs
+            ]
+            if not observations or any(
+                o.run_id != report.run_id for o in observations
+            ):
+                raise InvalidBaselineCandidate(
+                    "Baseline Evidence must be fetched in the establishing Run"
+                )
+            for observation in observations:
+                source = stored(
+                    "Source", deps.repos.sources.get, observation.source_id
+                )
+                if source.kind != "web":
+                    raise InvalidBaselineCandidate(
+                        "Watchlist Baseline Evidence must be web-sourced"
+                    )
+            for passage in refs:
+                stored(
+                    "Passage",
+                    deps.repos.passages.get,
+                    passage.observation_id,
+                    passage.index,
+                )
+            seeds.append(
+                BaselineSeed(
+                    claim=claim,
+                    evidence=item,
+                    observation_dates={o.id: o.fetched_at for o in observations},
+                    source_ids=sorted({o.source_id for o in observations}),
+                    report_id=report.id,
+                    run_id=report.run_id,
+                )
+            )
+    return seeds

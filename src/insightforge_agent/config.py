@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Clarification: how long a Run waits for the answer to its one question.
     clarification_timeout_minutes: int = 30
 
+    # Diff (T12): consecutive Not reconfirmed Diffs after which a Finding shows as unconfirmed.
+    not_reconfirmed_threshold: int = Field(default=3, ge=1)
+
     # Search: ordered; a provider that fails falls through to the next.
     search_providers: Annotated[list[SearchProvider], NoDecode] = ["tavily", "serpapi"]
 

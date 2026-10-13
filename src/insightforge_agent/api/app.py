@@ -56,7 +56,9 @@ from insightforge_agent.pipeline.executor import BoundedRunExecutor
 from insightforge_agent.pipeline.recovery import startup_sweep
 from insightforge_agent.pipeline.research import ResearchService
 from insightforge_agent.pipeline.wiring import build_deps, build_qdrant
+from insightforge_agent.scheduler.diff import DiffService, install_diff_handler
 from insightforge_agent.scheduler.watchlist import WatchlistScheduler, install_watchlist_handler
+from insightforge_agent.scheduler.webhook import WebhookSender, install_webhook_handler
 from insightforge_agent.scheduler.clarification import (
     ApsTimeoutScheduler,
     build_scheduler,
@@ -126,7 +128,12 @@ class Runtime:
         executor = BoundedRunExecutor(settings.run_concurrency, settings.run_queue_limit)
         research = ResearchService(deps, executor)
         closing = threading.Event()
-        schedules = WatchlistScheduler(deps, scheduler, research, closing)
+        webhooks = WebhookSender(deps, scheduler, closing)
+        webhook_urls = {u.id: u.webhook_url for u in session.personas}
+        diffs = DiffService(deps, scheduler, closing, webhooks=webhooks,
+                            webhook_url_for=webhook_urls.get,
+                            unconfirmed_after=settings.not_reconfirmed_threshold)
+        schedules = WatchlistScheduler(deps, scheduler, research, closing, diffs=diffs)
         deps.on_complete = schedules.completed
         return cls(settings=settings, session=session, repos=repos, deps=deps,
                    scheduler=scheduler, executor=executor,
@@ -140,9 +147,13 @@ class Runtime:
         install_watchlist_handler(
             self.watchlists.schedules.tick, self.watchlists.schedules.retry_baseline
         )
+        schedules = self.watchlists.schedules
+        install_diff_handler(schedules.diffs.run_item)
+        install_webhook_handler(schedules.diffs.webhooks.deliver)
         self.recovered = startup_sweep(self.deps, self.clarifications)
         logger.info("startup sweep: %s", dict(self.recovered))
-        self.watchlists.schedules.recover()
+        schedules.recover()  # also schedules each item's Diff job (seed first, then in order)
+        schedules.diffs.webhooks.recover()
         self.scheduler.resume()
 
     def begin_shutdown(self) -> None:
@@ -157,6 +168,8 @@ class Runtime:
             self.scheduler.shutdown(wait=True)
         install_timeout_handler(None)
         install_watchlist_handler(None)
+        install_diff_handler(None)
+        install_webhook_handler(None)
         self.executor.shutdown()
         for close in reversed(self._closers):
             close()
