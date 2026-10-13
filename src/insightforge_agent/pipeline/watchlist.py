@@ -133,4 +133,5 @@ class WatchlistService:
                 failed_runs=failed,
                 recent_failed_runs=recent,
                 baseline=repo.baseline(owner_id, item_id),
+                baseline_state=repo.baseline_state(owner_id, item_id),
             )

@@ -29,6 +29,7 @@ from insightforge_agent.domain.models import (
 )
 from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.plan import SubTask
+from insightforge_agent.stores.diffs import SCHEMA as DIFF_SCHEMA, SqliteDiffRepository
 from insightforge_agent.stores.run_rows import insert_run_row, run_from_row
 from insightforge_agent.stores.watchlist import (
     SCHEMA as WATCHLIST_SCHEMA,
@@ -482,6 +483,11 @@ def _migrate(db: sqlite3.Connection) -> None:
         with db:
             db.execute("ALTER TABLE watchlist_baseline_failures "
                        "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0")
+    columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_diffs)")}
+    for column in ("retry_after", "attempt_started_at"):  # T12 draft databases
+        if column not in columns:
+            with db:
+                db.execute(f"ALTER TABLE watchlist_diffs ADD COLUMN {column} TEXT")
 
 
 class SqliteRepos:
@@ -489,13 +495,14 @@ class SqliteRepos:
 
     def __init__(self, path: str = ":memory:") -> None:
         self._db = sqlite3.connect(path, check_same_thread=False)
-        self._db.executescript(SCHEMA + WATCHLIST_SCHEMA)
+        self._db.executescript(SCHEMA + WATCHLIST_SCHEMA + DIFF_SCHEMA)
         _migrate(self._db)
         # Every repository method takes this one lock (see `_Base`), and callers that need
         # several calls to be atomic (a SourceStore operation) hold it around them. Re-entrant
         # for exactly that.
         self.lock = threading.RLock()
         self.watchlists = SqliteWatchlistRepository(self._db, self.lock)
+        self.diffs = SqliteDiffRepository(self._db, self.lock)
         self.runs = SqliteRunRepository(self._db, self.lock)
         self.subtasks = SqliteSubTaskRepository(self._db, self.lock)
         self.sources = SqliteSourceRepository(self._db, self.lock)
