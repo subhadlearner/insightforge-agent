@@ -8,6 +8,7 @@ from datetime import datetime
 from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.passages import check_passages
+from insightforge_agent.domain.retention import FailureRecord, failure_reason
 from insightforge_agent.domain.models import (
     TERMINAL_STATES,
     Clarification,
@@ -27,6 +28,7 @@ from insightforge_agent.domain.models import (
 class MemoryRunRepository:
     def __init__(self) -> None:
         self._runs: dict[tuple[str, str], Run] = {}
+        self._failures: dict[tuple[str, str], FailureRecord] = {}
         self._cas = threading.Lock()  # makes each compare-and-set below atomic, as in SQLite
 
     def add(self, run: Run) -> None:
@@ -48,6 +50,25 @@ class MemoryRunRepository:
         updated = self.get(owner_id, run_id).model_copy(update={"state": state})
         self._runs[(owner_id, run_id)] = updated
         return updated
+
+    def fail(self, owner_id: str, run_id: str, *, reason: str, error_codes: list[str],
+             failed_at: datetime) -> Run:
+        with self._cas:
+            run = self.get(owner_id, run_id)
+            record = FailureRecord(
+                owner_id=owner_id, run_id=run_id, run_created_at=run.created_at,
+                failed_at=failed_at, retention_starts_at=failed_at, stage=run.state.value,
+                reason=failure_reason(reason), error_codes=error_codes)
+            self._failures.setdefault((owner_id, run_id), record)
+            updated = run.model_copy(update={"state": RunState.FAILED})
+            self._runs[(owner_id, run_id)] = updated
+            return updated
+
+    def failure(self, owner_id: str, run_id: str) -> FailureRecord:
+        try:
+            return self._failures[(owner_id, run_id)]
+        except KeyError:
+            raise NotFoundError(f"failure record for run {run_id}") from None
 
     def _compare_and_set(self, owner_id: str, run_id: str, holds, update: dict,
                          conflict: str) -> Run:

@@ -5,7 +5,7 @@ Nothing here holds a Source body. Passage text is reached only through `SourceSt
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from insightforge_agent.domain.plan import SourceType
 
@@ -79,11 +79,16 @@ ResearchResults.model_rebuild()
 
 class ExtractedFact(BaseModel):
     """A structured fact one Passage states: who (`entity`), what (`predicate`), how much
-    (`value`), for which `scope` and over which `period`. `statement` is the sentence."""
+    (`value`), for which `scope` and over which `period`. `statement` is the sentence.
+
+    Extraction always records its Passage and Source (`provenance="available"`). The fact
+    outlives that Passage: when retention removes it, the fact is kept with
+    `provenance="unavailable"` and no `source_id` or `passage`, never a dangling reference."""
 
     id: str
-    source_id: str
-    passage: PassageRef
+    source_id: str | None
+    passage: PassageRef | None
+    provenance: Literal["available", "unavailable"] = "available"
     statement: str
     entities: list[str] = Field(default_factory=list)
     entity: str = ""
@@ -92,6 +97,18 @@ class ExtractedFact(BaseModel):
     value: str = ""
     period: str = "UNKNOWN"
     conflict: bool = False
+
+    @model_validator(mode="after")
+    def _provenance_matches_references(self) -> "ExtractedFact":
+        resolvable = self.source_id is not None and self.passage is not None
+        if resolvable != (self.provenance == "available"):
+            raise ValueError("an available provenance needs its Source and Passage, and an "
+                             "unavailable one must not name them")
+        return self
+
+    def without_provenance(self) -> "ExtractedFact":
+        return self.model_copy(update={"source_id": None, "passage": None,
+                                       "provenance": "unavailable"})
 
 
 class Conflict(BaseModel):

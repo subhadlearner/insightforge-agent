@@ -20,6 +20,7 @@ compare-and-set, a resumed Run is past its question, and terminal Runs are never
 
 from collections import Counter
 
+from insightforge_agent.domain import retention
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.pipeline.clarification import ClarificationService
 from insightforge_agent.pipeline.deps import Deps
@@ -46,6 +47,7 @@ def startup_sweep(deps: Deps, clarifications: ClarificationService) -> Counter:
             done["resumed"] += 1
         else:
             settled = settle_interrupted(
-                deps, owner, run_id, f"the process stopped while the Run was {run.state.value}")
+                deps, owner, run_id, f"the process stopped while the Run was {run.state.value}",
+                retention.PROCESS_INTERRUPTED)
             done["failed" if settled.state == RunState.FAILED else "completed"] += 1
     return done

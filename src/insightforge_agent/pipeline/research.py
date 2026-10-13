@@ -13,6 +13,7 @@ The order is what keeps every Run accounted for:
 
 from collections.abc import Callable
 
+from insightforge_agent.domain import retention
 from insightforge_agent.domain.contracts import Brief
 from insightforge_agent.domain.documents import Upload
 from insightforge_agent.domain.models import Run
@@ -62,4 +63,5 @@ class ResearchService:
         return started.run
 
     def _not_started(self, started: StartedRun) -> None:
-        settle_interrupted(self._deps, started.run.owner_id, started.run.id, NOT_STARTED)
+        settle_interrupted(self._deps, started.run.owner_id, started.run.id, NOT_STARTED,
+                           retention.NOT_STARTED)

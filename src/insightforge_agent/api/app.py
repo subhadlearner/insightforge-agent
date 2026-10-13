@@ -19,7 +19,9 @@ Startup (`start`), in order:
 3. `startup_sweep` runs once, before any new Run can be accepted: in-progress Runs are settled,
    RESUMING ones resumed, expired clarifications timed out and the rest rescheduled. Resumes go
    to the RunExecutor, never run on this thread.
-4. The scheduler resumes: due and future timeouts now fire, into the executor.
+4. The daily retention job is added unless the job store already holds it, and the
+   scheduler resumes: due and future timeouts now fire, into the executor; a retention sweep
+   missed while the process was down fires once.
 5. The lifespan yields: requests are served.
 
 Shutdown (`stop`), in order: the scheduler is paused and shut down (a timeout can no longer
@@ -34,6 +36,7 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from types import FrameType
 from typing import Any
 
@@ -57,6 +60,11 @@ from insightforge_agent.pipeline.recovery import startup_sweep
 from insightforge_agent.pipeline.research import ResearchService
 from insightforge_agent.pipeline.wiring import build_deps, build_qdrant
 from insightforge_agent.scheduler.diff import DiffService, install_diff_handler
+from insightforge_agent.scheduler.retention import (
+    RetentionSweeper,
+    install_retention_handler,
+    schedule_retention,
+)
 from insightforge_agent.scheduler.watchlist import WatchlistScheduler, install_watchlist_handler
 from insightforge_agent.scheduler.webhook import WebhookSender, install_webhook_handler
 from insightforge_agent.scheduler.clarification import (
@@ -92,6 +100,7 @@ class Runtime:
     clarifications: ClarificationService
     research: ResearchService
     watchlists: WatchlistService
+    retention: RetentionSweeper
     recovered: Counter = field(default_factory=Counter)  # what the startup sweep did
     # Set once, when the process is stopping: open streams end. A Runtime is not restarted.
     closing: threading.Event = field(default_factory=threading.Event)
@@ -135,11 +144,13 @@ class Runtime:
                             unconfirmed_after=settings.not_reconfirmed_threshold)
         schedules = WatchlistScheduler(deps, scheduler, research, closing, diffs=diffs)
         deps.on_complete = schedules.completed
+        retention = RetentionSweeper(repos, deps.doc_index, deps.now,
+                                     retention_days=settings.retention_days, closing=closing)
         return cls(settings=settings, session=session, repos=repos, deps=deps,
                    scheduler=scheduler, executor=executor,
                    clarifications=ClarificationService(deps, submit=executor.submit),
                    research=research, watchlists=WatchlistService(deps, schedules),
-                   closing=closing, _closers=closers)
+                   retention=retention, closing=closing, _closers=closers)
 
     def start(self) -> None:
         self.scheduler.start(paused=True)
@@ -150,10 +161,13 @@ class Runtime:
         schedules = self.watchlists.schedules
         install_diff_handler(schedules.diffs.run_item)
         install_webhook_handler(schedules.diffs.webhooks.deliver)
+        install_retention_handler(self.retention.sweep)
         self.recovered = startup_sweep(self.deps, self.clarifications)
         logger.info("startup sweep: %s", dict(self.recovered))
         schedules.recover()  # also schedules each item's Diff job (seed first, then in order)
         schedules.diffs.webhooks.recover()
+        # APScheduler runs on the wall clock; the sweep's cutoff uses `deps.now`.
+        schedule_retention(self.scheduler, datetime.now(UTC))  # kept if already stored
         self.scheduler.resume()
 
     def begin_shutdown(self) -> None:
@@ -170,6 +184,7 @@ class Runtime:
         install_watchlist_handler(None)
         install_diff_handler(None)
         install_webhook_handler(None)
+        install_retention_handler(None)
         self.executor.shutdown()
         for close in reversed(self._closers):
             close()
