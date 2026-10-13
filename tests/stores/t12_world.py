@@ -59,12 +59,16 @@ class FakeScheduler:
 
 
 def unsupported_reply(messages):
-    """A well-behaved judge that maps nothing: every Claim it is asked about is unsupported
-    (a polarity-only request therefore reads as affirmed)."""
+    """A well-behaved judge that maps nothing new: an unmapped Claim is unsupported, and a
+    polarity-only request echoes its fixed triple as affirmed."""
     claims = json.loads(str(messages[-1].content))
-    return AIMessage(content=json.dumps({"judgments": [
-        {"index": c["index"], "predicate": "unsupported", "polarity": "affirmed"}
-        for c in claims]}))
+
+    def answer(c):
+        fixed = c.get("fixed_triple")
+        if fixed:
+            return {"index": c["index"], "polarity": "affirmed", **fixed}
+        return {"index": c["index"], "predicate": "unsupported", "polarity": "affirmed"}
+    return AIMessage(content=json.dumps({"judgments": [answer(c) for c in claims]}))
 
 
 def empty_judge():

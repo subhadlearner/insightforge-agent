@@ -37,6 +37,9 @@ from insightforge_agent.stores.diffs import DiffConflict
 logger = logging.getLogger(__name__)
 _handler: Callable | None = None
 DIFF_RETRY_DELAY = timedelta(minutes=1)
+# How long a started attempt holds its Diff against a second attempt (another connection, or a
+# restart after a crash). Longer than a Diff takes: normalisation plus one bounded judge call.
+DIFF_ATTEMPT_LEASE = timedelta(minutes=10)
 
 
 def install_diff_handler(handler):
@@ -64,6 +67,7 @@ class DiffService:
         webhook_url_for: Callable[[str], str | None] = lambda owner_id: None,
         unconfirmed_after: int = DEFAULT_UNCONFIRMED_AFTER,
         retry_delay: timedelta = DIFF_RETRY_DELAY,
+        attempt_lease: timedelta = DIFF_ATTEMPT_LEASE,
     ):
         self.deps, self.scheduler = deps, scheduler
         self.closing = closing if closing is not None else threading.Event()
@@ -71,6 +75,7 @@ class DiffService:
         self.judge = judge if judge is not None else FindingJudge(deps.light_model, registry)
         self.webhooks, self.webhook_url_for = webhooks, webhook_url_for
         self.unconfirmed_after, self.retry_delay = unconfirmed_after, retry_delay
+        self.attempt_lease = attempt_lease
         self._locks: dict[tuple[str, str], threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
@@ -119,13 +124,15 @@ class DiffService:
                 nxt = repo.next_run(owner_id, item_id)
                 if nxt is None:
                     return
-                run_id, report_id, retry_after = nxt
-                if retry_after is not None and self.deps.now() < retry_after:
-                    # A retry is pending: neither it nor any later Run may start before then.
-                    self.schedule(owner_id, item_id, retry_after)
+                run_id, report_id = nxt
+                attempt, wait_until = repo.begin_attempt(
+                    owner_id, item_id, run_id, report_id, MAX_DIFF_ATTEMPTS, self.deps.now(),
+                    self.attempt_lease)
+                if wait_until is not None:
+                    # A retry not yet due, or another attempt in progress: neither this Run nor
+                    # a later one may start before then.
+                    self.schedule(owner_id, item_id, wait_until)
                     return
-                attempt = repo.begin_attempt(owner_id, item_id, run_id, report_id,
-                                             MAX_DIFF_ATTEMPTS, self.deps.now())
                 if attempt is None:
                     continue  # already terminal (or attempts exhausted by a crash)
                 try:
@@ -135,6 +142,7 @@ class DiffService:
                 except DiffConflict as error:
                     logger.info("Diff %s/%s/%s recomputed: %s", owner_id, item_id, run_id,
                                 error)
+                    repo.release_attempt(owner_id, item_id, run_id)
                 except Exception as error:
                     now = self.deps.now()
                     retry_at = now + self.retry_delay if attempt < MAX_DIFF_ATTEMPTS else None

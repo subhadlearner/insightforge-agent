@@ -2,13 +2,14 @@
 callbacks, restart and crash recovery, and transaction failure injection (SQLite files)."""
 
 import threading
+from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from insightforge_agent.domain.alerts import MAX_DIFF_ATTEMPTS
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.scheduler import diff as diff_module
-from insightforge_agent.scheduler.diff import DIFF_RETRY_DELAY
+from insightforge_agent.scheduler.diff import DIFF_ATTEMPT_LEASE, DIFF_RETRY_DELAY
 from insightforge_agent.scheduler.watchlist import diff_job_id
 from tests.stores.t12_world import ITEM, NOW, OWNER, World, fact
 
@@ -275,8 +276,13 @@ def test_crash_mid_attempt_counts_and_a_crash_loop_ends_in_permanent_failure(wor
     world.diffs.ensure_established(OWNER, ITEM)
     for _ in range(MAX_DIFF_ATTEMPTS):  # attempts counted, process "dies" before recording
         assert world.repos.diffs.begin_attempt(OWNER, ITEM, "r2", "rep_r2", MAX_DIFF_ATTEMPTS,
-                                               NOW) is not None
+                                               world.now, DIFF_ATTEMPT_LEASE).number
         world.restart()
+        # Until the dead attempt's lease ends nothing starts; the job waits for its expiry.
+        world.process()
+        assert world.diff("r3") is None
+        assert world.scheduler.jobs[diff_job_id(OWNER, ITEM)]["run_date"] ==             world.now + DIFF_ATTEMPT_LEASE
+        world.now += DIFF_ATTEMPT_LEASE
     world.process()
     assert world.diff("r2").status == "failed" and world.diff("r2").error == "attempts exhausted"
     assert world.diff("r3").status == "succeeded"
@@ -521,3 +527,93 @@ def test_a_later_completion_cannot_bring_a_pending_retry_forward(world, monkeypa
     world.diffs.run_item(OWNER, ITEM)
     assert [world.diff(r).status for r in ("r2", "r3")] == ["succeeded", "succeeded"]
     assert world.diff("r2").attempts == 2
+
+
+
+# --- review round 2 regressions (PR #53) -------------------------------------------------------
+
+def test_begin_attempt_refuses_a_premature_retry_atomically(world, monkeypatch):
+    """Even a caller that skips DiffService's own checks cannot start the retry early."""
+    first_run(world)
+    world.complete("r2", 2, fact("$130", period="2030-02"))
+    fail_report(monkeypatch, {"r2"}, times=1)
+    world.process()
+    repo, retry_at = world.repos.diffs, NOW + DIFF_RETRY_DELAY
+    early = repo.begin_attempt(OWNER, ITEM, "r2", "rep_r2", MAX_DIFF_ATTEMPTS,
+                               retry_at - timedelta(seconds=1), DIFF_ATTEMPT_LEASE)
+    assert early == (None, retry_at)
+    assert world.diff("r2").attempts == 1
+    due = repo.begin_attempt(OWNER, ITEM, "r2", "rep_r2", MAX_DIFF_ATTEMPTS, retry_at,
+                             DIFF_ATTEMPT_LEASE)
+    assert due == (2, None) and world.diff("r2").attempts == 2
+
+
+def test_concurrent_attempts_across_connections_start_exactly_one(tmp_path, monkeypatch):
+    """At the retry's due time, many connections race: one attempt starts; the rest see its
+    lease, count nothing and never mark the Diff exhausted under the running attempt."""
+    a = World(tmp_path / "race.db")
+    a.add_item()
+    first_run(a)
+    a.complete("r2", 2, fact("$130", period="2030-02"))
+    fail_report(monkeypatch, {"r2"}, times=1)
+    a.process()
+    due = NOW + DIFF_RETRY_DELAY
+    worlds = [a] + [World(tmp_path / "race.db") for _ in range(5)]
+    barrier = threading.Barrier(len(worlds))
+
+    def attempt(w):
+        barrier.wait()
+        return w.repos.diffs.begin_attempt(OWNER, ITEM, "r2", "rep_r2", MAX_DIFF_ATTEMPTS, due,
+                                           DIFF_ATTEMPT_LEASE)
+    with ThreadPoolExecutor(len(worlds)) as pool:
+        results = list(pool.map(attempt, worlds))
+    started = [r for r in results if r.number is not None]
+    assert started == [(2, None)]
+    assert all(r.wait_until == due + DIFF_ATTEMPT_LEASE for r in results if r not in started)
+    d2 = a.diff("r2")
+    assert (d2.status, d2.attempts) == ("pending", 2)
+    for w in worlds[1:]:
+        w.repos.close()
+    a.repos.close()
+
+
+def test_concurrent_diff_services_at_the_retry_time_apply_the_retry_once(tmp_path, monkeypatch):
+    a = World(tmp_path / "race2.db")
+    a.add_item()
+    first_run(a)
+    a.complete("r2", 2, fact("$130", period="2030-02"))
+    a.complete("r3", 3, fact("$150", period="2030-03"))
+    fail_report(monkeypatch, {"r2"}, times=1)
+    a.process()
+    worlds = [a] + [World(tmp_path / "race2.db") for _ in range(3)]
+    for w in worlds:
+        w.now = NOW + DIFF_RETRY_DELAY
+    barrier = threading.Barrier(len(worlds))
+
+    def go(w):
+        barrier.wait()
+        w.diffs.run_item(OWNER, ITEM)
+    with ThreadPoolExecutor(len(worlds)) as pool:
+        list(pool.map(go, worlds))
+    assert [(a.diff(r).status, a.diff(r).attempts) for r in ("r2", "r3")] ==         [("succeeded", 2), ("succeeded", 1)]
+    assert len(a.alerts()) == 2 and a.findings()[0] == 3
+    for w in worlds[1:]:
+        w.repos.close()
+    a.repos.close()
+
+
+def test_a_conflict_releases_its_lease_and_recomputes_at_once(world, monkeypatch):
+    from insightforge_agent.stores.diffs import DiffConflict
+    first_run(world)
+    world.complete("r2", 2, fact("$130", period="2030-02"))
+    real, calls = world.repos.diffs.commit, []
+
+    def conflict_once(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise DiffConflict("the established Baseline changed during this Diff")
+        return real(*args, **kwargs)
+    monkeypatch.setattr(world.repos.diffs, "commit", conflict_once)
+    world.process()
+    assert len(calls) == 2
+    assert (world.diff("r2").status, world.diff("r2").attempts) == ("succeeded", 2)

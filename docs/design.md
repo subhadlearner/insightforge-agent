@@ -486,7 +486,9 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   `offers`, which prose can deny). No tools, no Passage text, a strict JSON schema. Its answer
   must name a vocabulary predicate (or `unsupported`), and its subject and object must be stated
   by the Claim, the Evidence statement or its structured fields. Only an explicit `unsupported`
-  answer skips a Claim (logged with the Diff). An invalid reply, a missing judgment or an answer
+  answer skips a Claim (logged with the Diff). A polarity-only request carries its
+  `fixed_triple`; the answer must repeat that predicate, subject and object (case and spacing
+  aside) and only its polarity is used. An invalid reply, a missing judgment or an answer
   that fails those checks is a failed interpretation: `NormalizationFailed` fails the attempt and
   the Diff retry lifecycle applies (a failed seed normalisation stays `seed` and is retried), so
   an eligible Claim never silently counts as Not reconfirmed. A quantity that is not one exact
@@ -514,7 +516,10 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Durability** (`stores/diffs.py`): `watchlist_diffs` has one row per Run; each attempt is
   counted before it starts, so a crash loop ends after 2 attempts. A failure is retried once,
   no earlier than its stored `retry_after` (one minute later), and later Runs wait; another
-  completion callback or a restart cannot bring the retry forward; a second failure is permanent, leaves the Baseline
+  completion callback, a restart or a second connection cannot bring it forward, because
+  `begin_attempt` checks `retry_after` in its transaction. A started attempt holds a 10-minute
+  lease (`attempt_started_at`) checked the same way, so concurrent callers count nothing and
+  wait for it; after a crash the next attempt starts when the lease ends; a second failure is permanent, leaves the Baseline
   unchanged, and the next successful Diff lists it (`intervening_failed`) and shows the net
   change. The commit (Finding updates, Baseline `version`, Diff record, Alert, delivery row) is
   one `BEGIN IMMEDIATE` transaction that checks the Diff is still pending, the version is

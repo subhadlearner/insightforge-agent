@@ -484,9 +484,10 @@ def _migrate(db: sqlite3.Connection) -> None:
             db.execute("ALTER TABLE watchlist_baseline_failures "
                        "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0")
     columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_diffs)")}
-    if "retry_after" not in columns:  # T12 draft databases
-        with db:
-            db.execute("ALTER TABLE watchlist_diffs ADD COLUMN retry_after TEXT")
+    for column in ("retry_after", "attempt_started_at"):  # T12 draft databases
+        if column not in columns:
+            with db:
+                db.execute(f"ALTER TABLE watchlist_diffs ADD COLUMN {column} TEXT")
 
 
 class SqliteRepos:

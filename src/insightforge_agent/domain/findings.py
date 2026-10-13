@@ -356,8 +356,14 @@ def finding_from_judgment(
         return Rejected(evidence_id=e.id, reason=reason)
 
     if request.reason == "polarity":
-        # The vocabulary already fixed the triple; the judge only reads its polarity.
+        # The vocabulary already fixed the triple; the judge only reads its polarity, and must
+        # echo that triple back (`fixed_triple`). Any other answer is a failed interpretation.
         spec, _ = registry.resolve(e.predicate)
+        if (judgment.predicate != spec.name
+                or normalise(judgment.subject) != normalise(e.entity)
+                or normalise(judgment.object) != normalise(e.value)):
+            return reject("a polarity answer must repeat the fixed predicate, subject and "
+                          f"object ({spec.name}, {e.entity!r}, {e.value!r})")
         return build_finding(seed, spec, e.entity, e.value, judgment.polarity, "judge")
     if judgment.predicate == UNSUPPORTED:
         return skip(f"{request.reason}: the judge found no controlled predicate")

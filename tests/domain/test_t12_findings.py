@@ -153,19 +153,22 @@ def test_judge_maps_out_of_vocabulary_claims_and_reads_polarity():
     model = judge_replying(
         {"index": 0, "predicate": "ceo", "polarity": "affirmed", "subject": "Acme",
          "object": "Jane Roe"},
-        {"index": 1, "predicate": "price", "polarity": "negated", "subject": "x", "object": "y"},
+        {"index": 1, "predicate": "offers", "polarity": "negated", "subject": "Acme",
+         "object": "Model X"},
     )
     out = normalize_seeds(seeds, "r1", DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
     by_evidence = {f.provenance.evidence_id: f for f in out.findings}
     assert (by_evidence["e0"].predicate, by_evidence["e0"].object) == ("ceo", "Jane Roe")
     assert by_evidence["e0"].resolution == "judge"
-    # Polarity-only request: the vocabulary's triple stands, the judge's other fields are unused.
+    # Polarity-only request: the judge echoes the fixed triple and reads its polarity.
     assert (by_evidence["e1"].predicate, by_evidence["e1"].object, by_evidence["e1"].polarity) \
         == ("offers", "Model X", "negated")
     assert by_evidence["e2"].resolution == "vocabulary"
     assert len(model.seen) == 1  # one bounded call; Passage text is never sent
     sent = model.seen[0][-1].content
     assert "Jane Roe" in sent and "e2" not in sent
+    assert json.loads(sent)[1]["fixed_triple"] == {"predicate": "offers", "subject": "Acme",
+                                                   "object": "Model X"}
 
 
 def test_an_unsupported_answer_skips_the_claim():
@@ -224,3 +227,26 @@ def test_judge_calls_are_batched():
     model = ScriptedChat(reply=unsupported_reply)
     out = normalize_seeds(seeds, "r1", DEFAULT_REGISTRY, FindingJudge(model, DEFAULT_REGISTRY))
     assert len(model.seen) == 3 and len(out.skipped) == 45
+
+
+@pytest.mark.parametrize("judgment", [
+    {"index": 0, "predicate": "unsupported", "polarity": "affirmed"},  # empty subject/object
+    {"index": 0, "predicate": "competes_with", "polarity": "negated", "subject": "Acme",
+     "object": "Model X"},
+    {"index": 0, "predicate": "offers", "polarity": "negated", "subject": "Acme",
+     "object": "Model Z"},
+    {"index": 0, "predicate": "offers", "polarity": "negated", "subject": "", "object": ""},
+])
+def test_a_polarity_answer_must_repeat_the_fixed_triple(judgment):
+    with pytest.raises(NormalizationFailed, match="must repeat the fixed predicate"):
+        normalize_seeds([seed(predicate="sells", value="Model X")], "r1", DEFAULT_REGISTRY,
+                        FindingJudge(judge_replying(judgment), DEFAULT_REGISTRY))
+
+
+def test_a_valid_polarity_answer_tolerates_case_and_spacing():
+    out = normalize_seeds([seed(predicate="sells", value="Model X")], "r1", DEFAULT_REGISTRY,
+                          FindingJudge(judge_replying(
+                              {"index": 0, "predicate": "offers", "polarity": "negated",
+                               "subject": " acme", "object": "model  x"}), DEFAULT_REGISTRY))
+    [f] = out.findings
+    assert (f.predicate, f.object, f.polarity) == ("offers", "Model X", "negated")

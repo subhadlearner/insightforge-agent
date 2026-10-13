@@ -7,8 +7,9 @@ Every decision that must survive a crash or a duplicate callback is a persistent
   both apply.
 - `watchlist_diffs` has one row per Run; `attempts` is incremented durably before each attempt,
   so a crash loop still ends in a permanent failure, and a terminal row is never reopened. A
-  failed attempt stores `retry_after`, the earliest time the retry may run, so no later
-  completion callback or restart can bring the retry forward.
+  failed attempt stores `retry_after`, the earliest time the retry may run, and a started one
+  `attempt_started_at` (a lease): `begin_attempt` checks both in its transaction, so no later
+  callback, restart or second connection can start an early or concurrent attempt.
 - A commit applies only to the earliest unfinished Diff of the item (`_next_run`), so a later Run
   never overtakes an earlier one.
 - `watchlist_alerts` is UNIQUE per Run; its delivery row is written in the same transaction.
@@ -18,7 +19,7 @@ The Diff commit (Finding updates, version, Diff record, Alert, delivery) is one 
 
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import NamedTuple
 
 from insightforge_agent.domain.alerts import (
@@ -47,7 +48,7 @@ CREATE TABLE IF NOT EXISTS watchlist_diffs (
  status TEXT NOT NULL CHECK(status IN ('pending','succeeded','failed')),
  attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
  detail TEXT NOT NULL DEFAULT '{}', alert_id TEXT, updated_at TEXT NOT NULL,
- retry_after TEXT,
+ retry_after TEXT, attempt_started_at TEXT,
  PRIMARY KEY(owner_id,item_id,run_id)
 );
 CREATE TABLE IF NOT EXISTS watchlist_alerts (
@@ -70,7 +71,11 @@ _ERROR_CHARS = 1000
 class NextDiff(NamedTuple):
     run_id: str
     report_id: str | None
-    retry_after: datetime | None  # set after a failed attempt: not before this time
+
+
+class Attempt(NamedTuple):
+    number: int | None  # the attempt started, or None when none may start now
+    wait_until: datetime | None  # when one may start (a pending retry, or another's lease)
 
 
 class DiffConflict(Exception):
@@ -154,7 +159,7 @@ class SqliteDiffRepository:
         if init is None:
             return None
         row = self._db.execute(
-            "SELECT r.id, p.id, r.created_at, d.retry_after FROM runs r "
+            "SELECT r.id, p.id, r.created_at FROM runs r "
             "JOIN runs i ON i.owner_id=r.owner_id AND i.id=? "
             "LEFT JOIN reports p ON p.owner_id=r.owner_id AND p.run_id=r.id "
             "LEFT JOIN watchlist_diffs d ON d.owner_id=r.owner_id "
@@ -172,7 +177,7 @@ class SqliteDiffRepository:
             (owner_id, item_id, row[2], row[0])).fetchone()
         if active:
             return None
-        return NextDiff(row[0], row[1], datetime.fromisoformat(row[3]) if row[3] else None)
+        return NextDiff(row[0], row[1])
 
     def next_run(self, owner_id, item_id) -> NextDiff | None:
         with self._lock:
@@ -180,9 +185,14 @@ class SqliteDiffRepository:
             return self._next_run(owner_id, item_id)
 
     def begin_attempt(self, owner_id, item_id, run_id, report_id, max_attempts,
-                      now: datetime) -> int | None:
-        """Durably count one attempt. None when the Diff is already terminal, or when earlier
-        attempts were all used (a crash mid-attempt): it is then failed permanently."""
+                      now: datetime, lease: timedelta) -> Attempt:
+        """Durably start one attempt, in one transaction across every connection:
+
+        - terminal Diff: `Attempt(None, None)`;
+        - a retry not yet due (`retry_after`), or another attempt still within its `lease`:
+          `Attempt(None, wait_until)`, nothing counted;
+        - every attempt used (crashes mid-attempt): failed permanently, `Attempt(None, None)`;
+        - otherwise the attempt is counted and leased: `Attempt(n, None)`."""
         with self._write():
             self._item(owner_id, item_id)
             self._db.execute(
@@ -190,24 +200,38 @@ class SqliteDiffRepository:
                 "(owner_id,item_id,run_id,report_id,status,updated_at) "
                 "VALUES (?,?,?,?,'pending',?)",
                 (owner_id, item_id, run_id, report_id, now.isoformat()))
-            status, attempts = self._db.execute(
-                "SELECT status, attempts FROM watchlist_diffs "
+            status, attempts, retry_after, started = self._db.execute(
+                "SELECT status, attempts, retry_after, attempt_started_at FROM watchlist_diffs "
                 "WHERE owner_id=? AND item_id=? AND run_id=?",
                 (owner_id, item_id, run_id)).fetchone()
             if status != "pending":
-                return None
+                return Attempt(None, None)
+            if retry_after and now < datetime.fromisoformat(retry_after):
+                return Attempt(None, datetime.fromisoformat(retry_after))
+            if started and now < datetime.fromisoformat(started) + lease:
+                return Attempt(None, datetime.fromisoformat(started) + lease)
             if attempts >= max_attempts:
                 self._db.execute(
                     "UPDATE watchlist_diffs SET status='failed', updated_at=?, "
+                    "attempt_started_at=NULL, "
                     "error=CASE WHEN error='' THEN 'attempts exhausted' ELSE error END "
                     "WHERE owner_id=? AND item_id=? AND run_id=?",
                     (now.isoformat(), owner_id, item_id, run_id))
-                return None
+                return Attempt(None, None)
             self._db.execute(
-                "UPDATE watchlist_diffs SET attempts=attempts+1, updated_at=? "
+                "UPDATE watchlist_diffs SET attempts=attempts+1, updated_at=?, "
+                "attempt_started_at=?, retry_after=NULL "
                 "WHERE owner_id=? AND item_id=? AND run_id=?",
-                (now.isoformat(), owner_id, item_id, run_id))
-            return attempts + 1
+                (now.isoformat(), now.isoformat(), owner_id, item_id, run_id))
+            return Attempt(attempts + 1, None)
+
+    def release_attempt(self, owner_id, item_id, run_id) -> None:
+        """End this attempt's lease without recording a failure (it is recomputed at once)."""
+        with self._write():
+            self._db.execute(
+                "UPDATE watchlist_diffs SET attempt_started_at=NULL "
+                "WHERE owner_id=? AND item_id=? AND run_id=? AND status='pending'",
+                (owner_id, item_id, run_id))
 
     def record_failure(self, owner_id, item_id, run_id, error: str,
                        retry_after: datetime | None, now: datetime) -> None:
@@ -216,6 +240,7 @@ class SqliteDiffRepository:
         with self._write():
             self._db.execute(
                 "UPDATE watchlist_diffs SET error=?, updated_at=?, retry_after=?, "
+                "attempt_started_at=NULL, "
                 "status=CASE WHEN ? IS NULL THEN 'failed' ELSE status END "
                 "WHERE owner_id=? AND item_id=? AND run_id=? AND status='pending'",
                 (error[:_ERROR_CHARS], now.isoformat(),
@@ -279,6 +304,7 @@ class SqliteDiffRepository:
                       "intervening_failed": [f.model_dump(mode="json") for f in intervening]}
             self._db.execute(
                 "UPDATE watchlist_diffs SET status='succeeded', error='', detail=?, alert_id=?, "
+                "attempt_started_at=NULL, "
                 "updated_at=? WHERE owner_id=? AND item_id=? AND run_id=?",
                 (json.dumps(detail), alert.id if alert else None, now.isoformat(),
                  owner_id, item_id, run_id))
