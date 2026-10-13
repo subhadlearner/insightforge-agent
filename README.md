@@ -94,8 +94,9 @@ fields to change; a stale revision returns 409. Responses include `item`, `runs_
 The UI can render `runs_started` of `item.max_runs` runs started. Executor capacity refusal
 creates no Run and consumes no slot; a persisted Run that fails or is cancelled consumes one.
 
-A cadence edit resets the next tick; other edits preserve a future due time. An overdue item,
-including one re-enabled by raising `max_runs`, restarts one cadence after the edit instead of
+A cadence edit resets the next tick; other edits preserve a future due time, and a tick that
+fell due within the last cadence still runs. An item more than one cadence overdue, including
+one re-enabled long after reaching `max_runs`, restarts one cadence after the edit instead of
 firing immediately from a stale schedule. No edit resets the Run count. Once any Run has
 started, use a new item to change its Brief. Deleting an item retains its Runs and Reports and
 lets already admitted work finish. All endpoints use the existing owner-scoped 404 behavior.

@@ -137,7 +137,9 @@ class Runtime:
     def start(self) -> None:
         self.scheduler.start(paused=True)
         install_timeout_handler(self.clarifications.time_out)
-        install_watchlist_handler(self.watchlists.schedules.tick)
+        install_watchlist_handler(
+            self.watchlists.schedules.tick, self.watchlists.schedules.retry_baseline
+        )
         self.recovered = startup_sweep(self.deps, self.clarifications)
         logger.info("startup sweep: %s", dict(self.recovered))
         self.watchlists.schedules.recover()

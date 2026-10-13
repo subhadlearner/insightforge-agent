@@ -393,8 +393,10 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Editing:** cadence, source choices and `max_runs` can change. PATCH requires the revision from
   the client's last read; the repository compares it atomically and returns 409 for a stale edit.
   A cadence change resets the next tick to one new cadence from the edit; other changes preserve
-  a future due time. An overdue item, including one re-enabled after its due time, restarts one
-  cadence from the edit. The
+  a future due time, and a tick that fell due within the last cadence stays due, so the edit's
+  new revision runs it at once instead of losing it to the revision check. An item more than one
+  cadence overdue, such as one re-enabled long after its limit was reached, restarts one cadence
+  from the edit. The
   due-time merge and revision check use the current row in one repository transaction, so a PATCH
   cannot overwrite a tick's newer due time. Every successful edit increments the revision. After
   any Run started, changing the standing Brief returns 409: create a new item so its established
@@ -415,8 +417,8 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   one cadence are accepted, while a callback more than one cadence late advances beyond the
   missed intervals without starting a Run.
   SQLite consumes each due time once; duplicate, stale, missed and overlapping callbacks do not
-  start another Run, and each skip is logged. Capacity refusal skips that tick, with no immediate
-  retry. Once the Run limit is reached the interval job is removed. Raising the limit through
+  start another Run, and each skip is logged. Capacity refusal, and a Brief check that finds no
+  usable source, skips that tick with no immediate retry. Once the Run limit is reached the interval job is removed. Raising the limit through
   PATCH restores scheduling.
 - **Recovery/order:** install both handlers while paused, run T9 recovery, repair Watchlist
   completion inputs and persisted schedules, advance due times beyond downtime, then resume.
@@ -435,15 +437,20 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   no successful Run. Later successes and all failures leave the seed state unchanged.
 - **Completion:** the scheduler's post-processing callback runs after COMPLETE, outside the
   research graph, including resumed/recovered Runs. Initialization is attempted from this
-  callback and startup recovery; a pending transient failure is retried on a later tick, even
+  callback and startup recovery, never from a tick. A temporary failure schedules a persisted
+  one-shot retry job one minute later (`watchlist-baseline:<owner>:<item>`), which reschedules
+  itself while it keeps failing; it does not depend on the research interval, so it also works
   after the last allowed Run. It queries COMPLETE Runs through the Watchlist index rather than
-  scanning all owner Reports. Any non-temporary conversion failure quarantines that Report for
-  the current Baseline seed schema so the next successful Report can establish the Baseline.
+  scanning all owner Reports. Only a defect of the candidate's own data (`ValueError`,
+  `LookupError`, `TypeError` or `AttributeError`, which include validation errors and missing
+  rows) quarantines that Report for the current Baseline seed schema, so the next successful
+  Report can establish the Baseline. Any other error, such as a store error or `MemoryError`,
+  is treated as temporary and retried, so it can never reject the earliest success.
   Incrementing the schema version makes old candidates eligible for re-evaluation after a
   compatibility fix. No initialization error can prevent later research or process startup. No
   Diff or Alert is created by T11.
 - **Dashboard:** `item.max_runs`, `runs_started`, `completed_runs`, `failed_runs`, and the five
-  most recent Failed Run records. No Watchlist status is added. Failure details remain available
+  most recent Failed Run records, read by a bounded query on the Watchlist Run index. No Watchlist status is added. Failure details remain available
   through the existing owner-scoped Run events/SSE endpoint.
 - **Tests:** `tests/api/test_t11_watchlist.py`, `tests/api/test_t11_lifecycle.py`, and
   `tests/stores/test_watchlist_repository.py` cover CRUD, owner/source validation, races,

@@ -232,3 +232,56 @@ def test_existing_quarantine_table_gets_schema_version_migration(tmp_path):
         assert "schema_version" in columns
     finally:
         repos.close()
+
+
+def test_patch_without_cadence_change_keeps_a_tick_due_within_one_cadence(repos):
+    repo = repos.watchlists
+    repo.add(item())
+    edited = repo.get("alice", "w").model_copy(update={"revision": 2, "max_runs": 9})
+    merged = repo.update(edited, 1, NOW + timedelta(minutes=1))
+    assert merged.next_tick_at == NOW
+    assert repo.take_tick("alice", "w", 1, NOW + timedelta(minutes=1)) is None
+    assert repo.take_tick("alice", "w", 2, NOW + timedelta(minutes=1)) is not None
+
+    recadenced = merged.model_copy(update={"revision": 3, "cadence_minutes": 30})
+    later = NOW + timedelta(minutes=16)
+    assert repo.update(recadenced, 2, later).next_tick_at == later + timedelta(
+        minutes=30
+    )
+
+
+def test_recent_failed_runs_are_this_items_newest_failures_only(repos):
+    repo = repos.watchlists
+    repo.add(item())
+    repo.add(item().model_copy(update={"id": "other"}))
+    for n in range(7):
+        repo.start(
+            run(f"f{n}", RunState.FAILED).model_copy(
+                update={"created_at": NOW + timedelta(minutes=n)}
+            ),
+            1,
+        )
+    repo.start(
+        run("ok", RunState.COMPLETE).model_copy(
+            update={"created_at": NOW + timedelta(hours=1)}
+        ),
+        1,
+    )
+    repo.start(
+        run("elsewhere", RunState.FAILED).model_copy(
+            update={
+                "watchlist_item_id": "other",
+                "created_at": NOW + timedelta(hours=2),
+            }
+        ),
+        1,
+    )
+    assert [r.id for r in repo.recent_failed_runs("alice", "w", 5)] == [
+        "f6",
+        "f5",
+        "f4",
+        "f3",
+        "f2",
+    ]
+    with pytest.raises(NotFoundError):
+        repo.recent_failed_runs("bob", "w")

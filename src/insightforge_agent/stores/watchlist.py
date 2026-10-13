@@ -17,7 +17,7 @@ from insightforge_agent.domain.watchlist import (
     WatchlistItem,
     check_watchlist_brief_change,
 )
-from insightforge_agent.stores.run_rows import insert_run_row
+from insightforge_agent.stores.run_rows import insert_run_row, run_from_row
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watchlist_items (
@@ -37,21 +37,19 @@ CREATE INDEX IF NOT EXISTS watchlist_runs ON runs(owner_id,watchlist_item_id,sta
 """
 
 
+def merged_next_tick_at(old: WatchlistItem, item: WatchlistItem, now: datetime):
+    """The due time an edit keeps. A new cadence restarts one cadence from now, and so does a
+    schedule more than one cadence overdue (an exhausted item being re-enabled). A tick due
+    within the last cadence stays due, so the edit's new revision still runs it."""
+    step = timedelta(minutes=item.cadence_minutes)
+    if item.cadence_minutes != old.cadence_minutes or now - old.next_tick_at > step:
+        return now + step
+    return old.next_tick_at
+
+
 class SqliteWatchlistRepository:
     def __init__(self, db, lock):
         self._db, self._lock = db, lock
-        columns = {
-            row[1]
-            for row in self._db.execute(
-                "PRAGMA table_info(watchlist_baseline_failures)"
-            )
-        }
-        if "schema_version" not in columns:
-            with self._db:
-                self._db.execute(
-                    "ALTER TABLE watchlist_baseline_failures "
-                    "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0"
-                )
 
     @contextmanager
     def _write(self):
@@ -115,10 +113,9 @@ class SqliteWatchlistRepository:
             check_watchlist_brief_change(
                 old, item, self.counts(item.owner_id, item.id)[0]
             )
-            next_tick_at = old.next_tick_at
-            if item.cadence_minutes != old.cadence_minutes or old.next_tick_at <= now:
-                next_tick_at = now + timedelta(minutes=item.cadence_minutes)
-            item = item.model_copy(update={"next_tick_at": next_tick_at})
+            item = item.model_copy(
+                update={"next_tick_at": merged_next_tick_at(old, item, now)}
+            )
             self._save(item)
             return item
 
@@ -147,6 +144,17 @@ class SqliteWatchlistRepository:
                 (owner_id, item_id),
             ).fetchone()
             return tuple(row)
+
+    def recent_failed_runs(self, owner_id, item_id, limit=5) -> list[Run]:
+        """Newest first, through the Watchlist Run index; never every Run of the owner."""
+        with self._lock:
+            self.get(owner_id, item_id)
+            rows = self._db.execute(
+                "SELECT * FROM runs WHERE owner_id=? AND watchlist_item_id=? "
+                "AND state='FAILED' ORDER BY created_at DESC, id DESC LIMIT ?",
+                (owner_id, item_id, limit),
+            ).fetchall()
+        return [run_from_row(r) for r in rows]
 
     def start(
         self,
@@ -334,10 +342,9 @@ class MemoryWatchlistRepository:
             check_watchlist_brief_change(
                 old, item, self.counts(item.owner_id, item.id)[0]
             )
-            next_tick_at = old.next_tick_at
-            if item.cadence_minutes != old.cadence_minutes or old.next_tick_at <= now:
-                next_tick_at = now + timedelta(minutes=item.cadence_minutes)
-            item = item.model_copy(update={"next_tick_at": next_tick_at})
+            item = item.model_copy(
+                update={"next_tick_at": merged_next_tick_at(old, item, now)}
+            )
             self._items[item.owner_id, item.id] = item.model_copy(deep=True)
             return item
 
@@ -363,6 +370,16 @@ class MemoryWatchlistRepository:
                 sum(r.state == RunState.COMPLETE for r in runs),
                 sum(r.state == RunState.FAILED for r in runs),
             )
+
+    def recent_failed_runs(self, owner_id, item_id, limit=5):
+        with self._lock:
+            self.get(owner_id, item_id)
+            failed = [
+                r
+                for r in self._runs.list_for_owner(owner_id)
+                if r.watchlist_item_id == item_id and r.state == RunState.FAILED
+            ]
+            return list(reversed(failed))[:limit]
 
     def start(self, run, expected_revision, admission_open=None):
         with self._lock:

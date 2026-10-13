@@ -21,7 +21,6 @@ from insightforge_agent.domain.watchlist import (
     WatchlistPatch,
     check_watchlist_brief_change,
 )
-from insightforge_agent.domain.models import RunState
 from insightforge_agent.pipeline.memory import eligible_report_ids
 
 
@@ -126,11 +125,7 @@ class WatchlistService:
             repo = self.deps.repos.watchlists
             item = repo.get(owner_id, item_id)
             started, complete, failed = repo.counts(owner_id, item_id)
-            recent = [
-                r
-                for r in reversed(self.deps.repos.runs.list_for_owner(owner_id))
-                if r.watchlist_item_id == item_id and r.state == RunState.FAILED
-            ][:5]
+            recent = repo.recent_failed_runs(owner_id, item_id, limit=5)
             return WatchlistDashboard(
                 item=item,
                 runs_started=started,

@@ -5,7 +5,12 @@ import threading
 
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.domain.watchlist import BASELINE_SEED_SCHEMA_VERSION
-from insightforge_agent.scheduler.watchlist import job_id
+from insightforge_agent.domain.errors import SubmissionRejected
+from insightforge_agent.scheduler.watchlist import (
+    BASELINE_RETRY_DELAY,
+    baseline_job_id,
+    job_id,
+)
 from tests.api.support import App, BRIEF, Gate, T0, wait_until
 from tests.api.test_t11_watchlist import create
 from tests.pipeline import fakes
@@ -473,12 +478,12 @@ def test_raising_limit_restarts_from_a_future_tick_not_stale_due_time(tmp_path):
         assert app.runtime.repos.watchlists.counts("alice", item.id) == (1, 1, 0)
 
 
-def test_last_allowed_run_retries_temporary_baseline_failure_on_tick(
+def test_last_allowed_run_retries_temporary_baseline_failure_on_its_own_short_job(
     tmp_path, monkeypatch
 ):
     clock = Clock(T0)
     with App(tmp_path, now=clock) as app:
-        item = setup(app, max_runs=1)
+        item = setup(app, max_runs=1, cadence_minutes=525600)
         schedules = app.runtime.watchlists.schedules
         initialize = schedules.initialize
         failed_once = False
@@ -499,10 +504,121 @@ def test_last_allowed_run_retries_temporary_baseline_failure_on_tick(
         wait_until(lambda: app.runtime.executor.in_flight == 0)
         assert failed_once
         assert app.runtime.repos.watchlists.baseline("alice", item.id) is None
-        assert app.runtime.scheduler.get_job(job_id("alice", item.id)) is not None
+        # The exhausted research interval is gone; the retry waits one short delay, not
+        # one cadence (a year here).
+        assert app.runtime.scheduler.get_job(job_id("alice", item.id)) is None
+        retry = app.runtime.scheduler.get_job(baseline_job_id("alice", item.id))
+        assert retry.next_run_time == clock.at + BASELINE_RETRY_DELAY
 
-        assert tick(app, clock, item) is None  # retry succeeds; max_runs blocks admission
+        schedules.retry_baseline("alice", item.id)
         baseline = app.runtime.repos.watchlists.baseline("alice", item.id)
         assert baseline is not None and baseline.initializing_run_id == run.id
         assert app.runtime.repos.watchlists.counts("alice", item.id) == (1, 1, 0)
+
+
+def test_real_apscheduler_fires_baseline_retry_after_temporary_failure(
+    tmp_path, monkeypatch
+):
+    from datetime import UTC, datetime
+
+    with App(tmp_path) as app:
+        item = setup(app, max_runs=1, cadence_minutes=525600)
+        schedules = app.runtime.watchlists.schedules
+        schedules.baseline_retry_delay = timedelta(milliseconds=200)
+        initialize = schedules.initialize
+        failures = []
+
+        def flaky(owner_id, item_id):
+            if not failures:
+                failures.append(owner_id)
+                raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+            return initialize(owner_id, item_id)
+
+        monkeypatch.setattr(schedules, "initialize", flaky)
+        item = set_due(app, item, datetime.now(UTC))
+        run = schedules.tick("alice", item.id, item.revision)
+        assert app.wait(run.id).state == RunState.COMPLETE
+        wait_until(
+            lambda: app.runtime.repos.watchlists.baseline("alice", item.id) is not None
+        )
+        assert failures
+        baseline = app.runtime.repos.watchlists.baseline("alice", item.id)
+        assert baseline.initializing_run_id == run.id
+        wait_until(
+            lambda: app.runtime.scheduler.get_job(baseline_job_id("alice", item.id))
+            is None
+        )
+
+
+def test_deleting_an_item_cancels_its_pending_baseline_retry(tmp_path):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app)
+        schedules = app.runtime.watchlists.schedules
+        schedules._schedule_baseline_retry("alice", item.id)
+        assert app.runtime.scheduler.get_job(baseline_job_id("alice", item.id))
+        assert app.client.delete(f"/watchlist/{item.id}").status_code == 204
+        assert app.runtime.scheduler.get_job(baseline_job_id("alice", item.id)) is None
         assert app.runtime.scheduler.get_job(job_id("alice", item.id)) is None
+
+
+def test_unusable_source_rejection_skips_the_tick_without_raising(
+    tmp_path, monkeypatch
+):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app)
+
+        def no_source(*_, **__):
+            raise SubmissionRejected("web search is not available")
+
+        monkeypatch.setattr(app.runtime.research, "submit", no_source)
+        assert tick(app, clock, item) is None
+        assert app.runtime.repos.watchlists.counts("alice", item.id) == (0, 0, 0)
+        assert app.runtime.scheduler.get_job(job_id("alice", item.id)) is not None
+
+
+def test_tick_does_not_reread_baseline(tmp_path, monkeypatch):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=2)
+        schedules = app.runtime.watchlists.schedules
+        first = tick(app, clock, item)
+        assert app.wait(first.id).state == RunState.COMPLETE
+        wait_until(lambda: app.runtime.executor.in_flight == 0)
+        callers = []
+        monkeypatch.setattr(
+            schedules,
+            "initialize",
+            lambda *_: callers.append(threading.current_thread()),
+        )
+        second = tick(app, clock, item)
+        assert app.wait(second.id).state == RunState.COMPLETE
+        # Only the worker's completion step may initialize; the tick itself never does.
+        assert threading.current_thread() not in callers
+
+
+def test_patch_while_a_tick_is_due_keeps_that_tick(tmp_path):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=1)
+        clock.at = item.next_tick_at + timedelta(seconds=30)
+        response = app.client.patch(
+            f"/watchlist/{item.id}", json={"revision": item.revision, "max_runs": 5}
+        )
+        assert response.status_code == 200, response.text
+        # The tick fired for the old revision is stale, but the edit kept the due time,
+        # so the re-synced job fires at once with the new revision and is admitted.
+        assert (
+            app.runtime.watchlists.schedules.tick("alice", item.id, item.revision)
+            is None
+        )
+        current = app.runtime.repos.watchlists.get("alice", item.id)
+        assert current.next_tick_at == item.next_tick_at
+        job = app.runtime.scheduler.get_job(job_id("alice", item.id))
+        assert job.next_run_time == item.next_tick_at
+        run = app.runtime.watchlists.schedules.tick(
+            "alice", item.id, current.revision
+        )
+        assert run is not None
+        assert app.wait(run.id).state == RunState.COMPLETE

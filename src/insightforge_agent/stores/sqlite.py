@@ -29,7 +29,7 @@ from insightforge_agent.domain.models import (
 )
 from insightforge_agent.domain.passages import check_passages
 from insightforge_agent.domain.plan import SubTask
-from insightforge_agent.stores.run_rows import insert_run_row
+from insightforge_agent.stores.run_rows import insert_run_row, run_from_row
 from insightforge_agent.stores.watchlist import (
     SCHEMA as WATCHLIST_SCHEMA,
     SqliteWatchlistRepository,
@@ -127,11 +127,7 @@ class SqliteRunRepository(_Base):
         except sqlite3.IntegrityError as e:
             raise ValueError(f"run {run.id} already exists") from e
 
-    @staticmethod
-    def _row(row) -> Run:
-        return Run(owner_id=row[0], id=row[1], brief=row[2], state=RunState(row[3]),
-                   created_at=_dt(row[4]), watchlist_item_id=row[5],
-                   clarification=Clarification.model_validate_json(row[6]) if row[6] else None)
+    _row = staticmethod(run_from_row)
 
     def get(self, owner_id: str, run_id: str) -> Run:
         row = self._db.execute(
@@ -481,6 +477,11 @@ def _migrate(db: sqlite3.Connection) -> None:
     if "clarification" not in columns:  # T9
         with db:
             db.execute("ALTER TABLE runs ADD COLUMN clarification TEXT")
+    columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_baseline_failures)")}
+    if "schema_version" not in columns:  # T11 draft databases
+        with db:
+            db.execute("ALTER TABLE watchlist_baseline_failures "
+                       "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0")
 
 
 class SqliteRepos:

@@ -1,4 +1,7 @@
+import sqlite3
 from types import SimpleNamespace
+
+import pytest
 
 from insightforge_agent.domain.contracts import (
     Claim,
@@ -212,3 +215,33 @@ def test_empty_current_input_is_distinct_from_no_success(repos):
     baseline = service.initialize("alice", "w")
     assert baseline is not None and baseline.seeds == []
     assert baseline.initializing_run_id == "first"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        sqlite3.ProgrammingError("Cannot operate on a closed database."),
+        sqlite3.InterfaceError("bad binding"),
+        sqlite3.DatabaseError("disk I/O error"),
+        MemoryError(),
+    ],
+)
+def test_temporary_conversion_errors_never_reject_the_first_success(
+    repos, monkeypatch, error
+):
+    service = prepare(repos)
+
+    def unavailable(*_):
+        raise error
+
+    monkeypatch.setattr(service, "_baseline_from_report", unavailable)
+    with pytest.raises(type(error)):
+        service.initialize("alice", "w")
+    assert [
+        r.run_id
+        for r in repos.watchlists.baseline_candidates(
+            "alice", "w", BASELINE_SEED_SCHEMA_VERSION
+        )
+    ] == ["first"]
+    monkeypatch.undo()
+    assert service.initialize("alice", "w").initializing_run_id == "first"
