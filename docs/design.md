@@ -410,7 +410,10 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   into that transaction, so an intervening edit cannot start the old Brief or source choices.
   Shutdown admission is checked in the same transaction. Failed and queued-then-cancelled Runs
   consume a slot; refusal before persistence consumes none. `AWAITING_CLARIFICATION` and `RESUMING` block overlap.
-  `run_brief(watchlist_item_id=...)` now also validates ownership and source restrictions (#49).
+  `run_brief(watchlist_item_id=...)` now also validates ownership and source restrictions (#49),
+  and `check_brief` binds every Watchlist Run to its item: the Brief text must equal the
+  standing Brief and the enabled sources must equal the item's (a false toggle and an omitted
+  one are the same), with no documents or uploads; otherwise `SubmissionRejected`.
 - **Ticks:** persisted APScheduler interval jobs share T9's scheduler/job store. Jobs carry owner,
   item and revision, with `max_instances=1` and coalescing. The durable `next_tick_at` comparison
   is the only late/missed decision: a callback up to one second early and dispatch delay through
@@ -418,8 +421,11 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   missed intervals without starting a Run.
   SQLite consumes each due time once; duplicate, stale, missed and overlapping callbacks do not
   start another Run, and each skip is logged. Capacity refusal, and a Brief check that finds no
-  usable source, skips that tick with no immediate retry. Once the Run limit is reached the interval job is removed. Raising the limit through
-  PATCH restores scheduling.
+  usable source, skips that tick with no immediate retry. Once the Run limit is reached the
+  interval job is removed. Raising the limit through PATCH restores scheduling. `sync` re-reads
+  the current row under the repository lock that PATCH holds around its update and sync, so a
+  tick's cleanup holding an older snapshot cannot remove a schedule a concurrent limit raise
+  restored.
 - **Recovery/order:** install both handlers while paused, run T9 recovery, repair Watchlist
   completion inputs and persisted schedules, advance due times beyond downtime, then resume.
   Deleted-item jobs are removed. One lock-free event closes both SSE and Watchlist admission;
@@ -441,11 +447,13 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   one-shot retry job one minute later (`watchlist-baseline:<owner>:<item>`), which reschedules
   itself while it keeps failing; it does not depend on the research interval, so it also works
   after the last allowed Run. It queries COMPLETE Runs through the Watchlist index rather than
-  scanning all owner Reports. Only a defect of the candidate's own data (`ValueError`,
-  `LookupError`, `TypeError` or `AttributeError`, which include validation errors and missing
-  rows) quarantines that Report for the current Baseline seed schema, so the next successful
-  Report can establish the Baseline. Any other error, such as a store error or `MemoryError`,
-  is treated as temporary and retried, so it can never reject the earliest success.
+  scanning all owner Reports. Only `InvalidBaselineCandidate` quarantines that Report for the
+  current Baseline seed schema, so the next successful Report can establish the Baseline.
+  Conversion raises it only for explicit defects of the candidate's own stored data: a body
+  that is not a mapping or fails Pydantic validation, a Claim citing missing Evidence, a
+  missing Observation, Source or Passage, an Observation from another Run, or a non-web
+  Source. Any other error, including an unexpected `AttributeError` or `TypeError`, a store
+  error or `MemoryError`, is retried, so it can never reject the earliest success.
   Incrementing the schema version makes old candidates eligible for re-evaluation after a
   compatibility fix. No initialization error can prevent later research or process startup. No
   Diff or Alert is created by T11.

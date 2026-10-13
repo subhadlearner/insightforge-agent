@@ -38,7 +38,7 @@ from insightforge_agent.agents.researcher import (
     researcher_subagent,
     source_ids_in,
 )
-from insightforge_agent.domain.watchlist import WatchlistConflict, check_watchlist_sources
+from insightforge_agent.domain.watchlist import WatchlistConflict, check_watchlist_run_brief
 from insightforge_agent.domain.contracts import (
     Brief,
     EvidenceBundle,
@@ -636,7 +636,7 @@ def check_brief(
         item = deps.repos.watchlists.get(owner_id, watchlist_item_id)
         if watchlist_revision is not None and item.revision != watchlist_revision:
             raise WatchlistConflict("the Watchlist Item changed before submission")
-        check_watchlist_sources(brief)
+        check_watchlist_run_brief(item, brief)
         if uploads:
             raise SubmissionRejected("Watchlist Items cannot use uploaded documents")
         revision = watchlist_revision or item.revision

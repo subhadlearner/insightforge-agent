@@ -622,3 +622,36 @@ def test_patch_while_a_tick_is_due_keeps_that_tick(tmp_path):
         )
         assert run is not None
         assert app.wait(run.id).state == RunState.COMPLETE
+
+
+def test_stale_sync_cannot_remove_schedule_restored_by_concurrent_limit_raise(
+    tmp_path, monkeypatch
+):
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=1)
+        schedules = app.runtime.watchlists.schedules
+        sync = schedules.sync
+        raised = []
+
+        def raise_limit_then_sync(stale):
+            # The tick's cleanup read the row while max_runs was 1; a PATCH raising the
+            # limit (and restoring the job) lands before that stale snapshot is synced.
+            if not raised and stale.max_runs == 1:
+                raised.append(stale)
+                response = app.client.patch(
+                    f"/watchlist/{item.id}",
+                    json={"revision": stale.revision, "max_runs": 2},
+                )
+                assert response.status_code == 200, response.text
+                assert app.runtime.scheduler.get_job(job_id("alice", item.id))
+            return sync(stale)
+
+        monkeypatch.setattr(schedules, "sync", raise_limit_then_sync)
+        run = tick(app, clock, item)
+        assert raised and raised[0].max_runs == 1
+        assert app.wait(run.id).state == RunState.COMPLETE
+        current = app.runtime.repos.watchlists.get("alice", item.id)
+        assert current.max_runs == 2
+        job = app.runtime.scheduler.get_job(job_id("alice", item.id))
+        assert job is not None and job.args[2] == current.revision

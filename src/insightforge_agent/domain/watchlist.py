@@ -14,11 +14,33 @@ class WatchlistConflict(Exception):
     """A stale edit/tick, active Run, or exhausted limit; no new Run was stored."""
 
 
+class InvalidBaselineCandidate(ValueError):
+    """A successful Report whose own stored data cannot seed a Baseline: malformed body,
+    missing Evidence or provenance rows, foreign Observations or non-web Sources. Only this
+    error quarantines a candidate; any other failure is retried."""
+
+
 def check_watchlist_sources(brief: Brief) -> None:
     if not brief.source_toggles.get("web"):
         raise SubmissionRejected("Watchlist Items require web search")
     if brief.source_toggles.get("documents") or brief.document_ids:
         raise SubmissionRejected("Watchlist Items cannot use uploaded documents")
+
+
+def enabled_sources(toggles) -> set[str]:
+    """Toggles compared by meaning: a false toggle and an omitted one are the same."""
+    return {source for source, on in toggles.items() if on}
+
+
+def check_watchlist_run_brief(item: "WatchlistItem", brief: Brief) -> None:
+    """A Watchlist Run researches exactly the item's standing Brief and source choices."""
+    check_watchlist_sources(brief)
+    if brief.text != item.brief:
+        raise SubmissionRejected("a Watchlist Run must use the item's standing Brief")
+    if enabled_sources(brief.source_toggles) != enabled_sources(item.source_toggles):
+        raise SubmissionRejected(
+            "a Watchlist Run must use the item's configured source choices"
+        )
 
 
 class WatchlistConfig(BaseModel):

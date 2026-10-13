@@ -1,7 +1,7 @@
 import pytest
 from insightforge_agent.domain.contracts import Brief
-from insightforge_agent.domain.errors import NotFoundError
-from insightforge_agent.pipeline.graph import run_brief
+from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
+from insightforge_agent.pipeline.graph import check_brief, run_brief
 from tests.api.support import App, BRIEF, VAGUE
 
 
@@ -140,3 +140,29 @@ def test_update_requires_current_revision_and_preserves_due_time(tmp_path):
             f"/watchlist/{item['id']}", json={"max_runs": 3}
         )
         assert missing.status_code == 422
+
+
+def test_watchlist_run_must_match_standing_brief_and_source_configuration(tmp_path):
+    with App(tmp_path) as app:
+        app.login("alice")
+        response = create(app, source_toggles={"web": True, "memory": False})
+        assert response.status_code == 201, response.text
+        iid = response.json()["item"]["id"]
+        deps = app.runtime.deps
+        for brief in [
+            Brief(text="An unrelated Brief about solar panels"),
+            Brief(text=BRIEF, source_toggles={"web": True, "memory": True}),
+            Brief(text=BRIEF, source_toggles={"web": True, "documents": True}),
+            Brief(text=BRIEF, document_ids=["doc_1"]),
+        ]:
+            with pytest.raises(SubmissionRejected):
+                check_brief(deps, "alice", brief, watchlist_item_id=iid)
+            with pytest.raises(SubmissionRejected):
+                run_brief(deps, "alice", brief, watchlist_item_id=iid)
+        assert app.runtime.repos.watchlists.counts("alice", iid) == (0, 0, 0)
+        # False and omitted toggles mean the same configuration.
+        for toggles in [{"web": True}, {"web": True, "memory": False, "documents": False}]:
+            checked = check_brief(
+                deps, "alice", Brief(text=BRIEF, source_toggles=toggles), watchlist_item_id=iid
+            )
+            assert checked.watchlist_item_id == iid

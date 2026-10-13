@@ -10,12 +10,12 @@ GitHub independently confirmed PR #51 merged at this commit before branching.
 | CP1 | Watchlist configuration/repositories, CRUD, Planner-only preflight, owner/source checks | `tests/api/test_t11_watchlist.py`, including revision-aware PATCH |
 | CP2 | APScheduler interval jobs, durable due-time consumption, atomic Run admission, max_runs | `tests/stores/test_watchlist_repository.py` and `tests/api/test_t11_lifecycle.py` |
 | CP3 | Dashboard counts and first-success initialization input with current Claim/Evidence provenance | `tests/stores/test_watchlist_baseline.py` and lifecycle tests |
-| CP4 | Real scheduler/misfire, cancellation, two-connection races, recovery, clarification, post-processing failure | Final full offline suite: 1,560 passed |
+| CP4 | Real scheduler/misfire, cancellation, two-connection races, recovery, clarification, post-processing failure | Final full offline suite: 1,576 passed |
 
 ## Executed results
 
-- `uv run pytest -q`: **1,560 passed, 26 deselected** after the third review pass (previously 1,543). No test failures. Includes the focused T11/T10 shutdown tests and the existing T9/T10 regressions.
-- `uv run pytest -q -m integration`: **19 passed, 1,567 deselected** after the third review pass, with local model caches present. (The earlier pass had all 19 skipped because the caches were absent.)
+- `uv run pytest -q`: **1,576 passed, 26 deselected** after the final review pass. Focused T11 files (`test_t11_watchlist.py`, `test_t11_lifecycle.py`, `test_watchlist_repository.py`, `test_watchlist_baseline.py`): **107 passed**.
+- `uv run pytest -q -m integration`: **19 passed, 1,583 deselected** after the final review pass, with local model caches present.
 - `uv run lint-imports`: **4 kept, 0 broken**.
 - `git diff --check`: clean.
 - No live tests, paid model calls, real search calls, or model-weight downloads were performed.
@@ -61,9 +61,15 @@ uv run pytest -q -m integration
   research interval; a non-cadence edit keeps a tick due within the last cadence; ticks no
   longer re-read the Baseline; the dashboard reads recent Failed Runs with a bounded indexed
   query; and the quarantine `schema_version` migration lives in `_migrate`.
-- **AC5 scope boundary:** T11 initializes durable provenance-rich current Claim/Evidence seeds,
-  marked `normalization_pending=true`. This is the T11 persistence/initialization contract from
-  the handover. A fully normalized, established per-Finding Baseline is **not implemented** here;
+- The final review pass: `sync` decides from the authoritative row under the repository lock,
+  so a stale tick cleanup cannot undo a concurrent `max_runs` raise; quarantine is the explicit
+  `InvalidBaselineCandidate` for known candidate-data defects only (an unexpected
+  `AttributeError` or `TypeError` is retried); and `check_brief` requires a Watchlist Run's
+  Brief and enabled sources to match the item's standing configuration.
+- **AC5 met at the T11 boundary:** the first successful Run initializes durable Baseline input
+  exactly once: provenance-rich current Claim/Evidence seeds, marked
+  `normalization_pending=true`. T12 normalizes those seeds before any comparison; normalized
+  per-Finding state is not implemented here;
   T12 owns normalization, predicate cardinality/identity, polarity, temporal rules and Diff/Alert
   behavior. Seeds are never advertised as normalized Findings or used for Report-to-Report Diff.
 - **T20 concern:** Watchlist writes and APScheduler's separate job-store writes are not one

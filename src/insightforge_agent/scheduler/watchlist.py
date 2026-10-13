@@ -12,6 +12,7 @@ from collections.abc import Callable
 from datetime import timedelta
 
 from apscheduler.jobstores.base import JobLookupError
+from pydantic import ValidationError
 
 from insightforge_agent.domain.contracts import EvidenceBundle, VerifiedReport
 from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
@@ -20,6 +21,7 @@ from insightforge_agent.domain.watchlist import (
     BASELINE_SEED_SCHEMA_VERSION,
     Baseline,
     BaselineSeed,
+    InvalidBaselineCandidate,
     WatchlistConflict,
 )
 from insightforge_agent.pipeline.executor import WorkNotAccepted
@@ -28,11 +30,6 @@ logger = logging.getLogger(__name__)
 _handler: Callable | None = None
 _baseline_handler: Callable | None = None
 BASELINE_RETRY_DELAY = timedelta(minutes=1)
-# Defects of a candidate Report's own data: a malformed body (ValidationError is a
-# ValueError), a missing key, item or row (NotFoundError and KeyError are LookupErrors), or
-# a body of the wrong shape. Anything else, such as a store error or MemoryError, may pass,
-# so it is retried and never rejects the earliest successful Run.
-CORRUPT_CANDIDATE_ERRORS = (ValueError, LookupError, TypeError, AttributeError)
 
 
 def install_watchlist_handler(handler, baseline_handler=None):
@@ -86,12 +83,25 @@ class WatchlistScheduler:
             pass
 
     def sync(self, item):
+        """Schedule from the current row, never the caller's snapshot. The repository lock
+        is the one PATCH holds around its update and sync, so a stale caller (a tick's
+        cleanup) cannot undo a concurrent limit raise."""
         if self.closing.is_set():
             return
-        started = self.deps.repos.watchlists.counts(item.owner_id, item.id)[0]
-        if item.max_runs is not None and started >= item.max_runs:
-            self._remove(job_id(item.owner_id, item.id))
-            return
+        repo = self.deps.repos.watchlists
+        with self.deps.repos.lock:
+            try:
+                item = repo.get(item.owner_id, item.id)
+            except NotFoundError:
+                self.cancel(item.owner_id, item.id)
+                return
+            started = repo.counts(item.owner_id, item.id)[0]
+            if item.max_runs is not None and started >= item.max_runs:
+                self._remove(job_id(item.owner_id, item.id))
+                return
+            self._add_interval(item)
+
+    def _add_interval(self, item):
         self.scheduler.add_job(
             f"{__name__}:fire_watchlist",
             trigger="interval",
@@ -249,7 +259,7 @@ class WatchlistScheduler:
         ):
             try:
                 baseline = self._baseline_from_report(owner_id, item_id, report)
-            except CORRUPT_CANDIDATE_ERRORS as error:
+            except InvalidBaselineCandidate as error:
                 first = repo.reject_baseline_candidate(
                     owner_id,
                     item_id,
@@ -271,10 +281,25 @@ class WatchlistScheduler:
         return None
 
     def _baseline_from_report(self, owner_id, item_id, report):
+        """Raises InvalidBaselineCandidate only for defects of the Report's own stored data;
+        anything else (a store outage, a bug) propagates and is retried."""
         deps = self.deps
-        verified = VerifiedReport.model_validate(report.body["verified"])
-        evidence = EvidenceBundle.model_validate(report.body["evidence"])
+        body = report.body
+        if not isinstance(body, dict) or not {"verified", "evidence"} <= body.keys():
+            raise InvalidBaselineCandidate("Report body lacks verified Report and Evidence")
+        try:
+            verified = VerifiedReport.model_validate(body["verified"])
+            evidence = EvidenceBundle.model_validate(body["evidence"])
+        except ValidationError as error:
+            raise InvalidBaselineCandidate(f"malformed Report body: {error}") from error
         items = {i.id: i for section in evidence.sections for i in section.items}
+
+        def stored(kind, read, *key):
+            try:
+                return read(owner_id, *key)
+            except NotFoundError as error:
+                raise InvalidBaselineCandidate(f"missing {kind} {key[0]}") from error
+
         rejected = {
             (v.section, v.claim)
             for v in verified.verdicts
@@ -285,27 +310,36 @@ class WatchlistScheduler:
             for ci, claim in enumerate(section.claims):
                 if claim.historical or (si, ci) in rejected:
                     continue
-                item = items[claim.evidence_id]
+                item = items.get(claim.evidence_id)
+                if item is None:
+                    raise InvalidBaselineCandidate(
+                        f"Claim cites missing Evidence {claim.evidence_id}"
+                    )
                 refs = list(dict.fromkeys([item.primary, *item.supporting]))
                 observations = [
-                    deps.repos.observations.get(owner_id, p.observation_id)
+                    stored("Observation", deps.repos.observations.get, p.observation_id)
                     for p in refs
                 ]
                 if not observations or any(
                     o.run_id != report.run_id for o in observations
                 ):
-                    raise ValueError(
+                    raise InvalidBaselineCandidate(
                         "Baseline Evidence must be fetched in the establishing Run"
                     )
                 for observation in observations:
-                    source = deps.repos.sources.get(owner_id, observation.source_id)
+                    source = stored(
+                        "Source", deps.repos.sources.get, observation.source_id
+                    )
                     if source.kind != "web":
-                        raise ValueError(
+                        raise InvalidBaselineCandidate(
                             "Watchlist Baseline Evidence must be web-sourced"
                         )
                 for passage in refs:
-                    deps.repos.passages.get(
-                        owner_id, passage.observation_id, passage.index
+                    stored(
+                        "Passage",
+                        deps.repos.passages.get,
+                        passage.observation_id,
+                        passage.index,
                     )
                 seeds.append(
                     BaselineSeed(

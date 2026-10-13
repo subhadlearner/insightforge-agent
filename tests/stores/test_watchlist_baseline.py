@@ -21,7 +21,10 @@ from insightforge_agent.domain.models import (
     Source,
     RunState,
 )
-from insightforge_agent.domain.watchlist import BASELINE_SEED_SCHEMA_VERSION
+from insightforge_agent.domain.watchlist import (
+    BASELINE_SEED_SCHEMA_VERSION,
+    InvalidBaselineCandidate,
+)
 from insightforge_agent.scheduler.watchlist import WatchlistScheduler
 from tests.stores.test_watchlist_repository import NOW, item, run
 
@@ -153,9 +156,8 @@ def test_foreign_run_evidence_cannot_seed_baseline(repos):
     ] == ["first"]
 
 
-def test_any_non_temporary_candidate_error_is_quarantined_and_next_success_initializes(
-    repos, monkeypatch
-):
+def test_invalid_candidate_data_is_quarantined_and_next_success_initializes(repos):
+    # The first Report cites an Observation fetched in another Run: a data defect.
     service = prepare(repos, foreign_observation=True)
     repos.runs.add(
         run("second", RunState.COMPLETE).model_copy(
@@ -196,14 +198,6 @@ def test_any_non_temporary_candidate_error_is_quarantined_and_next_success_initi
         )
     )
 
-    convert = service._baseline_from_report
-
-    def malformed(owner_id, item_id, report):
-        if report.run_id == "first":
-            raise TypeError("malformed Report body")
-        return convert(owner_id, item_id, report)
-
-    monkeypatch.setattr(service, "_baseline_from_report", malformed)
     baseline = service.initialize("alice", "w")
     assert baseline.initializing_run_id == "second"
     assert baseline.seeds == []
@@ -224,6 +218,9 @@ def test_empty_current_input_is_distinct_from_no_success(repos):
         sqlite3.InterfaceError("bad binding"),
         sqlite3.DatabaseError("disk I/O error"),
         MemoryError(),
+        AttributeError("'NoneType' object has no attribute 'kind'"),
+        TypeError("unsupported operand"),
+        ValueError("an implementation bug, not candidate data"),
     ],
 )
 def test_temporary_conversion_errors_never_reject_the_first_success(
@@ -244,4 +241,40 @@ def test_temporary_conversion_errors_never_reject_the_first_success(
         )
     ] == ["first"]
     monkeypatch.undo()
+    assert service.initialize("alice", "w").initializing_run_id == "first"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "not a mapping",
+        {"verified": {}},
+        {"verified": {"draft": "malformed"}, "evidence": {}},
+    ],
+)
+def test_malformed_report_body_is_an_invalid_candidate(repos, body):
+    service = prepare(repos)
+    first = repos.reports.get("alice", "rep")
+    with pytest.raises(InvalidBaselineCandidate):
+        service._baseline_from_report("alice", "w", first.model_copy(update={"body": body}))
+
+
+def test_unexpected_attribute_error_does_not_quarantine_first_success(repos, monkeypatch):
+    service = prepare(repos)
+    sources = repos.sources
+
+    class Broken:
+        def get(self, *_):
+            raise AttributeError("'NoneType' object has no attribute 'kind'")
+
+    monkeypatch.setattr(service.deps.repos, "sources", Broken(), raising=False)
+    with pytest.raises(AttributeError):
+        service.initialize("alice", "w")
+    monkeypatch.setattr(service.deps.repos, "sources", sources, raising=False)
+    assert [
+        r.run_id
+        for r in repos.watchlists.baseline_candidates(
+            "alice", "w", BASELINE_SEED_SCHEMA_VERSION
+        )
+    ] == ["first"]
     assert service.initialize("alice", "w").initializing_run_id == "first"

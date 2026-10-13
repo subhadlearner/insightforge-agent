@@ -161,19 +161,28 @@ def mem_deps(make_deps):
     return make
 
 
-def prior_run(deps, owner="alice", brief="EV market", item=None, day=0) -> Run:
-    """A completed web Run on the fixture pages: 10 Claims in one section, "Findings"."""
+def prior_run(deps, owner="alice", brief="EV market", item=None, day=0,
+              toggles=None) -> Run:
+    """A completed web Run on the fixture pages: 10 Claims in one section, "Findings".
+    A Watchlist Run uses its item's standing Brief and source choices."""
     deps.now.t = T0 + timedelta(days=day)
     deps.planner_model = fakes.planner()
+    toggles = toggles or {"web": True}
     if item is not None:
         try:
             deps.repos.watchlists.get(owner, item)
         except NotFoundError:
             deps.repos.watchlists.add(WatchlistItem(id=item, owner_id=owner, brief=brief,
-                cadence_minutes=15, created_at=deps.now(), next_tick_at=deps.now()))
-    run = run_brief(deps, owner, Brief(text=brief), watchlist_item_id=item)
+                cadence_minutes=15, created_at=deps.now(), next_tick_at=deps.now(),
+                source_toggles=toggles))
+    run = run_brief(deps, owner, Brief(text=brief, source_toggles=toggles),
+                    watchlist_item_id=item)
     assert run.state == RunState.COMPLETE, events(deps, run, "run_failed")
     return run
+
+
+MEMORY_BRIEF = "EV market, with earlier findings"
+WEB_AND_MEMORY_TOGGLES = {"web": True, "memory": True}
 
 
 def memory_run(deps, tasks=WEB_AND_MEMORY, owner="alice", item=None, day=30, web=True,
@@ -181,8 +190,7 @@ def memory_run(deps, tasks=WEB_AND_MEMORY, owner="alice", item=None, day=30, web
     deps.now.t = T0 + timedelta(days=day)
     deps.planner_model = planner(tasks)
     toggles = {"web": web, "memory": True}
-    return run_brief(deps, owner, Brief(text="EV market, with earlier findings",
-                                        source_toggles=toggles),
+    return run_brief(deps, owner, Brief(text=MEMORY_BRIEF, source_toggles=toggles),
                      watchlist_item_id=item, on_state=snapshots.append if snapshots is not None
                      else None)
 
@@ -261,7 +269,7 @@ def test_watchlist_summaries_are_for_the_same_item_only(mem_deps):
     prior_run(deps, brief="one-shot", day=2)
     prior_run(deps, owner="bob", brief="bob w1 tick", item="w1", day=3)
     deps.planner_model = fakes.planner()
-    run = run_brief(deps, "alice", Brief(text="EV market"), watchlist_item_id="w1")
+    run = run_brief(deps, "alice", Brief(text="w1 tick"), watchlist_item_id="w1")
     assert deps.repos.runs.get("alice", run.id).watchlist_item_id == "w1"
     assert events(deps, run, "run_summaries_loaded")[0]["run_ids"] == [same.id]
     assert "w1 tick" in plan_message(deps.planner_model)
@@ -338,7 +346,8 @@ def test_reports_finalised_without_the_index_never_become_memory(make_deps, mem_
 def test_a_watchlist_run_never_searches_reports_of_its_own_item(mem_deps):
     deps = mem_deps()
     one_shot = report_of(deps, prior_run(deps, day=0)).id
-    own_item = report_of(deps, prior_run(deps, item="w1", day=1)).id
+    own_item = report_of(deps, prior_run(deps, brief=MEMORY_BRIEF, item="w1", day=1,
+                                         toggles=WEB_AND_MEMORY_TOGGLES)).id
     other_item = report_of(deps, prior_run(deps, item="w2", day=2)).id
     assert eligible_report_ids(deps, "alice", "w1") == [one_shot, other_item]
     deps.researcher_model = researchers(extra={"m1": [f"{own_item}:s0:c0"]})
