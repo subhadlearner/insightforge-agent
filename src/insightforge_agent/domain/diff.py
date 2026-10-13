@@ -23,7 +23,7 @@ Outcomes, per identity:
   within this Run. Flagged; neither a change nor a contradiction, never establishes.
 """
 
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,7 +34,8 @@ Outcome = Literal[
     "added", "changed", "no_longer_true", "reconfirmed", "not_reconfirmed",
     "older_ignored", "ambiguous",
 ]
-MATERIAL: frozenset[str] = frozenset({"added", "changed", "no_longer_true"})
+MaterialOutcome = Literal["added", "changed", "no_longer_true"]
+MATERIAL: frozenset[str] = frozenset(get_args(MaterialOutcome))
 DEFAULT_UNCONFIRMED_AFTER = 3  # K: consecutive Not reconfirmed successful Diffs
 
 
@@ -175,12 +176,17 @@ def compare(
                                          reason="a different value for the established period"))
             else:
                 settle("changed")
+        elif order == "same":
+            # Affirmed and denied for one period: a contradiction, not a change.
+            entries.append(DiffEntry(outcome="ambiguous", key=key, finding=new,
+                                     previous=previous,
+                                     reason="opposite polarity for the established period"))
         elif new.polarity == "negated":
             if same:
                 settle("no_longer_true")
             else:
                 reasons[key] = "negates a different value than the established one"
-        else:  # affirmed again after an established negation
+        else:  # affirmed again, later, after an established negation
             settle("added" if same else "changed")
 
     for key, current in established.items():

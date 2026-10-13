@@ -26,12 +26,6 @@ from insightforge_agent.domain.watchlist import (
 )
 from insightforge_agent.pipeline.executor import WorkNotAccepted
 
-DIFF_JOB_PREFIX = "watchlist-diff"
-
-
-def diff_job_id(owner_id, item_id):
-    return f"{DIFF_JOB_PREFIX}:{owner_id}:{item_id}"
-
 logger = logging.getLogger(__name__)
 _handler: Callable | None = None
 _baseline_handler: Callable | None = None
@@ -63,6 +57,11 @@ def job_id(owner_id, item_id):
 
 def baseline_job_id(owner_id, item_id):
     return f"watchlist-baseline:{owner_id}:{item_id}"
+
+
+def diff_job_id(owner_id, item_id):
+    """The T12 Diff job (scheduler/diff.py); listed here so recovery and cancel own it."""
+    return f"watchlist-diff:{owner_id}:{item_id}"
 
 
 class WatchlistScheduler:
@@ -357,7 +356,7 @@ def report_seeds(deps, owner_id, report) -> list[BaselineSeed]:
                 o.run_id != report.run_id for o in observations
             ):
                 raise InvalidBaselineCandidate(
-                    "Baseline Evidence must be fetched in the establishing Run"
+                    "Watchlist Evidence must be fetched by the Report's own Run"
                 )
             for observation in observations:
                 source = stored(
@@ -365,7 +364,7 @@ def report_seeds(deps, owner_id, report) -> list[BaselineSeed]:
                 )
                 if source.kind != "web":
                     raise InvalidBaselineCandidate(
-                        "Watchlist Baseline Evidence must be web-sourced"
+                        "Watchlist Evidence must be web-sourced"
                     )
             for passage in refs:
                 stored(

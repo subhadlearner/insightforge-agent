@@ -4,7 +4,7 @@ A record that does not exist, or belongs to someone else, is a NotFoundError."""
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from insightforge_agent.domain.watchlist import Baseline, WatchlistItem
 from insightforge_agent.domain.contracts import ExtractedFact
@@ -208,7 +208,9 @@ class WatchlistRepository(Protocol):
         """Persist a corrupt candidate once; return whether this call first recorded it."""
         ...
     def baseline(self, owner_id: str, item_id: str) -> "Baseline | None": ...
-    def baseline_state(self, owner_id: str, item_id: str) -> str:
+    def baseline_state(
+        self, owner_id: str, item_id: str
+    ) -> Literal["none", "seed", "established"]:
         """`none`, `seed` (T11 input awaiting normalisation) or `established` (T12)."""
         ...
     def initialize_baseline(self, baseline: "Baseline") -> "Baseline": ...

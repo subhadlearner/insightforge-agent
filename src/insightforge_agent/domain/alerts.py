@@ -5,8 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from insightforge_agent.domain.diff import DiffEntry
-from insightforge_agent.domain.findings import Finding, Skipped
+from insightforge_agent.domain.diff import DiffEntry, MaterialOutcome
+from insightforge_agent.domain.findings import Finding, Polarity, Skipped
 
 DiffStatus = Literal["pending", "succeeded", "failed"]
 MAX_DIFF_ATTEMPTS = 2  # the first attempt and one retry
@@ -43,19 +43,19 @@ class DiffRecord(BaseModel):
 class AlertChange(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    outcome: Literal["added", "changed", "no_longer_true"]
+    outcome: MaterialOutcome
     subject: str
     predicate: str
     scope: str
     object: str
-    polarity: str
+    polarity: Polarity
     as_of_period: str
     derived: bool
     when: str  # "Change detected on <date>" for a derived period, never "Changed on"
     report_id: str  # the new Report
     evidence_id: str
     previous_object: str | None = None
-    previous_polarity: str | None = None
+    previous_polarity: Polarity | None = None
     previous_report_id: str | None = None  # the Report that established the earlier value
     previous_run_id: str | None = None
 

@@ -128,13 +128,22 @@ def test_the_newest_value_in_a_run_wins_and_older_ones_are_kept_for_audit():
 
 def test_explicit_negated_finding_is_no_longer_true():
     offer = run(1, predicate="offers", value="Model X")
-    negated = run(2, predicate="discontinued", value="Model X", polarity="negated")
+    negated = run(2, predicate="discontinued", value="Model X", polarity="negated",
+                  period="2030-03")
     result = compare(state(offer), [negated], REG)
     assert outcomes(result) == [("no_longer_true", "Model X")] and result.material
     assert result.updates[offer.key].finding.polarity == "negated"
     again = compare({offer.key: result.updates[offer.key]},
-                    [run(3, predicate="offers", value="Model X", period="2030-03")], REG)
+                    [run(3, predicate="offers", value="Model X", period="2030-04")], REG)
     assert outcomes(again) == [("added", "Model X")]
+
+
+def test_opposite_polarity_for_the_same_period_is_ambiguous_not_material():
+    offer = run(1, predicate="offers", value="Model X", period="2030-02")
+    denied = run(2, predicate="offers", value="Model X", polarity="negated", period="2030-02")
+    result = compare(state(offer), [denied], REG)
+    assert [e.outcome for e in result.entries] == ["ambiguous", "not_reconfirmed"]
+    assert not result.material
 
 
 def test_negating_a_different_single_value_is_not_a_change():

@@ -496,8 +496,10 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   `reconfirmed` (resets the count, refreshes provenance and period); `not_reconfirmed` (value
   kept; unconfirmed at K, setting `NOT_RECONFIRMED_THRESHOLD`, default 3, without an Alert);
   `older_ignored` (by As-of period end; two derived periods on one day by observation time);
-  `ambiguous` (UNKNOWN period, a different value for the same stated period, or conflicting
-  values in one Run). A negated Finding with no established counterpart is `added`.
+  `ambiguous` (UNKNOWN period, a different value or the opposite polarity for the same stated
+  period, or conflicting values in one Run). A negated Finding with no established counterpart
+  is `added`. An ambiguous or older restatement neither confirms nor refutes, so it also counts
+  as Not reconfirmed.
 - **Execution** (`scheduler/diff.py`): the completion callback and startup recovery schedule a
   persisted APScheduler job `watchlist-diff:<owner>:<item>`, outside the graph. It processes the
   item's COMPLETE Runs after the initializing Run in `(created_at, id)` order, and waits while an
@@ -523,7 +525,13 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Limitations:** the judge's grounding check is lexical, so text that itself names an entity
   can still steer a judged Finding; judged Findings can vary between Runs with model
   nondeterminism; subject aliases ("BYD" / "BYD Auto") are not resolved; multi-process
-  deployment is out of scope (the constraints hold across connections, see the tests).
+  deployment is out of scope (the constraints hold across connections, see the tests). A Report
+  with a stored-data defect (`InvalidBaselineCandidate`, e.g. a foreign Observation) fails its
+  Diff as a whole, after the one retry, rather than skipping the bad Claim; the next Diff shows
+  the net change. A new completion or a restart replaces a pending one-minute retry job with an
+  immediate one (still one retry). A `DiffConflict` (only possible with concurrent writers)
+  consumes an attempt. Ordering relies on T11's one-active-Run admission: Runs of an item
+  complete in creation order, so the initializing Run is the earliest non-quarantined success.
 - **Tests:** `tests/domain/test_t12_findings.py`, `tests/domain/test_t12_diff.py`,
   `tests/stores/test_t12_diff_lifecycle.py`, `tests/stores/test_t12_webhook.py`,
   `tests/api/test_t12_diff_app.py`.
