@@ -572,9 +572,11 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **What goes** (`stores/retention.py`), only for an expired Run: unprotected Passages of its
   Observations (a web Observation Passage by Passage; an uploaded document only whole, because a
   document Claim is fact-checked against every stored chunk of its Observation); an Observation
-  and its split marker once no Passage is left and nothing names it; its Sub-task rows, Run-to-
-  Source links and progress events except `stage`, `run_failed` and `completion_recovered`; a
-  Source with no Observation, no Run link and no reference. `sources.run_id` decides nothing.
+  and its split marker once no Passage is left and nothing names it; its Sub-task rows; its
+  links to Sources it no longer holds an Observation of (a link to retained material stays, so
+  `SourceRepository.list_for_run` still lists the Sources behind an expired Run's citations);
+  its progress events except `stage`, `run_failed` and `completion_recovered`; a Source with no
+  Observation, no Run link and no reference. `sources.run_id` decides nothing.
   Runs, Reports, Run summaries, failure records, extracted facts, Baseline seeds, established
   Findings, the Diff log, Alerts and `report_sections` points are never removed.
 - **Extracted facts**: `ExtractedFact.provenance` is `available` (Source and Passage set) or
@@ -599,7 +601,8 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Qdrant and SQLite** (`DocChunkIndex.delete`): exact point IDs (owner, Run, Observation,
   index), filtered by owner and Run, idempotent. Inside `apply`, after the re-check and before
   the SQLite delete, so a chunk that became protected is never removed from Qdrant; this holds
-  the lock for one bounded Qdrant call per batch that has document chunks. If Qdrant fails,
+  the lock for one Qdrant call per batch that has document chunks, bounded by
+  `DELETE_TIMEOUT_SECONDS` (10 s, applied to the HTTP request and as the server-side timeout). If Qdrant fails,
   those Observations are kept and skipped for the rest of the sweep. If the process fails after
   Qdrant and before SQLite commits, SQLite is unchanged and the next sweep removes the same
   chunks again; a missing point is not an error. Without a `doc_chunks` index wired, document

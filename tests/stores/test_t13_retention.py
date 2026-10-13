@@ -631,3 +631,48 @@ def test_a_bare_observation_reference_protects_every_passage(world):
                   json.dumps(body), report.id)
     world.sweep()
     assert world.passages("obs_1") == [0, 1, 2]
+
+
+def test_a_link_to_retained_material_stays_and_the_rest_go(world):
+    world.web("r1", "obs_cited", paragraphs=2)
+    world.web("r1", "obs_uncited", paragraphs=1)
+    world.web("r1", "obs_dated", paragraphs=1)
+    world.watchlist()
+    world.complete("r1", item="w", evidence=[item("ev1", ref("obs_cited", 1))])
+    world.seed("r1", item("ev1", ref("obs_cited", 1)), observation_dates={"obs_dated": OLD})
+
+    world.sweep()
+
+    listed = {s.id for s in world.repos.sources.list_for_run("alice", "r1")}
+    assert listed == {"src_obs_cited", "src_obs_dated"}  # material the Run still holds
+    after = world.snapshot()
+    assert world.repos.retention.plan("alice", ["r1"], 100,
+                                      world.repos.retention.protection("alice")).empty
+    world.sweep()
+    assert world.snapshot() == after
+
+
+def test_chunk_deletion_has_a_bounded_timeout():
+    from insightforge_agent.embeddings import HashingEmbedder
+    from insightforge_agent.stores.doc_chunks import DELETE_TIMEOUT_SECONDS, DocChunkIndex
+
+    class Recording:
+        def __init__(self):
+            self.calls = []
+
+        def collection_exists(self, name):
+            return True
+
+        def get_collection(self, name):
+            from types import SimpleNamespace
+            return SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(
+                vectors=SimpleNamespace(size=64))))
+
+        def delete(self, collection, **kwargs):
+            self.calls.append(kwargs)
+
+    client = Recording()
+    DocChunkIndex(client, HashingEmbedder(64), "m", 64).delete("alice", "r1", [ref("o")])
+    (call,) = client.calls
+    assert call["timeout"] == DELETE_TIMEOUT_SECONDS and 0 < DELETE_TIMEOUT_SECONDS <= 30
+    assert call["wait"] is True

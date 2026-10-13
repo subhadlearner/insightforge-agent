@@ -26,8 +26,10 @@ What `apply` removes, for an expired Run only:
   whole, and is kept whole while any of its chunks is referenced, because a document Claim is
   fact-checked against every stored chunk of its Observation (`document_passages`).
 - An Observation (and its split marker) once it has no Passages left and nothing refers to it.
-- The Run's Sub-task rows, its Run-to-Source links and its progress events, except the stage
-  trail and the failure/recovery events, which stay as the Run's compact history.
+- The Run's Sub-task rows, its links to Sources it no longer holds an Observation of (a link to
+  retained material stays, so `list_for_run` still lists the Sources behind a Report's
+  citations), and its progress events, except the stage trail and the failure/recovery events,
+  which stay as the Run's compact history.
 - A Source with no Observation, no Run link and no reference left. `sources.run_id` is only the
   first Run that fetched it, never who owns or may delete it.
 
@@ -57,6 +59,11 @@ from insightforge_agent.stores.run_rows import run_from_row
 KEPT_EVENT_TYPES = ("stage", "run_failed", "completion_recovered")
 _KEPT = ",".join("?" * len(KEPT_EVENT_TYPES))
 LEGACY_REASON = "the Run failed before failure records were kept; its reason was not recorded"
+# A Run-to-Source link that may go: the Run no longer holds an Observation of that Source. A
+# link to material the Run still holds stays, so `SourceRepository.list_for_run` keeps listing
+# the Sources of an expired Run's retained (cited) material.
+_DISPOSABLE_LINK = ("NOT EXISTS (SELECT 1 FROM observations o WHERE o.owner_id=l.owner_id "
+                    "AND o.run_id=l.run_id AND o.source_id=l.source_id)")
 
 # Removes one Run's chunks from doc_chunks: (owner_id, run_id, refs). Raises on failure.
 RemoveChunks = Callable[[str, str, list[PassageRef]], None]
@@ -238,8 +245,8 @@ class SqliteRetentionRepository:
     def _has_operational_detail(self, owner_id: str, run_id: str) -> bool:
         return any(self._db.execute(sql, args).fetchone() for sql, args in (
             ("SELECT 1 FROM subtasks WHERE owner_id=? AND run_id=? LIMIT 1", (owner_id, run_id)),
-            ("SELECT 1 FROM run_sources WHERE owner_id=? AND run_id=? LIMIT 1",
-             (owner_id, run_id)),
+            (f"SELECT 1 FROM run_sources l WHERE owner_id=? AND run_id=? "
+             f"AND {_DISPOSABLE_LINK} LIMIT 1", (owner_id, run_id)),
             (f"SELECT 1 FROM run_events WHERE owner_id=? AND run_id=? "
              f"AND type NOT IN ({_KEPT}) LIMIT 1", (owner_id, run_id, *KEPT_EVENT_TYPES)),
         ))
@@ -388,11 +395,13 @@ class SqliteRetentionRepository:
                    done: Applied) -> None:
         """An expired Run's operational detail. Its Run row, Report, summary and failure
         record stay."""
-        touched_sources.update(s for (s,) in self._db.execute(
-            "SELECT source_id FROM run_sources WHERE owner_id=? AND run_id=?",
-            (owner_id, run_id)))
-        done.run_links += self._db.execute(
-            "DELETE FROM run_sources WHERE owner_id=? AND run_id=?", (owner_id, run_id)).rowcount
+        disposable = [s for (s,) in self._db.execute(
+            f"SELECT source_id FROM run_sources l WHERE owner_id=? AND run_id=? "
+            f"AND {_DISPOSABLE_LINK}", (owner_id, run_id))]
+        touched_sources.update(disposable)
+        done.run_links += self._db.executemany(
+            "DELETE FROM run_sources WHERE owner_id=? AND run_id=? AND source_id=?",
+            [(owner_id, run_id, s) for s in disposable]).rowcount
         done.subtasks += self._db.execute(
             "DELETE FROM subtasks WHERE owner_id=? AND run_id=?", (owner_id, run_id)).rowcount
         done.events += self._db.execute(

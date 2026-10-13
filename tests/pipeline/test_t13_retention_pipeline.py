@@ -216,3 +216,28 @@ def test_failed_run_material_never_reaches_memory_and_expires(sql_deps):
                                   (failed.id,)).fetchone()[0] == 0
     assert deps.repos.runs.get("alice", failed.id).state == RunState.FAILED
     assert "token cap" in deps.repos.runs.failure("alice", failed.id).reason
+
+
+def test_an_expired_runs_cited_sources_stay_listed_for_it(sql_deps):
+    """`SourceRepository.list_for_run` reads Run-to-Source links: the sweep keeps the link to
+    every Source whose material the Run still holds (here, all its cited pages) and drops
+    only the link to the uncited page it removed."""
+    deps = sql_deps()
+    prior = prior_run(deps)
+    report = report_of(deps, prior)
+    unused = deps.store.ingest_web(owner_id="alice", run_id=prior.id, url="https://x.test/u",
+                                   title="Unused", body="Nothing cited here.", fetched_at=T0)
+    cited = {c.source_id for c in report_citations(deps.store, "alice", report)}
+    listed_before = {s.id for s in deps.repos.sources.list_for_run("alice", prior.id)}
+    assert cited | {unused.source_id} <= listed_before
+
+    deps.now.t = T0 + timedelta(days=31)
+    first = sweep(deps)
+
+    listed = {s.id for s in deps.repos.sources.list_for_run("alice", prior.id)}
+    assert cited <= listed and unused.source_id not in listed
+    assert listed == listed_before - {unused.source_id}
+    assert first["run_links"] == 1 and first["sources"] == 1
+    for source_id in listed:  # every listed Source still resolves
+        deps.repos.sources.get("alice", source_id)
+    assert sweep(deps)["run_links"] == 0  # idempotent: retained links are not work
