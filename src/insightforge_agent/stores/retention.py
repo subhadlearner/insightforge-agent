@@ -1,26 +1,30 @@
 """SQLite side of the retention sweep (design.md section 6, Retention; rules in
 `domain/retention.py`).
 
-A sweep works per User in bounded batches. Each batch is two short steps on the shared lock:
+A sweep works per User in bounded batches:
 
-1. `plan` (read only): the User's protected references, and the next unprotected raw material
-   of their expired terminal Runs, at most `limit` Passages.
-2. `apply` (one `BEGIN IMMEDIATE` transaction): eligibility and protection are evaluated again
-   from current rows, and only what is still eligible and unprotected is deleted. Another
-   repository write (a new Report, a Diff commit, a Run's fetch) is either before it, and then
-   seen, or after it.
+1. `protection` reads the User's retained records under the shared lock and interprets them
+   outside it; `plan` (read only, under the lock) uses that to pick the next unprotected raw
+   material of their expired terminal Runs, about `limit` Passages.
+2. `apply` (one `BEGIN IMMEDIATE` transaction) evaluates eligibility and protection again from
+   current rows, removes the uploaded-document chunks that are still removable from
+   `doc_chunks` (through the caller's `remove_chunks`), then deletes only what is still
+   eligible and unprotected. Another repository write (a new Report, a Diff commit, a Run's
+   fetch) is either before it, and then seen, or after it.
 
-The caller removes an uploaded document's `doc_chunks` points between the two (Qdrant shares no
-transaction with SQLite): a failed Qdrant call means `apply` is not called for those chunks,
-and a failure after it is repaired by the next sweep, which plans the same chunks again
-(deleting a missing point is not an error).
+Qdrant shares no transaction with SQLite. A Qdrant failure keeps those chunks' Passages (the
+Observations are returned as `skipped`); a failure after Qdrant and before the commit leaves
+SQLite unchanged, and the next sweep removes the same chunks again (a missing point is not an
+error). Because the chunks are removed after the protection check, a chunk that became
+protected is never removed from Qdrant. The price is one bounded Qdrant call per batch while
+holding the lock.
 
 What `apply` removes, for an expired Run only:
 
 - Passages nothing retained refers to. A web Observation is cleaned Passage by Passage, so an
-  uncited paragraph goes while a cited one stays. An uploaded document's Observation is kept
-  whole while any of its chunks is referenced, because a document Claim is fact-checked against
-  every stored chunk of its Observation (`document_passages`).
+  uncited paragraph goes while a cited one stays. An uploaded document's Observation goes only
+  whole, and is kept whole while any of its chunks is referenced, because a document Claim is
+  fact-checked against every stored chunk of its Observation (`document_passages`).
 - An Observation (and its split marker) once it has no Passages left and nothing refers to it.
 - The Run's Sub-task rows, its Run-to-Source links and its progress events, except the stage
   trail and the failure/recovery events, which stay as the Run's compact history.
@@ -32,13 +36,16 @@ unavailable. Runs, Reports, Run summaries, failure records, Baseline seeds, esta
 Findings, the Diff log and Alerts are never touched."""
 
 import json
-from dataclasses import dataclass, field
+from collections import defaultdict
+from collections.abc import Callable
+from contextlib import contextmanager
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 
-from insightforge_agent.domain.contracts import ExtractedFact
+from insightforge_agent.domain.contracts import ExtractedFact, PassageRef
 from insightforge_agent.domain.models import Run
 from insightforge_agent.domain.retention import (
-    LEGACY_UNRECORDED,
+    MAX_REASON_CHARS,
     FailureRecord,
     MalformedRetentionRoot,
     ProtectedRefs,
@@ -48,7 +55,25 @@ from insightforge_agent.stores.run_rows import run_from_row
 
 # Progress events an expired Run keeps: the stage trail and how it ended.
 KEPT_EVENT_TYPES = ("stage", "run_failed", "completion_recovered")
+_KEPT = ",".join("?" * len(KEPT_EVENT_TYPES))
 LEGACY_REASON = "the Run failed before failure records were kept; its reason was not recorded"
+
+# Removes one Run's chunks from doc_chunks: (owner_id, run_id, refs). Raises on failure.
+RemoveChunks = Callable[[str, str, list[PassageRef]], None]
+
+# (kind of record, query for (key, JSON) of one User's records, how ProtectedRefs reads it)
+_ROOTS = (
+    ("report", "SELECT id, body FROM reports WHERE owner_id=?", "add_report"),
+    ("Baseline seed", "SELECT item_id, baseline FROM watchlist_baselines WHERE owner_id=?",
+     "add_baseline_seed"),
+    ("established Finding", "SELECT item_id || '/' || finding_key, state "
+     "FROM watchlist_findings WHERE owner_id=?", "add_established"),
+    ("Baseline normalisation", "SELECT item_id, detail FROM watchlist_baseline_state "
+     "WHERE owner_id=?", "add_diff_detail"),
+    ("Diff", "SELECT item_id || '/' || run_id, detail FROM watchlist_diffs WHERE owner_id=?",
+     "add_diff_detail"),
+    ("Alert", "SELECT id, alert FROM watchlist_alerts WHERE owner_id=?", "add_alert"),
+)
 
 
 def _utc(value: str) -> datetime:
@@ -57,12 +82,18 @@ def _utc(value: str) -> datetime:
     return at if at.tzinfo else at.replace(tzinfo=UTC)
 
 
+def _uploaded(kind: str | None) -> bool:
+    """Not a web page: its chunks may be in doc_chunks, and it goes only whole. A Source of
+    unknown kind is treated the same way, the cautious choice."""
+    return kind != "web"
+
+
 @dataclass(frozen=True)
 class ObservationPlan:
     observation_id: str
     run_id: str  # the Run that fetched it, which also scopes its doc_chunks points
-    document: bool  # not a web page: its chunks may be in doc_chunks, and it goes only whole
-    indices: tuple[int, ...]  # the Passages to remove in this batch
+    uploaded: bool
+    indices: tuple[int, ...]  # the Passages to remove (all of them for an uploaded document)
 
 
 @dataclass
@@ -75,13 +106,12 @@ class RetentionBatch:
     def empty(self) -> bool:
         return not self.runs and not self.observations
 
-    def without(self, observation_ids: set[str]) -> "RetentionBatch":
-        return RetentionBatch(self.owner_id, list(self.runs), [
-            o for o in self.observations if o.observation_id not in observation_ids])
-
 
 @dataclass
 class Applied:
+    """What one batch removed. `skipped`: uploaded Observations whose chunks Qdrant could not
+    remove (kept, and left out of the rest of this sweep)."""
+
     passages: int = 0
     observations: int = 0
     sources: int = 0
@@ -89,57 +119,61 @@ class Applied:
     subtasks: int = 0
     events: int = 0
     run_links: int = 0
+    chunk_points_removed: int = 0
+    chunk_removal_failed: int = 0
+    skipped: set[str] = field(default_factory=set)
+
+    def counts(self) -> dict[str, int]:
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.name != "skipped"}
 
     @property
     def changed(self) -> int:
-        return (self.passages + self.observations + self.sources + self.facts_detached
-                + self.subtasks + self.events + self.run_links)
+        return sum(v for k, v in self.counts().items() if k != "chunk_removal_failed")
 
 
 class SqliteRetentionRepository:
     def __init__(self, db, lock):
         self._db, self._lock = db, lock
 
+    @contextmanager
+    def _write(self):
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            with self._db:
+                yield
+
     # --- failure records ---------------------------------------------------------------------
 
     def backfill_failures(self, now: datetime) -> int:
         """Give every FAILED Run without a failure record (one that failed before records were
-        kept) a backfilled record. Its failure time is unknown, so retention starts `now`:
-        never earlier, so nothing expires sooner than the retention period allows."""
-        with self._lock:
-            self._db.execute("BEGIN IMMEDIATE")
-            with self._db:
-                rows = self._db.execute(
-                    "SELECT r.* FROM runs r LEFT JOIN run_failures f "
-                    "ON f.owner_id=r.owner_id AND f.run_id=r.id "
-                    "WHERE r.state='FAILED' AND f.run_id IS NULL").fetchall()
-                for run in map(run_from_row, rows):
-                    record = FailureRecord(
-                        owner_id=run.owner_id, run_id=run.id, run_created_at=run.created_at,
-                        failed_at=None, retention_starts_at=now, stage=None,
-                        reason=self._logged_reason(run) or LEGACY_REASON,
-                        error_codes=[LEGACY_UNRECORDED], backfilled=True)
-                    self._db.execute(
-                        "INSERT OR IGNORE INTO run_failures VALUES (?,?,?,?)",
-                        (run.owner_id, run.id, now.isoformat(), record.model_dump_json()))
+        kept) a backfilled record whose retention starts `now`. System-wide: for the sweep."""
+        with self._write():
+            rows = self._db.execute(
+                "SELECT r.* FROM runs r LEFT JOIN run_failures f "
+                "ON f.owner_id=r.owner_id AND f.run_id=r.id "
+                "WHERE r.state='FAILED' AND f.run_id IS NULL").fetchall()
+            for run in map(run_from_row, rows):
+                record = FailureRecord.legacy(run, reason=self._logged_reason(run) or LEGACY_REASON,
+                                              backfilled_at=now)
+                self._db.execute(
+                    "INSERT OR IGNORE INTO run_failures VALUES (?,?,?,?)",
+                    (run.owner_id, run.id, now.isoformat(), record.model_dump_json()))
         return len(rows)
 
     def _logged_reason(self, run: Run) -> str | None:
         row = self._db.execute(
             "SELECT payload FROM run_events WHERE owner_id=? AND run_id=? AND type='run_failed' "
             "ORDER BY seq DESC LIMIT 1", (run.owner_id, run.id)).fetchone()
-        if row is None:
-            return None
-        reason = json.loads(row[0]).get("reason")
-        return reason[:1000] if isinstance(reason, str) and reason else None
+        reason = json.loads(row[0]).get("reason") if row else None
+        return reason[:MAX_REASON_CHARS] if isinstance(reason, str) and reason else None
 
     # --- eligibility -------------------------------------------------------------------------
 
     def expired_runs(self, cutoff: datetime) -> list[tuple[str, str]]:
         """Every User's terminal Runs whose terminal timestamp is at or before `cutoff`, as
-        (owner, Run), oldest first. System-wide: for the sweep only. A COMPLETE Run without a
-        Report, or a FAILED Run without a failure record, has no terminal timestamp and is
-        not listed."""
+        (owner, Run), oldest first. System-wide: for the sweep only, which then works per
+        User. A COMPLETE Run without a Report, or a FAILED Run without a failure record, has
+        no terminal timestamp and is not listed."""
         with self._lock:
             rows = self._db.execute(
                 "SELECT r.owner_id, r.id, p.created_at FROM runs r JOIN reports p "
@@ -147,10 +181,10 @@ class SqliteRetentionRepository:
                 "UNION ALL "
                 "SELECT r.owner_id, r.id, f.retention_starts_at FROM runs r JOIN run_failures f "
                 "ON f.owner_id=r.owner_id AND f.run_id=r.id WHERE r.state='FAILED'").fetchall()
-        done = sorted((_utc(at), owner, run) for owner, run, at in rows)
-        return [(owner, run) for at, owner, run in done if expired(at, cutoff)]
+        terminal = sorted((_utc(at), owner, run) for owner, run, at in rows)
+        return [(owner, run) for at, owner, run in terminal if expired(at, cutoff)]
 
-    def _terminal_at(self, owner_id: str, run_id: str) -> datetime | None:
+    def _still_expired(self, owner_id: str, run_id: str, cutoff: datetime) -> bool:
         row = self._db.execute(
             "SELECT CASE r.state "
             " WHEN 'COMPLETE' THEN (SELECT p.created_at FROM reports p "
@@ -158,54 +192,31 @@ class SqliteRetentionRepository:
             " WHEN 'FAILED' THEN (SELECT f.retention_starts_at FROM run_failures f "
             "                     WHERE f.owner_id=r.owner_id AND f.run_id=r.id) END "
             "FROM runs r WHERE r.owner_id=? AND r.id=?", (owner_id, run_id)).fetchone()
-        return _utc(row[0]) if row and row[0] else None
-
-    def _still_expired(self, owner_id: str, run_id: str, cutoff: datetime) -> bool:
-        at = self._terminal_at(owner_id, run_id)
-        return at is not None and expired(at, cutoff)
+        return bool(row and row[0]) and expired(_utc(row[0]), cutoff)
 
     # --- protection --------------------------------------------------------------------------
 
     def protection(self, owner_id: str) -> ProtectedRefs:
-        """What the User's retained records refer to. Raises MalformedRetentionRoot when one of
-        them cannot be read, so the caller removes nothing of this User."""
+        """What the User's retained records refer to: read under the lock, interpreted outside
+        it. Raises MalformedRetentionRoot when one cannot be read, so the caller removes
+        nothing of this User."""
         with self._lock:
-            return self._protection(owner_id)
+            rows = self._root_rows(owner_id)
+        return _interpret(rows)
 
-    def _protection(self, owner_id: str) -> ProtectedRefs:
-        refs = ProtectedRefs()
-        roots = (
-            ("report", "SELECT id, body FROM reports WHERE owner_id=?", refs.add_report),
-            ("Baseline seed", "SELECT item_id, baseline FROM watchlist_baselines "
-             "WHERE owner_id=?", refs.add_baseline_seed),
-            ("established Finding", "SELECT item_id || '/' || finding_key, state "
-             "FROM watchlist_findings WHERE owner_id=?", refs.add_established),
-            ("Baseline normalisation", "SELECT item_id, detail FROM watchlist_baseline_state "
-             "WHERE owner_id=?", refs.add_diff_detail),
-            ("Diff", "SELECT item_id || '/' || run_id, detail FROM watchlist_diffs "
-             "WHERE owner_id=?", refs.add_diff_detail),
-            ("Alert", "SELECT id, alert FROM watchlist_alerts WHERE owner_id=?",
-             refs.add_alert),
-        )
-        for kind, sql, add in roots:
-            for key, raw in self._db.execute(sql, (owner_id,)):
-                what = f"{kind} {key}"
-                try:
-                    value = json.loads(raw)
-                except (TypeError, ValueError) as error:
-                    raise MalformedRetentionRoot(f"{what}: not JSON") from error
-                add(value, what)
-        return refs
+    def _root_rows(self, owner_id: str) -> list[tuple[str, str, str, str]]:
+        return [(kind, key, raw, add) for kind, sql, add in _ROOTS
+                for key, raw in self._db.execute(sql, (owner_id,))]
 
     # --- one batch ---------------------------------------------------------------------------
 
-    def plan(self, owner_id: str, run_ids: list[str], limit: int,
-             skip: set[str] = frozenset()) -> RetentionBatch:
-        """The next unprotected raw material of these expired Runs (at most `limit` Passages)
-        and the Runs whose operational detail is still to clean. Observations in `skip` (their
-        chunks could not be removed from Qdrant in this sweep) are left out. Reads only."""
+    def plan(self, owner_id: str, run_ids: list[str], limit: int, protected: ProtectedRefs,
+             skip: set[str] | frozenset[str] = frozenset()) -> RetentionBatch:
+        """The next raw material of these expired Runs that `protected` does not cover (about
+        `limit` Passages; an uploaded document is never split, so one may exceed it), and the
+        Runs whose operational detail is still to clean. Observations in `skip` are left out.
+        Reads only; `apply` checks everything again."""
         with self._lock:
-            protected = self._protection(owner_id)
             batch, budget = RetentionBatch(owner_id), limit
             for run_id in run_ids:
                 if budget <= 0:
@@ -215,8 +226,9 @@ class SqliteRetentionRepository:
                 for plan in self._observation_plans(owner_id, run_id, protected, skip):
                     if budget <= 0:
                         break
-                    plan = ObservationPlan(plan.observation_id, plan.run_id, plan.document,
-                                           plan.indices[:budget])
+                    if not plan.uploaded:
+                        plan = ObservationPlan(plan.observation_id, plan.run_id, False,
+                                               plan.indices[:budget])
                     budget -= max(1, len(plan.indices))
                     batch.observations.append(plan)
                     if run_id not in batch.runs:
@@ -224,17 +236,16 @@ class SqliteRetentionRepository:
             return batch
 
     def _has_operational_detail(self, owner_id: str, run_id: str) -> bool:
-        kept = ",".join("?" * len(KEPT_EVENT_TYPES))
         return any(self._db.execute(sql, args).fetchone() for sql, args in (
             ("SELECT 1 FROM subtasks WHERE owner_id=? AND run_id=? LIMIT 1", (owner_id, run_id)),
             ("SELECT 1 FROM run_sources WHERE owner_id=? AND run_id=? LIMIT 1",
              (owner_id, run_id)),
             (f"SELECT 1 FROM run_events WHERE owner_id=? AND run_id=? "
-             f"AND type NOT IN ({kept}) LIMIT 1", (owner_id, run_id, *KEPT_EVENT_TYPES)),
+             f"AND type NOT IN ({_KEPT}) LIMIT 1", (owner_id, run_id, *KEPT_EVENT_TYPES)),
         ))
 
     def _observation_plans(self, owner_id: str, run_id: str, protected: ProtectedRefs,
-                           skip: set[str]) -> list[ObservationPlan]:
+                           skip: set[str] | frozenset[str]) -> list[ObservationPlan]:
         rows = self._db.execute(
             "SELECT o.id, s.kind FROM observations o LEFT JOIN sources s "
             "ON s.owner_id=o.owner_id AND s.id=o.source_id "
@@ -244,18 +255,16 @@ class SqliteRetentionRepository:
         for oid, kind in rows:
             if oid in skip:
                 continue
-            indices = self._removable(owner_id, oid, kind != "web", protected)
-            if indices is None:
-                continue
-            plans.append(ObservationPlan(oid, run_id, kind != "web", tuple(indices)))
+            indices = self._removable(owner_id, oid, _uploaded(kind), protected)
+            if indices is not None:
+                plans.append(ObservationPlan(oid, run_id, _uploaded(kind), tuple(indices)))
         return plans
 
-    def _removable(self, owner_id: str, observation_id: str, document: bool,
+    def _removable(self, owner_id: str, observation_id: str, uploaded: bool,
                    protected: ProtectedRefs) -> list[int] | None:
         """The Passages of an Observation that may go, or None when nothing of it may (it is
-        protected, or nothing is left to remove). A Source of unknown kind is treated as a
-        document: its chunks are removed from Qdrant too, and only all together."""
-        if document and observation_id in protected.observations:
+        protected, or nothing is left to remove)."""
+        if uploaded and observation_id in protected.observations:
             return None
         indices = [i for (i,) in self._db.execute(
             "SELECT idx FROM passages WHERE owner_id=? AND observation_id=? ORDER BY idx",
@@ -267,56 +276,94 @@ class SqliteRetentionRepository:
             return []  # an Observation with no Passages left: only its row goes
         return None
 
-    def apply(self, owner_id: str, batch: RetentionBatch, cutoff: datetime) -> Applied:
+    def apply(self, owner_id: str, batch: RetentionBatch, cutoff: datetime,
+              remove_chunks: RemoveChunks | None) -> Applied:
         """Delete what the batch planned that is, now, still eligible and unprotected, in one
-        transaction. Raises MalformedRetentionRoot (nothing deleted) as `protection` does."""
+        transaction. Uploaded-document chunks are removed from Qdrant through `remove_chunks`
+        after that check and before the delete; without it (no index wired) they are kept.
+        Raises MalformedRetentionRoot (nothing deleted) as `protection` does."""
         done = Applied()
-        with self._lock:
-            self._db.execute("BEGIN IMMEDIATE")
-            with self._db:
-                runs = [r for r in batch.runs if self._still_expired(owner_id, r, cutoff)]
-                eligible = set(runs)
-                protected = self._protection(owner_id)
-                touched_sources: set[str] = set()
-                for plan in batch.observations:
-                    if plan.run_id in eligible:
-                        self._apply_observation(owner_id, plan, protected, touched_sources, done)
-                for run_id in runs:
-                    self._clean_run(owner_id, run_id, touched_sources, done)
-                for source_id in sorted(touched_sources - protected.sources):
-                    if self._source_unused(owner_id, source_id):
-                        self._db.execute("DELETE FROM sources WHERE owner_id=? AND id=?",
-                                         (owner_id, source_id))
-                        done.sources += 1
+        with self._write():
+            runs = [r for r in batch.runs if self._still_expired(owner_id, r, cutoff)]
+            protected = _interpret(self._root_rows(owner_id))
+            plans = [p for p in (self._recheck(owner_id, p, protected)
+                                 for p in batch.observations if p.run_id in runs) if p]
+            done.skipped = self._remove_chunks(owner_id, plans, remove_chunks, done)
+            touched_sources: set[str] = set()
+            for plan in plans:
+                if plan.observation_id not in done.skipped:
+                    self._delete_observation(owner_id, plan, protected, touched_sources, done)
+            for run_id in runs:
+                self._clean_run(owner_id, run_id, touched_sources, done)
+            for source_id in sorted(touched_sources - protected.sources):
+                if self._source_unused(owner_id, source_id):
+                    self._db.execute("DELETE FROM sources WHERE owner_id=? AND id=?",
+                                     (owner_id, source_id))
+                    done.sources += 1
         return done
 
-    def _apply_observation(self, owner_id: str, plan: ObservationPlan,
-                           protected: ProtectedRefs, touched_sources: set[str],
-                           done: Applied) -> None:
+    def _recheck(self, owner_id: str, plan: ObservationPlan,
+                 protected: ProtectedRefs) -> ObservationPlan | None:
+        """The plan as current rows and references allow, or None. An uploaded document is
+        still all or nothing."""
         oid = plan.observation_id
-        row = self._db.execute(
-            "SELECT source_id, run_id FROM observations WHERE owner_id=? AND id=?",
-            (owner_id, oid)).fetchone()
-        if row is not None and row[1] != plan.run_id:
-            return  # not the Run's Observation: never touched
-        if plan.document and oid in protected.observations:
-            return
-        indices = [i for i in plan.indices if not protected.protects_passage(oid, i)]
-        if indices:
-            done.facts_detached += self._detach_facts(owner_id, oid, set(indices))
+        row = self._db.execute("SELECT run_id FROM observations WHERE owner_id=? AND id=?",
+                               (owner_id, oid)).fetchone()
+        if row is None or row[0] != plan.run_id:
+            return None  # gone, or not the Run's Observation: never touched
+        if plan.uploaded:
+            current = self._removable(owner_id, oid, True, protected)
+            return None if current is None else ObservationPlan(oid, plan.run_id, True,
+                                                                tuple(current))
+        kept = [i for i in plan.indices if not protected.protects_passage(oid, i)]
+        if not kept and plan.indices:
+            return None
+        return ObservationPlan(oid, plan.run_id, False, tuple(kept))
+
+    def _remove_chunks(self, owner_id: str, plans: list[ObservationPlan],
+                       remove_chunks: RemoveChunks | None, done: Applied) -> set[str]:
+        """Remove the uploaded chunks of these plans from doc_chunks, per fetching Run.
+        Returns the Observations whose chunks could not be removed."""
+        by_run: dict[str, list[ObservationPlan]] = defaultdict(list)
+        for plan in plans:
+            if plan.uploaded and plan.indices:
+                by_run[plan.run_id].append(plan)
+        failed: set[str] = set()
+        for run_id, run_plans in by_run.items():
+            refs = [PassageRef(observation_id=p.observation_id, index=i)
+                    for p in run_plans for i in p.indices]
+            try:
+                if remove_chunks is None:
+                    raise RuntimeError("no doc_chunks index is wired")
+                remove_chunks(owner_id, run_id, refs)
+            except Exception:  # noqa: BLE001 - Qdrant unavailable: keep these Passages
+                failed |= {p.observation_id for p in run_plans}
+                done.chunk_removal_failed += len(refs)
+            else:
+                done.chunk_points_removed += len(refs)
+        return failed
+
+    def _delete_observation(self, owner_id: str, plan: ObservationPlan,
+                            protected: ProtectedRefs, touched_sources: set[str],
+                            done: Applied) -> None:
+        oid = plan.observation_id
+        if plan.indices:
+            done.facts_detached += self._detach_facts(owner_id, oid, set(plan.indices))
             done.passages += self._db.executemany(
                 "DELETE FROM passages WHERE owner_id=? AND observation_id=? AND idx=?",
-                [(owner_id, oid, i) for i in indices]).rowcount
-        if row is None or oid in protected.observations:
-            return
-        if self._db.execute("SELECT 1 FROM passages WHERE owner_id=? AND observation_id=? "
-                            "LIMIT 1", (owner_id, oid)).fetchone():
-            return  # cited siblings remain: the Observation stays with them
+                [(owner_id, oid, i) for i in plan.indices]).rowcount
+        if oid in protected.observations or self._db.execute(
+                "SELECT 1 FROM passages WHERE owner_id=? AND observation_id=? LIMIT 1",
+                (owner_id, oid)).fetchone():
+            return  # referenced, or cited siblings remain: the Observation stays
+        (source_id,) = self._db.execute(
+            "SELECT source_id FROM observations WHERE owner_id=? AND id=?",
+            (owner_id, oid)).fetchone()
         self._db.execute("DELETE FROM split_observations WHERE owner_id=? AND observation_id=?",
                          (owner_id, oid))
         done.observations += self._db.execute(
             "DELETE FROM observations WHERE owner_id=? AND id=?", (owner_id, oid)).rowcount
-        touched_sources.add(row[0])
+        touched_sources.add(source_id)
 
     def _detach_facts(self, owner_id: str, observation_id: str, indices: set[int]) -> int:
         """Keep every fact from these Passages, with its provenance marked unavailable. A fact
@@ -348,9 +395,8 @@ class SqliteRetentionRepository:
             "DELETE FROM run_sources WHERE owner_id=? AND run_id=?", (owner_id, run_id)).rowcount
         done.subtasks += self._db.execute(
             "DELETE FROM subtasks WHERE owner_id=? AND run_id=?", (owner_id, run_id)).rowcount
-        kept = ",".join("?" * len(KEPT_EVENT_TYPES))
         done.events += self._db.execute(
-            f"DELETE FROM run_events WHERE owner_id=? AND run_id=? AND type NOT IN ({kept})",
+            f"DELETE FROM run_events WHERE owner_id=? AND run_id=? AND type NOT IN ({_KEPT})",
             (owner_id, run_id, *KEPT_EVENT_TYPES)).rowcount
 
     def _source_unused(self, owner_id: str, source_id: str) -> bool:
@@ -360,3 +406,15 @@ class SqliteRetentionRepository:
             "SELECT 1 FROM observations WHERE owner_id=? AND source_id=? LIMIT 1",
             "SELECT 1 FROM run_sources WHERE owner_id=? AND source_id=? LIMIT 1",
         ))
+
+
+def _interpret(rows: list[tuple[str, str, str, str]]) -> ProtectedRefs:
+    refs = ProtectedRefs()
+    for kind, key, raw, add in rows:
+        what = f"{kind} {key}"
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError) as error:
+            raise MalformedRetentionRoot(f"{what}: not JSON") from error
+        getattr(refs, add)(value, what)
+    return refs

@@ -23,7 +23,7 @@ def world(tmp_path):
 
 
 def sweep(world):
-    return RetentionSweeper(world.repos, None, lambda: world.now, retention_days=30).sweep()
+    return RetentionSweeper(world.repos.retention, None, lambda: world.now, retention_days=30).sweep()
 
 
 def add_uncited_page(world, run_id):

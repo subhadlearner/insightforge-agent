@@ -8,7 +8,7 @@ from datetime import datetime
 from insightforge_agent.domain.contracts import ExtractedFact
 from insightforge_agent.domain.errors import ClarificationConflict, NotFoundError
 from insightforge_agent.domain.passages import check_passages
-from insightforge_agent.domain.retention import FailureRecord, failure_reason
+from insightforge_agent.domain.retention import FailureRecord
 from insightforge_agent.domain.models import (
     TERMINAL_STATES,
     Clarification,
@@ -55,10 +55,8 @@ class MemoryRunRepository:
              failed_at: datetime) -> Run:
         with self._cas:
             run = self.get(owner_id, run_id)
-            record = FailureRecord(
-                owner_id=owner_id, run_id=run_id, run_created_at=run.created_at,
-                failed_at=failed_at, retention_starts_at=failed_at, stage=run.state.value,
-                reason=failure_reason(reason), error_codes=error_codes)
+            record = FailureRecord.at_failure(run, reason=reason, error_codes=error_codes,
+                                              failed_at=failed_at)
             self._failures.setdefault((owner_id, run_id), record)
             updated = run.model_copy(update={"state": RunState.FAILED})
             self._runs[(owner_id, run_id)] = updated

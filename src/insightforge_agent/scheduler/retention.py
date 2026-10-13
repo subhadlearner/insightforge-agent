@@ -9,16 +9,15 @@ A sweep, with its cutoff fixed at its start (`now - retention_days`):
 
 1. Backfills a failure record for every FAILED Run that has none (failed before records were
    kept); its retention starts now.
-2. Lists the expired terminal Runs of every User, then, per User and in bounded batches:
-   plans the next unprotected material (read only), removes the uploaded-document chunks of
-   that batch from `doc_chunks`, then deletes from SQLite what is still eligible and
-   unprotected in one transaction (`SqliteRetentionRepository`).
+2. Lists the expired terminal Runs of every User, then, per User: reads what the User's
+   retained records protect once, and in bounded batches plans the next unprotected material
+   and applies it (`SqliteRetentionRepository`), which checks again under the lock, removes
+   uploaded-document chunks from `doc_chunks` and deletes from SQLite in one transaction.
 
-Crash and failure behaviour: a Qdrant failure keeps those chunks' Passages (they are skipped
-for the rest of the sweep and retried by the next one); a failure after Qdrant and before or
-during the SQLite transaction leaves SQLite unchanged, and the next sweep plans and removes the
-same material again (a missing point is not an error). Re-running a sweep with nothing newly
-expired changes nothing. A User whose retained records cannot be read is skipped entirely."""
+A Qdrant failure keeps those chunks' Passages (skipped for the rest of the sweep, retried by
+the next). A failure after Qdrant and before the SQLite commit leaves SQLite unchanged, and the
+next sweep removes the same material again. Re-running a sweep with nothing newly expired
+changes nothing. A User whose retained records cannot be read is skipped entirely."""
 
 import logging
 import threading
@@ -26,14 +25,13 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
-from insightforge_agent.domain.contracts import PassageRef
 from insightforge_agent.domain.retention import (
     DEFAULT_RETENTION_DAYS,
     MalformedRetentionRoot,
     retention_cutoff,
 )
 from insightforge_agent.stores.doc_chunks import DocChunkIndex
-from insightforge_agent.stores.retention import RetentionBatch
+from insightforge_agent.stores.retention import SqliteRetentionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -69,14 +67,14 @@ def schedule_retention(scheduler, now: datetime, interval: timedelta = SWEEP_INT
 
 
 class RetentionSweeper:
-    def __init__(self, repos, doc_index: DocChunkIndex | None, now: Callable[[], datetime], *,
-                 retention_days: int = DEFAULT_RETENTION_DAYS,
+    def __init__(self, store: SqliteRetentionRepository, doc_index: DocChunkIndex | None,
+                 now: Callable[[], datetime], *, retention_days: int = DEFAULT_RETENTION_DAYS,
                  batch_passages: int = BATCH_PASSAGES, max_batches: int = 10_000,
                  closing: threading.Event | None = None) -> None:
         retention_cutoff(now(), retention_days)  # rejects a period that is not positive
-        self.repos, self.doc_index, self.now = repos, doc_index, now
+        self.store, self.doc_index, self.now = store, doc_index, now
         self.retention_days, self.batch_passages = retention_days, batch_passages
-        self.max_batches = max_batches
+        self.max_batches = max_batches  # a bound on one sweep; the next one continues
         self.closing = closing if closing is not None else threading.Event()
         self._running = threading.Lock()
 
@@ -90,10 +88,9 @@ class RetentionSweeper:
         try:
             now = self.now()
             cutoff = retention_cutoff(now, self.retention_days)
-            store = self.repos.retention
-            done["failures_backfilled"] += store.backfill_failures(now)
+            done["failures_backfilled"] += self.store.backfill_failures(now)
             by_owner: dict[str, list[str]] = defaultdict(list)
-            for owner_id, run_id in store.expired_runs(cutoff):
+            for owner_id, run_id in self.store.expired_runs(cutoff):
                 by_owner[owner_id].append(run_id)
             for owner_id, run_ids in sorted(by_owner.items()):
                 if self.closing.is_set():
@@ -114,45 +111,24 @@ class RetentionSweeper:
 
     def _sweep_owner(self, owner_id: str, run_ids: list[str], cutoff: datetime,
                      done: Counter) -> None:
-        store, skip = self.repos.retention, set()
+        protected = self.store.protection(owner_id)  # for planning; apply checks again
+        remove = self.doc_index.delete if self.doc_index is not None else None
+        skip: set[str] = set()
         for _ in range(self.max_batches):
             if self.closing.is_set():
                 return
-            batch = store.plan(owner_id, run_ids, self.batch_passages, skip)
+            batch = self.store.plan(owner_id, run_ids, self.batch_passages, protected, skip)
             if batch.empty:
                 return
-            failed = self._remove_chunks(batch, done)
-            skip |= failed
-            batch = batch.without(failed)
-            applied = store.apply(owner_id, batch, cutoff)
-            for name, value in vars(applied).items():
-                done[name] += value
-            if not applied.changed and not failed:
-                return  # nothing planned was still removable: no progress is possible
-
-    def _remove_chunks(self, batch: RetentionBatch, done: Counter) -> set[str]:
-        """Remove the batch's uploaded-document chunks from `doc_chunks`, per fetching Run.
-        Returns the Observations whose chunks could not be removed; their Passages stay."""
-        by_run: dict[str, list] = defaultdict(list)
-        for plan in batch.observations:
-            if plan.document and plan.indices:
-                by_run[plan.run_id].append(plan)
-        failed: set[str] = set()
-        for run_id, plans in by_run.items():
-            ids = {p.observation_id for p in plans}
-            if self.doc_index is None:  # chunks may exist but cannot be removed: keep them
-                failed |= ids
-                done["chunks_kept_no_index"] += sum(len(p.indices) for p in plans)
-                continue
-            refs = [PassageRef(observation_id=p.observation_id, index=i)
-                    for p in plans for i in p.indices]
-            try:
-                self.doc_index.delete(batch.owner_id, run_id, refs)
-            except Exception as error:  # noqa: BLE001 - Qdrant unavailable: keep the Passages
-                logger.warning("doc_chunks removal failed for %s/%s: %s",
-                               batch.owner_id, run_id, error)
-                failed |= ids
-                done["chunk_removal_failed"] += len(refs)
-            else:
-                done["chunk_points_removed"] += len(refs)
-        return failed
+            applied = self.store.apply(owner_id, batch, cutoff, remove)
+            done.update(applied.counts())
+            if applied.skipped:
+                logger.warning("doc_chunks removal failed for %s: kept %d Observation(s)",
+                               owner_id, len(applied.skipped))
+            skip |= applied.skipped
+            if not applied.changed and not applied.skipped:
+                # Planned material became protected since planning: plan from fresh refs.
+                fresh = self.store.protection(owner_id)
+                if fresh == protected:
+                    return  # nothing planned is removable: no progress is possible
+                protected = fresh

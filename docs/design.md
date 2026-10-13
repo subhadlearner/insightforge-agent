@@ -565,8 +565,10 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   one), and Alerts. Each record is validated against its model and then walked whole, so a
   reference in a field the collector does not name is still protected. A record that is not
   JSON or fails validation raises `MalformedRetentionRoot`, and the sweep removes nothing of
-  that User. A protected Passage keeps its Observation and that Observation's Source; an
-  Observation named only by `observation_dates` keeps its row.
+  that User; so does a Passage `index` that is not a non-negative integer. A protected Passage
+  keeps its Observation and that Observation's Source; an Observation named only by
+  `observation_dates` keeps its row; a reference to an Observation with no Passage index keeps
+  every Passage of it.
 - **What goes** (`stores/retention.py`), only for an expired Run: unprotected Passages of its
   Observations (a web Observation Passage by Passage; an uploaded document only whole, because a
   document Claim is fact-checked against every stored chunk of its Observation); an Observation
@@ -589,16 +591,19 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   Report could not be finalised. A FAILED Run from before T13 is backfilled by the next sweep:
   `backfilled`, no failure time or stage, the logged `run_failed` reason when there is one,
   code `legacy_unrecorded`, and retention starting at backfill time (never `Run.created_at`).
-- **Batches and atomicity**: per User, at most 100 Passages per batch. `plan` reads under the
-  shared lock; `apply` re-reads protection and eligibility and deletes in one `BEGIN IMMEDIATE`
-  transaction, so a Report, Diff commit or Source link written meanwhile is seen. The lock is
-  not held between batches or during Qdrant calls.
+- **Batches and atomicity**: per User, about 100 Passages per batch (an uploaded document is
+  never split, so its batch may be larger). The User's retained records are read under the
+  shared lock once per sweep and interpreted outside it, to plan; `apply` re-reads protection
+  and eligibility and deletes in one `BEGIN IMMEDIATE` transaction, so a Report, Diff commit or
+  Source link written meanwhile is seen. The lock is not held between batches.
 - **Qdrant and SQLite** (`DocChunkIndex.delete`): exact point IDs (owner, Run, Observation,
-  index), filtered by owner and Run, idempotent. A batch's chunk points are removed before its
-  SQLite transaction. If Qdrant fails, those Observations are kept and skipped for the rest of
-  the sweep. If the process fails after Qdrant and before SQLite commits, SQLite is unchanged
-  and the next sweep plans the same chunks again; a missing point is not an error. Without a
-  `doc_chunks` index wired, document chunks are kept.
+  index), filtered by owner and Run, idempotent. Inside `apply`, after the re-check and before
+  the SQLite delete, so a chunk that became protected is never removed from Qdrant; this holds
+  the lock for one bounded Qdrant call per batch that has document chunks. If Qdrant fails,
+  those Observations are kept and skipped for the rest of the sweep. If the process fails after
+  Qdrant and before SQLite commits, SQLite is unchanged and the next sweep removes the same
+  chunks again; a missing point is not an error. Without a `doc_chunks` index wired, document
+  chunks are kept.
 - **Scheduling** (`scheduler/retention.py`): one persisted APScheduler interval job,
   `retention-sweep`, daily, first run 10 minutes after it is first stored, coalesced, one
   instance. Startup installs the handler while paused and adds the job only if the job store
@@ -609,10 +614,9 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
   dashboard still lists Failed Runs from Run rows. LangGraph checkpoints are not compacted, so
   a Run's checkpoint may still hold IDs of removed Passages (never their text). Passages and
   split markers left by a crash before their Observation row was stored carry no Run and are
-  not swept. If a Report started citing a document chunk between a batch's plan and its
-  transaction, that chunk's Passages are kept but its `doc_chunks` point is already gone; only
-  that Run's own (finished) searches used it. The in-memory repositories have failure records
-  but no sweep.
+  not swept. `apply` re-reads all of a User's retained records per batch, so a sweep's cost
+  grows with the User's Reports and Watchlist history. The in-memory repositories have failure
+  records but no sweep.
 - **Tests**: `tests/stores/test_t13_retention.py` (each protection rule, boundaries, Qdrant
   failures, crash between stores, idempotency, restart, owner isolation, malformed records,
   writes racing a batch), `tests/stores/test_t13_watchlist_regression.py` (Baseline seeding,

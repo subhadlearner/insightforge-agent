@@ -28,7 +28,7 @@ from insightforge_agent.domain.models import (
     SubTaskStatus,
 )
 from insightforge_agent.domain.passages import check_passages
-from insightforge_agent.domain.retention import FailureRecord, failure_reason
+from insightforge_agent.domain.retention import FailureRecord
 from insightforge_agent.domain.plan import SubTask
 from insightforge_agent.stores.diffs import SCHEMA as DIFF_SCHEMA, SqliteDiffRepository
 from insightforge_agent.stores.retention import SqliteRetentionRepository
@@ -170,14 +170,11 @@ class SqliteRunRepository(_Base):
             self._db.execute("BEGIN IMMEDIATE")
             with self._db:
                 row = self._db.execute(
-                    "SELECT state, created_at FROM runs WHERE owner_id=? AND id=?",
-                    (owner_id, run_id)).fetchone()
+                    "SELECT * FROM runs WHERE owner_id=? AND id=?", (owner_id, run_id)).fetchone()
                 if row is None:
                     raise NotFoundError(f"run {run_id}")
-                record = FailureRecord(
-                    owner_id=owner_id, run_id=run_id, run_created_at=_dt(row[1]),
-                    failed_at=failed_at, retention_starts_at=failed_at, stage=row[0],
-                    reason=failure_reason(reason), error_codes=error_codes)
+                record = FailureRecord.at_failure(self._row(row), reason=reason,
+                                                  error_codes=error_codes, failed_at=failed_at)
                 self._db.execute("UPDATE runs SET state=? WHERE owner_id=? AND id=?",
                                  (RunState.FAILED.value, owner_id, run_id))
                 self._db.execute(

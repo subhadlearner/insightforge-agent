@@ -81,7 +81,7 @@ class World:
         self.repos = SqliteRepos(str(self.path))
         self.store = SourceStore(self.repos.sources, self.repos.observations,
                                  self.repos.passages)
-        self.sweeper = RetentionSweeper(self.repos, self.index, lambda: self.now,
+        self.sweeper = RetentionSweeper(self.repos.retention, self.index, lambda: self.now,
                                         retention_days=self.days)
         return self
 

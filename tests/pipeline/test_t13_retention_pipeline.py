@@ -150,7 +150,7 @@ def test_a_completed_run_has_no_failure_record(sql_deps):
 
 
 def sweep(deps, days=30):
-    return RetentionSweeper(deps.repos, deps.doc_index, deps.now, retention_days=days).sweep()
+    return RetentionSweeper(deps.repos.retention, deps.doc_index, deps.now, retention_days=days).sweep()
 
 
 def test_after_a_sweep_citations_memory_and_inherited_fact_checks_still_work(sql_deps):

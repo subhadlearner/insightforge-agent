@@ -144,7 +144,7 @@ class Runtime:
                             unconfirmed_after=settings.not_reconfirmed_threshold)
         schedules = WatchlistScheduler(deps, scheduler, research, closing, diffs=diffs)
         deps.on_complete = schedules.completed
-        retention = RetentionSweeper(repos, deps.doc_index, deps.now,
+        retention = RetentionSweeper(repos.retention, deps.doc_index, deps.now,
                                      retention_days=settings.retention_days, closing=closing)
         return cls(settings=settings, session=session, repos=repos, deps=deps,
                    scheduler=scheduler, executor=executor,

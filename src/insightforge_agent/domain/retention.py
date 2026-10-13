@@ -23,8 +23,10 @@ from insightforge_agent.domain.alerts import Alert
 from insightforge_agent.domain.contracts import (
     EvidenceBundle,
     HistoricalContext,
+    ReportDraft,
     VerifiedReport,
 )
+from insightforge_agent.domain.models import Run
 from insightforge_agent.domain.diff import DiffEntry, EstablishedFinding
 from insightforge_agent.domain.findings import Skipped
 from insightforge_agent.domain.watchlist import Baseline
@@ -64,6 +66,23 @@ class FailureRecord(BaseModel):
     error_codes: list[str] = Field(min_length=1)
     backfilled: bool = False
 
+    @classmethod
+    def at_failure(cls, run: Run, *, reason: str, error_codes: list[str],
+                   failed_at: datetime) -> "FailureRecord":
+        """The record of a Run failing now, in the state it is in."""
+        return cls(owner_id=run.owner_id, run_id=run.id, run_created_at=run.created_at,
+                   failed_at=failed_at, retention_starts_at=failed_at, stage=run.state.value,
+                   reason=failure_reason(reason), error_codes=error_codes)
+
+    @classmethod
+    def legacy(cls, run: Run, *, reason: str, backfilled_at: datetime) -> "FailureRecord":
+        """A Run that failed before records were kept: its failure time and stage are
+        unknown, and retention starts at backfill time, never earlier."""
+        return cls(owner_id=run.owner_id, run_id=run.id, run_created_at=run.created_at,
+                   failed_at=None, retention_starts_at=backfilled_at, stage=None,
+                   reason=failure_reason(reason), error_codes=[LEGACY_UNRECORDED],
+                   backfilled=True)
+
 
 MAX_REASON_CHARS = 1000
 
@@ -90,21 +109,28 @@ class MalformedRetentionRoot(ValueError):
 
 @dataclass
 class ProtectedRefs:
-    """Everything one User's retained records refer to. A Passage listed here keeps its
-    Passage row, its Observation and that Observation's Source; an Observation listed keeps its
-    row (and, for an uploaded document, every chunk: see `SqliteRetentionRepository`); a
-    Source listed keeps its row."""
+    """Everything one User's retained records refer to. A Passage in `passages` keeps its row,
+    and its Observation (in `observations`) keeps its row and its Source, as does an
+    Observation named for its date (`observation_dates`). An Observation referred to as a whole
+    (a reference with no Passage index) is in `whole`: it keeps every Passage. A Source in `sources` keeps its
+    row. An uploaded document's Observation with any protected Passage is kept whole by the
+    store, because a document Claim is fact-checked against all of its chunks."""
 
     passages: set[tuple[str, int]] = field(default_factory=set)
     observations: set[str] = field(default_factory=set)
+    whole: set[str] = field(default_factory=set)
     sources: set[str] = field(default_factory=set)
+
+    def add_whole(self, observation_id: str) -> None:
+        self.whole.add(observation_id)
+        self.observations.add(observation_id)
 
     def add_passage(self, observation_id: str, index: int) -> None:
         self.passages.add((observation_id, index))
         self.observations.add(observation_id)
 
     def protects_passage(self, observation_id: str, index: int) -> bool:
-        return (observation_id, index) in self.passages
+        return (observation_id, index) in self.passages or observation_id in self.whole
 
     # --- the roots ---------------------------------------------------------------------------
 
@@ -117,6 +143,7 @@ class ProtectedRefs:
             (EvidenceBundle, body.get("evidence")),
             (HistoricalContext, body.get("historical")),
             (VerifiedReport, body.get("verified")),
+            (ReportDraft, body.get("draft")),
         ))
         self._walk(body)
 
@@ -148,8 +175,9 @@ class ProtectedRefs:
     def _walk(self, value: Any) -> None:
         """Every reference anywhere in a record, typed fields or not, so a field added later
         is protected before anyone teaches this module about it: any mapping with an
-        `observation_id` (a Passage reference when it also has an integer `index`), the keys
-        of `observation_dates`, and every `source_id` / `source_ids`."""
+        `observation_id` (a Passage reference when it has an `index`, else the whole
+        Observation), the keys of `observation_dates` (Observation rows), and every
+        `source_id` / `source_ids`. An `index` that is not a non-negative integer is malformed."""
         stack = [value]
         while stack:
             node = stack.pop()
@@ -162,15 +190,18 @@ class ProtectedRefs:
             if oid is not None:
                 if not isinstance(oid, str):
                     raise MalformedRetentionRoot(f"observation_id {oid!r} is not a string")
-                index = node.get("index")
-                if isinstance(index, int) and not isinstance(index, bool):
-                    self.add_passage(oid, index)
+                if "index" not in node:
+                    self.add_whole(oid)
                 else:
-                    self.observations.add(oid)
+                    index = node["index"]
+                    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                        raise MalformedRetentionRoot(f"Passage index {index!r} of {oid}")
+                    self.add_passage(oid, index)
             for key, child in node.items():
                 if key == "observation_dates":
                     if not isinstance(child, dict):
                         raise MalformedRetentionRoot("observation_dates is not a mapping")
+                    # Named for its fetch date: the Observation row is what must resolve.
                     self.observations.update(str(k) for k in child)
                 elif key == "source_ids":
                     if not isinstance(child, list):
@@ -184,7 +215,8 @@ class ProtectedRefs:
 
 def _validate(what: str, checks: Iterable[tuple[type[BaseModel], Any]]) -> None:
     for model, value in checks:
-        if value is None and model in (EvidenceBundle, HistoricalContext, VerifiedReport):
+        if value is None and model in (EvidenceBundle, HistoricalContext, VerifiedReport,
+                                       ReportDraft):
             continue  # a Report stored before that part existed
         try:
             model.model_validate(value)

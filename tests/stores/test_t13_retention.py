@@ -6,6 +6,7 @@ the terminal-state and cutoff boundaries, shared Sources, extracted-fact provena
 Qdrant/SQLite failure cases, idempotency and restarts, owner isolation, malformed records and
 a write racing the sweep."""
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -128,7 +129,7 @@ def test_a_baseline_seed_keeps_its_evidence_and_observations(world):
     world.sweep()
 
     assert world.passages("obs_seed") == [2]
-    # Named only by its date: the Observation row stays, its unreferenced Passage goes.
+    # Named only for its date: the Observation row stays, its unreferenced Passage goes.
     assert world.has_observation("obs_dated") and world.passages("obs_dated") == []
     assert world.repos.watchlists.baseline("alice", "w").seeds[0].evidence.primary == ref(
         "obs_seed", 2)
@@ -383,17 +384,17 @@ def test_a_crash_after_qdrant_and_before_sqlite_is_repaired_by_the_next_sweep(wo
     doc = world.pdf("r1")
     world.complete("r1")
     store, calls = world.repos.retention, []
-    real_apply = store.apply
+    real_delete = store._delete_observation
 
-    def crash(*args, **kwargs):
+    def crash(*args, **kwargs):  # after the Qdrant call, inside the SQLite transaction
         calls.append(1)
         raise RuntimeError("the process died mid-batch")
-    store.apply = crash
+    store._delete_observation = crash
     done = world.sweep()
     assert done["owners_failed"] == 1 and calls
-    assert world.points() == [] and world.passages(doc.id) == [0, 1, 2]  # SQLite untouched
+    assert world.points() == [] and world.passages(doc.id) == [0, 1, 2]  # SQLite rolled back
 
-    store.apply = real_apply
+    store._delete_observation = real_delete
     world.restart()  # a new process, same files
     done = world.sweep()
     assert done["chunk_points_removed"] == 3  # deleting missing points is not an error
@@ -462,9 +463,9 @@ def test_large_runs_are_cleaned_in_bounded_batches(world):
     seen = []
     real_apply = world.repos.retention.apply
 
-    def counting(owner_id, batch, cutoff):
+    def counting(owner_id, batch, cutoff, remove):
         seen.append(sum(len(o.indices) for o in batch.observations))
-        return real_apply(owner_id, batch, cutoff)
+        return real_apply(owner_id, batch, cutoff, remove)
     world.repos.retention.apply = counting
     world.sweep()
     assert seen == [100, 100, 50] and not world.has_observation("obs_1")
@@ -533,8 +534,13 @@ def test_the_collector_reads_references_from_fields_it_does_not_model():
                      "deep": {"source_ids": ["s1"], "x": {"observation_id": "o3"}}}, "r")
     assert refs.passages == {("o1", 4)}
     assert refs.observations == {"o1", "o2", "o3"} and refs.sources == {"s1"}
+    assert refs.whole == {"o3"}  # no index: the whole Observation; o2 only its row
+    for bad in ({"observation_id": 7}, {"observation_id": "o", "index": "3"},
+                {"observation_id": "o", "index": -1}, {"observation_id": "o", "index": True}):
+        with pytest.raises(MalformedRetentionRoot):
+            ProtectedRefs().add_report({"x": bad}, "r")
     with pytest.raises(MalformedRetentionRoot):
-        ProtectedRefs().add_report({"x": {"observation_id": 7}}, "r")
+        ProtectedRefs().add_report({"draft": {"sections": "x"}}, "r")
 
 
 # --- a write racing the sweep --------------------------------------------------------------
@@ -580,3 +586,48 @@ def test_a_live_run_linking_a_source_between_planning_and_deletion_keeps_it(worl
 
     assert not world.has_observation("obs_old") and world.has_source("src_s")
     assert [s.id for s in world.repos.sources.list_for_run("alice", "r_live")] == ["src_s"]
+
+
+def test_a_document_chunk_protected_between_planning_and_deletion_keeps_its_point(world):
+    doc = world.pdf("r1")
+    world.complete("r1")
+    store = world.repos.retention
+    real_plan = store.plan
+
+    def plan_then_cite(*args, **kwargs):
+        batch = real_plan(*args, **kwargs)
+        world.complete("r_late", at=T0, evidence=[item("ev", ref(doc.id, 1))])
+        store.plan = real_plan
+        return batch
+    store.plan = plan_then_cite
+
+    world.sweep()
+
+    # Qdrant is called only after the check under the lock: nothing of it was removed.
+    assert world.passages(doc.id) == [0, 1, 2] and len(world.points()) == 3
+
+
+def test_an_uploaded_document_is_never_split_across_batches(world):
+    doc = world.pdf("r1", chunks=150)
+    world.web("r1", "obs_web", paragraphs=30)
+    world.complete("r1")
+    seen = []
+    real_apply = world.repos.retention.apply
+
+    def counting(owner_id, batch, cutoff, remove):
+        seen.append([(o.uploaded, len(o.indices)) for o in batch.observations])
+        return real_apply(owner_id, batch, cutoff, remove)
+    world.repos.retention.apply = counting
+    world.sweep()
+    assert (True, 150) in seen[0]  # whole, even beyond the batch bound
+    assert not world.has_observation(doc.id) and world.points() == []
+
+
+def test_a_bare_observation_reference_protects_every_passage(world):
+    world.web("r1", "obs_1", paragraphs=3)
+    report = world.complete("r1")
+    body = dict(report.body, future={"observation_id": "obs_1"})
+    world.execute("UPDATE reports SET body=? WHERE id=?",
+                  json.dumps(body), report.id)
+    world.sweep()
+    assert world.passages("obs_1") == [0, 1, 2]
