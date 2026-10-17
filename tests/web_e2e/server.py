@@ -8,8 +8,8 @@ A small `/__test__` router lets a browser test steer what it cannot reach throug
 
 - `POST /__test__/gate/close` and `/gate/open`: hold every page fetch, so Runs wait in
   RESEARCHING (to observe a live stream, reconnects and refreshes) until opened.
-- `POST /__test__/clock/advance?minutes=N`: move the backend clock (real time plus an offset),
-  e.g. past a clarification deadline, so an answer is late (409).
+- `POST /__test__/clock/advance?minutes=N` and `/clock/reset`: move the backend clock (real
+  time plus an offset), e.g. past a clarification deadline, so an answer is late (409).
 - `POST /__test__/clarification/{run_id}/timeout?owner=alice`: run the durable timeout job now,
   as APScheduler would at the deadline.
 
@@ -63,6 +63,10 @@ def build(tmp: Path, sse_seconds: float):
     @control.post("/clock/advance", status_code=204)
     def advance(minutes: float):
         clock.offset += timedelta(minutes=minutes)
+
+    @control.post("/clock/reset", status_code=204)
+    def reset_clock():
+        clock.offset = timedelta()
 
     @control.post("/clarification/{run_id}/timeout")
     def time_out(run_id: str, owner: str = "alice"):

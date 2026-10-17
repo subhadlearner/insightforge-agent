@@ -19,9 +19,10 @@ type View =
 
 type Outcome = "sent" | "late" | null;
 
-export function ClarificationCard({ runId, progress }: {
+export function ClarificationCard({ runId, progress, ended = false }: {
   runId: string;
   progress: ClarificationProgress;
+  ended?: boolean; // the Run is over: only say how the question was resolved
 }) {
   const [view, setView] = useState<View>({ kind: "loading" });
   const [answer, setAnswer] = useState("");
@@ -98,7 +99,7 @@ export function ClarificationCard({ runId, progress }: {
       <h2 id="question-title" className="question__title">The research needs one detail from you</h2>
       <blockquote className="question__text">{c.question}</blockquote>
 
-      {resolution === null && (
+      {resolution === null && !ended && (
         <form onSubmit={submit} className="question__form">
           <label htmlFor="answer" className="field__label">Your answer</label>
           <textarea
@@ -130,15 +131,16 @@ export function ClarificationCard({ runId, progress }: {
 
       {resolution === "answered" && (
         <p className="question__resolved" role="status">
-          {outcome === "late"
-            ? "Another answer was accepted first. Research is continuing with it."
+          {ended ? "Your answer was used for this research."
+            : outcome === "late" ? "Another answer was accepted first. Research is continuing with it."
             : "Answer received. Resuming research…"}
         </p>
       )}
       {resolution === "timed_out" && (
         <p className="question__resolved" role="status">
           {outcome === "late" ? "Your answer arrived after the question timed out. " : "The question timed out. "}
-          Research continues on a best-effort reading of the Brief.
+          {ended ? "Research went ahead on a best-effort reading of the Brief."
+            : "Research continues on a best-effort reading of the Brief."}
         </p>
       )}
     </section>

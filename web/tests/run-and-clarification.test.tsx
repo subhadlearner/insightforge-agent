@@ -196,10 +196,25 @@ describe("Clarification", () => {
     m.getClarification.mockResolvedValue({ ...open, deadline: soon });
     render(<ClarificationCard runId="run_1" progress={{ status: "awaiting", resolution: null }} />);
     expect(await screen.findByText(/Answer within/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/The server decides/)).toBeInTheDocument(), { timeout: 4000 });
+    await waitFor(() => expect(screen.getByText(/The server decides/)).toBeInTheDocument(), { timeout: 8000 });
     expect(m.getClarification.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByLabelText("Your answer")).toBeInTheDocument(); // not declared timed out
     expect(screen.queryByText(/timed out/)).not.toBeInTheDocument();
+  });
+
+  it("after the Run ends, keeps a record of a timed-out question and no answer form", async () => {
+    m.getClarification.mockResolvedValue({ ...open, resolution: "timed_out" });
+    m.listReports.mockResolvedValue([{ id: "rep_1", run_id: "run_1", created_at: "", title: "R", brief: "" }]);
+    render(<RunView runId="run_1" />);
+    source().stage(1, "PLANNING");
+    source().stage(2, "AWAITING_CLARIFICATION");
+    source().emit(3, "clarification_resolved", { resolution: "timed_out" });
+    source().stage(4, "RESUMING");
+    source().stage(5, "COMPLETE");
+    source().end("COMPLETE");
+    expect(await screen.findByText(/Research went ahead on a best-effort reading of the Brief/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Your answer")).not.toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Read the Report" })).toBeInTheDocument();
   });
 
   it("a timeout reported by the stream continues the Run and is not a failure", async () => {

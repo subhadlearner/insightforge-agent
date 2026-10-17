@@ -58,7 +58,9 @@ function useReportFor(runId: string, complete: boolean): ReportLookup {
 export function RunView({ runId }: { runId: string }) {
   const { state, retry } = useRunProgress(runId);
   const report = useReportFor(runId, state.terminal === "COMPLETE");
-  const asking = !state.terminal && (state.stage === "AWAITING_CLARIFICATION" || state.clarification.status !== "none");
+  // Shown from the question until the end of the Run, and afterwards as a record of how it
+  // was resolved (a timeout is not a failure; the Run went ahead without the answer).
+  const asked = state.stage === "AWAITING_CLARIFICATION" || state.clarification.status !== "none";
 
   return (
     <div className="run">
@@ -85,7 +87,7 @@ export function RunView({ runId }: { runId: string }) {
             </div>
           )}
 
-          {asking && <ClarificationCard runId={runId} progress={state.clarification} />}
+          {asked && <ClarificationCard runId={runId} progress={state.clarification} ended={state.terminal !== null} />}
 
           {state.terminal === "COMPLETE" && (
             <div className="outcome outcome--complete" data-testid="run-complete">

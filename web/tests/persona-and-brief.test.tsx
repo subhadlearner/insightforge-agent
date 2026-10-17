@@ -74,8 +74,8 @@ describe("Brief form", () => {
   it("starts from the persona's default sources", async () => {
     renderDesk();
     await screen.findByLabelText("Researching as");
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Your documents/ })).not.toBeChecked());
     expect(screen.getByRole("checkbox", { name: /Web/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /Your documents/ })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /Earlier Reports/ })).toBeChecked();
   });
 
