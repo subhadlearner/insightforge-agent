@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { listAlerts, markAlertRead, type Alert } from "@/lib/api";
+import { findingLabel } from "@/lib/finding-label";
 
 export function AlertsView() {
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
@@ -32,8 +33,12 @@ export function AlertsView() {
           <ul>
             {alert.changes.map((c, i) => (
               <li key={c.evidence_id ?? i}>
-                <strong>{c.subject} {c.predicate}</strong>: {c.previous_object ? `${c.previous_object} → ` : ""}{c.object}.
-                {" "}{c.when}.
+                <strong>{c.outcome.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase())}</strong>
+                {c.previous_object != null && c.previous_polarity && (
+                  <div>Previously established — {findingLabel({ subject: c.subject, predicate: c.predicate, object: c.previous_object, polarity: c.previous_polarity, scope: c.scope })}</div>
+                )}
+                <div>This Run — {findingLabel(c)}</div>
+                <div>{c.when}</div>
                 {c.previous_report_id && <> <Link href={`/reports/${encodeURIComponent(c.previous_report_id)}`}>Previous establishing Report</Link>.</>}
               </li>
             ))}
