@@ -9,6 +9,7 @@ vi.mock("@/lib/api", async (orig) => (await import("./mock-api")).mockApi(orig))
 const m = vi.mocked(api);
 
 beforeEach(() => {
+  m.listShares.mockResolvedValue([]);
   m.getReport.mockResolvedValue(reportOut());
   m.getCitations.mockResolvedValue(citations());
 });
