@@ -1,0 +1,124 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as api from "@/lib/api";
+import { AlertsView } from "@/components/alerts-view";
+import { ReportActions } from "@/components/report-actions";
+import { SharedReportView } from "@/components/shared-report-view";
+import { WatchlistDashboard } from "@/components/watchlist-dashboard";
+import { WatchlistDiffView } from "@/components/watchlist-diff-view";
+import { mockApi } from "./mock-api";
+
+vi.mock("@/lib/api", mockApi);
+const m = vi.mocked(api);
+
+const finding: api.Finding = {
+  key: "model3|price|china", subject: "Model 3", predicate: "price",
+  object: "29,000 dollars", polarity: "affirmed", scope: "China",
+  as_of_period: "2030-03-01", derived_from: "observation_date",
+  provenance: { run_id: "run_2", report_id: "rep_2", evidence_id: "ev_2", claim: "x", statement: "x" },
+};
+
+const dashboard: api.WatchlistDashboard = {
+  item: {
+    brief: "Tesla pricing", cadence_minutes: 15, max_runs: 4,
+    source_toggles: { web: true }, id: "wl_1", owner_id: "alice",
+    created_at: "2030-03-01T09:00:00Z", revision: 1, next_tick_at: "2030-03-01T09:15:00Z",
+  },
+  runs_started: 3, completed_runs: 2, failed_runs: 1,
+  recent_failed_runs: [],
+  recent_failures: [{
+    run_id: "run_bad", stage: "RESEARCHING", reason: "provider unavailable",
+    error_codes: ["all_search_providers_failed"], backfilled: false,
+  }],
+  unconfirmed_findings: [{ finding, not_reconfirmed: 3, unconfirmed: true }],
+  baseline_state: "established",
+};
+
+beforeEach(() => {
+  m.listWatchlists.mockResolvedValue([dashboard]);
+  m.getWatchlist.mockResolvedValue(dashboard);
+  m.listDiffs.mockResolvedValue([{
+    watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
+    status: "succeeded", attempts: 1, error: "", alert_id: "al_2",
+    updated_at: "2030-03-01T10:00:00Z", intervening_failed: [],
+    entries: [{
+      material: true,
+      entry: {
+        outcome: "changed", key: finding.key, finding,
+        previous: { ...finding, object: "32,000 dollars", provenance: { ...finding.provenance, report_id: "rep_1" } },
+        unconfirmed: false, reason: "",
+      },
+    }],
+  }]);
+  m.listAlerts.mockResolvedValue([{
+    id: "al_2", watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
+    brief: "Tesla pricing", created_at: "2030-03-01T10:00:00Z", read: false, failed_diffs: [],
+    changes: [{
+      outcome: "changed", subject: "Model 3", predicate: "price", scope: "China",
+      object: "29,000 dollars", polarity: "affirmed", as_of_period: "2030-03-01",
+      derived: true, when: "Change detected on 2030-03-01", report_id: "rep_2",
+      evidence_id: "ev_2", previous_object: "32,000 dollars", previous_report_id: "rep_1",
+    }],
+  }]);
+});
+
+describe("T15 Watchlist and Diff UI", () => {
+  it("shows N of N, failure detail and unconfirmed Findings", async () => {
+    render(<WatchlistDashboard />);
+    expect(await screen.findByText("3 of 4 runs started", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(/RESEARCHING: provider unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/3 runs without reconfirmation/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View Diff history" })).toHaveAttribute("href", "/watchlist/wl_1");
+  });
+
+  it("uses explicit materiality and honest derived-period wording", async () => {
+    render(<WatchlistDiffView itemId="wl_1" />);
+    expect(await screen.findByText(/changed · material change/i)).toBeInTheDocument();
+    expect(screen.getByText(/Observed on 2030-03-01 \(As-of derived from source observation date\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Changed on 2030-03-01/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Report" })[0]).toHaveAttribute("href", "/reports/rep_2");
+  });
+});
+
+describe("T15 Alerts", () => {
+  it("links current and previous establishing Reports and marks read", async () => {
+    m.markAlertRead.mockResolvedValue({ ...(await m.listAlerts()), read: true } as never);
+    render(<AlertsView />);
+    expect(await screen.findByText(/Change detected on 2030-03-01/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open new Report" })).toHaveAttribute("href", "/reports/rep_2");
+    expect(screen.getByRole("link", { name: "Previous establishing Report" })).toHaveAttribute("href", "/reports/rep_1");
+  });
+});
+
+describe("T15 Report actions", () => {
+  it("creates and revokes one public link without retrying mutations", async () => {
+    m.createShare.mockResolvedValue({
+      share_id: "share_1", path: "/share/token_1", expires_at: "2030-03-08T09:00:00Z",
+    });
+    m.revokeShare.mockResolvedValue(undefined);
+    render(<ReportActions reportId="rep_2" />);
+    await userEvent.click(screen.getByRole("button", { name: "Create share link" }));
+    expect(await screen.findByText(/Public link:/)).toBeInTheDocument();
+    expect(m.createShare).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Revoke share link" }));
+    expect(await screen.findByText(/can no longer be opened/)).toBeInTheDocument();
+    expect(m.revokeShare).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("T15 public share", () => {
+  it("renders the constrained public Report and web Source metadata", async () => {
+    m.getSharedReport.mockResolvedValue({
+      id: "rep_2", created_at: "2030-03-01T10:00:00Z", brief: "Tesla pricing",
+      title: "Pricing update", summary: "Price fell.", gaps: ["Tax data unavailable."],
+      fact_check: { sampled: 1, verified: 1, unverified: 0, unchecked: 0 },
+      sections: [{ heading: "Pricing", claims: [{ text: "Model 3 costs 29,000 dollars.", historical: false }] }],
+      web_sources: [{ id: "src_1", title: "Price page", url: "https://example.test/price", credibility_score: 0.8 }],
+    });
+    render(<SharedReportView token="token_1" />);
+    expect(await screen.findByRole("heading", { name: "Pricing update" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Price page" })).toHaveAttribute("href", "https://example.test/price");
+    expect(screen.queryByText(/Run log/i)).not.toBeInTheDocument();
+  });
+});
