@@ -22,6 +22,7 @@ try {
     throw new Error(`Report page returned ${response?.status() ?? "no response"}`);
   }
   await page.locator("article.report").waitFor({ state: "visible" });
+  await page.locator(".report__print-sources[data-print-sources-state=\"ready\"], .report__print-sources[data-print-sources-state=\"failed\"]").waitFor({ state: "attached" });
   const pdf = await page.pdf({
     format: "A4",
     printBackground: true,
