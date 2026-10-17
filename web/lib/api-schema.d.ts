@@ -921,7 +921,6 @@ export interface components {
             sections: components["schemas"]["PublicSection"][];
             /** Gaps */
             gaps: string[];
-            /** Fact Check */
             fact_check: components["schemas"]["PublicFactCheck"];
             /** Web Sources */
             web_sources: components["schemas"]["PublicWebSource"][];
