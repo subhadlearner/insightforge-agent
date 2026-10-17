@@ -30,6 +30,21 @@ describe("Report viewer", () => {
     expect(historical.closest("p")).toHaveClass("claim--historical");
   });
 
+  it("maps print Source numbers to Claim citation markers without Passage text", async () => {
+    render(<ReportView reportId="rep_1" />);
+    await screen.findByRole("button", { name: "View source for claim 3" });
+    const appendix = document.querySelector(".report__print-sources") as HTMLElement;
+    expect(appendix).toBeInTheDocument();
+    const entries = within(appendix).getAllByRole("listitem");
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toHaveTextContent("Source 1: BYD annual report");
+    expect(entries[1]).toHaveTextContent("Source 2: Tesla Q4 deliveries");
+    expect(entries[2]).toHaveTextContent("Source 3: Seagull price list");
+    expect(entries[2]).toHaveTextContent("Page 4");
+    expect(entries[2]).toHaveTextContent("Section: Pricing");
+    expect(appendix).not.toHaveTextContent("Seagull now starts at 69,800 yuan.");
+  });
+
   it("gives every Claim one accessible citation marker", async () => {
     render(<ReportView reportId="rep_1" />);
     const markers = await screen.findAllByRole("button", { name: /View source for claim \d/ });
