@@ -65,6 +65,18 @@ class SqliteShareRepository:
             raise NotFoundError(f"share {share_id}")
         return self._record(row)
 
+    def list_for_report(self, owner_id: str, report_id: str, now: datetime) -> list[ShareRecord]:
+        """Only currently valid shares for one owner-scoped Report, in stable order."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT owner_id,id,report_id,created_at,expires_at,revoked_at "
+                "FROM report_shares "
+                "WHERE owner_id=? AND report_id=? AND revoked_at IS NULL "
+                "ORDER BY created_at,id",
+                (owner_id, report_id),
+            ).fetchall()
+        return [r for row in rows if (r := self._record(row)).expires_at > now]
+
     def revoke(self, owner_id: str, report_id: str, share_id: str, revoked_at: datetime) -> None:
         with self._write():
             row = self._db.execute(
