@@ -7,9 +7,7 @@ import { ReportActions } from "@/components/report-actions";
 import { SharedReportView } from "@/components/shared-report-view";
 import { WatchlistDashboard } from "@/components/watchlist-dashboard";
 import { WatchlistDiffView } from "@/components/watchlist-diff-view";
-import { mockApi } from "./mock-api";
-
-vi.mock("@/lib/api", mockApi);
+vi.mock("@/lib/api", async (orig) => (await import("./mock-api")).mockApi(orig));
 const m = vi.mocked(api);
 
 const finding: api.Finding = {
