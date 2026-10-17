@@ -16,7 +16,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${reading.variable} ${interface_.variable}`}>
       <body>
-        <PageShell>{children}</PageShell>rovider>
+        <PageShell>{children}</PageShell>
       </body>
     </html>
   );
