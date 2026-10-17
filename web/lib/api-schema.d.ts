@@ -891,6 +891,17 @@ export interface components {
             /** Historical Date */
             historical_date?: string | null;
         };
+        /** PublicFactCheck */
+        PublicFactCheck: {
+            /** Sampled */
+            sampled: number;
+            /** Verified */
+            verified: number;
+            /** Unverified */
+            unverified: number;
+            /** Unchecked */
+            unchecked: number;
+        };
         /** PublicReport */
         PublicReport: {
             /** Id */
@@ -911,9 +922,7 @@ export interface components {
             /** Gaps */
             gaps: string[];
             /** Fact Check */
-            fact_check: {
-                [key: string]: unknown;
-            };
+            fact_check: components["schemas"]["PublicFactCheck"];
             /** Web Sources */
             web_sources: components["schemas"]["PublicWebSource"][];
         };
