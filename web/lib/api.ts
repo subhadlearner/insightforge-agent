@@ -171,6 +171,9 @@ export async function downloadReport(reportId: string, format: "md" | "pdf"): Pr
   return response.blob();
 }
 
+export const listShares = (reportId: string) =>
+  request<ShareCreated[]>("GET", `/reports/${encodeURIComponent(reportId)}/shares`);
+
 export const createShare = (reportId: string) =>
   request<ShareCreated>("POST", `/reports/${encodeURIComponent(reportId)}/shares`);
 
