@@ -95,7 +95,7 @@ def build(tmp: Path, sse_seconds: float):
         now = clock()
         item = WatchlistItem(
             id=item_id, owner_id=owner, brief="Model 3 pricing in China",
-            cadence_minutes=15, max_runs=3, source_toggles={"web": True},
+            cadence_minutes=15, max_runs=5, source_toggles={"web": True},
             created_at=now, next_tick_at=now + timedelta(days=1),
         )
         repos.watchlists.add(item)
@@ -148,7 +148,8 @@ def build(tmp: Path, sse_seconds: float):
             draft = ReportDraft(
                 title=f"Model 3 pricing — {value} dollars",
                 summary=f"Observed Model 3 pricing at {value} dollars.",
-                sections=[ReportSection(heading="Pricing", claims=[claim] + ([feature_claim] if feature_claim else []))],
+                sections=[ReportSection(heading="Pricing", claims=[claim])] +
+                         ([ReportSection(heading="Feature", claims=[feature_claim])] if feature_claim else []),
                 gaps=["Observed price date is derived from the source fetch date."],
             )
             body = {
@@ -160,8 +161,11 @@ def build(tmp: Path, sse_seconds: float):
                 ).model_dump(mode="json"),
                 "evidence": EvidenceBundle(sections=[EvidenceSection(
                     aspect_id="pricing", heading="Pricing", confidence="HIGH",
-                    items=[evidence] + ([feature_evidence] if feature_evidence else []),
-                )]).model_dump(mode="json"),
+                    items=[evidence],
+                )] + ([EvidenceSection(
+                    aspect_id="feature", heading="Feature", confidence="HIGH",
+                    items=[feature_evidence],
+                )] if feature_evidence else [])).model_dump(mode="json"),
                 "historical": {"items": []},
             }
             report = Report(
@@ -200,6 +204,8 @@ def build(tmp: Path, sse_seconds: float):
 
         first, first_report, old, unconfirmed_finding = complete("t15_1", "32,000", 0)
         second, second_report, current, _ = complete("t15_2", "29,000", 15)
+        third, third_report, third_price, _ = complete("t15_3", "29,000", 35)
+        fourth, fourth_report, fourth_price, _ = complete("t15_4", "29,000", 45)
         assert unconfirmed_finding is not None
         failed = Run(
             id="t15_failed", owner_id=owner, brief=item.brief,
@@ -217,7 +223,7 @@ def build(tmp: Path, sse_seconds: float):
             outcome="changed", key=current.key, finding=current, previous=old,
         )
         state = EstablishedFinding(
-            finding=current, not_reconfirmed=0, unconfirmed=False,
+            finding=fourth_price, not_reconfirmed=0, unconfirmed=False,
         )
         # A separate established negative Finding was not reconfirmed in three successes.
         unconfirmed_state = EstablishedFinding(
@@ -263,6 +269,31 @@ def build(tmp: Path, sse_seconds: float):
                 (owner, item_id, second.id, second_report.id, json.dumps(detail),
                  alert.id, second.created_at.isoformat()),
             )
+            for earlier, later, report, new_price, misses in (
+                (current, third, third_report, third_price, 2),
+                (third_price, fourth, fourth_report, fourth_price, 3),
+            ):
+                continuation = {
+                    "entries": [
+                        DiffEntry(
+                            outcome="reconfirmed", key=new_price.key,
+                            finding=new_price, previous=earlier,
+                        ).model_dump(mode="json"),
+                        DiffEntry(
+                            outcome="not_reconfirmed", key=unconfirmed_finding.key,
+                            previous=unconfirmed_finding, finding=None,
+                            not_reconfirmed=misses, unconfirmed=(misses >= 3),
+                        ).model_dump(mode="json"),
+                    ],
+                    "skipped": [], "intervening_failed": [],
+                }
+                repos._db.execute(
+                    "INSERT INTO watchlist_diffs "
+                    "(owner_id,item_id,run_id,report_id,status,attempts,error,detail,alert_id,updated_at) "
+                    "VALUES (?,?,?,?, 'succeeded',1,'',?,NULL,?)",
+                    (owner, item_id, later.id, report.id,
+                     json.dumps(continuation), later.created_at.isoformat()),
+                )
             repos._db.execute(
                 "INSERT INTO watchlist_alerts "
                 "(owner_id,id,item_id,run_id,created_at,read,alert) VALUES (?,?,?,?,?,0,?)",
