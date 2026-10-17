@@ -123,10 +123,32 @@ def build(tmp: Path, sse_seconds: float):
                 derived_from="observation_date",
             )
             claim = Claim(text=evidence.statement, evidence_id=evidence.id)
+            feature_obs = None
+            feature_ref = None
+            feature_evidence = None
+            feature_claim = None
+            if run_id == "t15_1":
+                feature_obs = runtime.deps.store.ingest_web(
+                    owner_id=owner, run_id=run_id,
+                    url="https://example.test/t15_1-feature",
+                    title="Feature source t15_1",
+                    body="Model 3 does not include Autopilot in China.",
+                    fetched_at=at, credibility_score=0.8, published_at=at,
+                )
+                feature_ref = PassageRef(observation_id=feature_obs.id, index=0)
+                feature_evidence = EvidenceItem(
+                    id="ev_t15_feature", subtask_id="s1", aspect_id="feature",
+                    statement="Model 3 does not include Autopilot in China.",
+                    confidence="HIGH", primary=feature_ref, supporting=[feature_ref],
+                    entity="Model 3", predicate="feature", value="Autopilot",
+                    scope="China", polarity="negated", as_of_period=at.date().isoformat(),
+                    derived_from="observation_date",
+                )
+                feature_claim = Claim(text=feature_evidence.statement, evidence_id=feature_evidence.id)
             draft = ReportDraft(
                 title=f"Model 3 pricing — {value} dollars",
                 summary=f"Observed Model 3 pricing at {value} dollars.",
-                sections=[ReportSection(heading="Pricing", claims=[claim])],
+                sections=[ReportSection(heading="Pricing", claims=[claim] + ([feature_claim] if feature_claim else []))],
                 gaps=["Observed price date is derived from the source fetch date."],
             )
             body = {
@@ -134,11 +156,11 @@ def build(tmp: Path, sse_seconds: float):
                 "draft": draft.model_dump(mode="json"),
                 "verified": VerifiedReport(
                     draft=draft,
-                    summary={"sampled": 1, "verified": 1, "unverified": 0, "unchecked": 0},
+                    summary={"sampled": 1 + int(feature_claim is not None), "verified": 1 + int(feature_claim is not None), "unverified": 0, "unchecked": 0},
                 ).model_dump(mode="json"),
                 "evidence": EvidenceBundle(sections=[EvidenceSection(
                     aspect_id="pricing", heading="Pricing", confidence="HIGH",
-                    items=[evidence],
+                    items=[evidence] + ([feature_evidence] if feature_evidence else []),
                 )]).model_dump(mode="json"),
                 "historical": {"items": []},
             }
@@ -159,10 +181,26 @@ def build(tmp: Path, sse_seconds: float):
                     observation_dates={obs.id: at},
                 ),
             )
-            return run, report, finding
+            feature_finding = None
+            if feature_evidence and feature_ref and feature_obs:
+                feature_finding = Finding(
+                    key="model_3|feature|china", subject="Model 3",
+                    predicate="feature", object="Autopilot", object_key="autopilot",
+                    polarity="negated", scope="China",
+                    as_of_period=at.date().isoformat(), derived_from="observation_date",
+                    provenance=FindingProvenance(
+                        run_id=run_id, report_id=report.id,
+                        evidence_id=feature_evidence.id, claim=feature_claim.text,
+                        statement=feature_evidence.statement, primary=feature_ref,
+                        supporting=[feature_ref], source_ids=[feature_obs.source_id],
+                        observation_dates={feature_obs.id: at},
+                    ),
+                )
+            return run, report, finding, feature_finding
 
-        first, first_report, old = complete("t15_1", "32,000", 0)
-        second, second_report, current = complete("t15_2", "29,000", 15)
+        first, first_report, old, unconfirmed_finding = complete("t15_1", "32,000", 0)
+        second, second_report, current, _ = complete("t15_2", "29,000", 15)
+        assert unconfirmed_finding is not None
         failed = Run(
             id="t15_failed", owner_id=owner, brief=item.brief,
             state=RunState.RESEARCHING, created_at=now + timedelta(minutes=30),
@@ -182,10 +220,6 @@ def build(tmp: Path, sse_seconds: float):
             finding=current, not_reconfirmed=0, unconfirmed=False,
         )
         # A separate established negative Finding was not reconfirmed in three successes.
-        unconfirmed_finding = old.model_copy(update={
-            "key": "model_3|feature|china", "predicate": "feature",
-            "object": "Autopilot", "object_key": "autopilot", "polarity": "negated",
-        })
         unconfirmed_state = EstablishedFinding(
             finding=unconfirmed_finding, not_reconfirmed=3, unconfirmed=True,
         )
