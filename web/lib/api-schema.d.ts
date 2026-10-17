@@ -162,6 +162,75 @@ export interface paths {
         patch: operations["update_watchlist__item_id__patch"];
         trace?: never;
     };
+    "/watchlist/{item_id}/diffs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Diffs */
+        get: operations["list_diffs_watchlist__item_id__diffs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/watchlist/{item_id}/diffs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Diff */
+        get: operations["get_diff_watchlist__item_id__diffs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Alerts */
+        get: operations["list_alerts_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/{alert_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Alert */
+        get: operations["get_alert_alerts__alert_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Mark Alert */
+        patch: operations["mark_alert_alerts__alert_id__patch"];
+        trace?: never;
+    };
     "/reports": {
         parameters: {
             query?: never;
@@ -219,6 +288,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reports/{report_id}/export.md": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Markdown */
+        get: operations["export_markdown_reports__report_id__export_md_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/{report_id}/export.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Pdf */
+        get: operations["export_pdf_reports__report_id__export_pdf_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/{report_id}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Share */
+        post: operations["create_share_reports__report_id__shares_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/reports/{report_id}/shares/{share_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Share */
+        delete: operations["revoke_share_reports__report_id__shares__share_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/share/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Open Share */
+        get: operations["open_share_share__token__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -229,6 +383,79 @@ export interface components {
             run_id: string;
             /** State */
             state: string;
+        };
+        /** Alert */
+        Alert: {
+            /** Id */
+            id: string;
+            /** Owner Id */
+            owner_id: string;
+            /** Watchlist Item Id */
+            watchlist_item_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Report Id */
+            report_id: string;
+            /** Brief */
+            brief: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Changes */
+            changes: components["schemas"]["AlertChange"][];
+            /** Failed Diffs */
+            failed_diffs?: components["schemas"]["FailedDiff"][];
+            /**
+             * Read
+             * @default false
+             */
+            read: boolean;
+        };
+        /** AlertChange */
+        AlertChange: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "added" | "changed" | "no_longer_true";
+            /** Subject */
+            subject: string;
+            /** Predicate */
+            predicate: string;
+            /** Scope */
+            scope: string;
+            /** Object */
+            object: string;
+            /**
+             * Polarity
+             * @enum {string}
+             */
+            polarity: "affirmed" | "negated";
+            /** As Of Period */
+            as_of_period: string;
+            /** Derived */
+            derived: boolean;
+            /** When */
+            when: string;
+            /** Report Id */
+            report_id: string;
+            /** Evidence Id */
+            evidence_id: string;
+            /** Previous Object */
+            previous_object?: string | null;
+            /** Previous Polarity */
+            previous_polarity?: ("affirmed" | "negated") | null;
+            /** Previous Report Id */
+            previous_report_id?: string | null;
+            /** Previous Run Id */
+            previous_run_id?: string | null;
+        };
+        /** AlertReadPatch */
+        AlertReadPatch: {
+            /** Read */
+            read: boolean;
         };
         /** AnswerIn */
         AnswerIn: {
@@ -358,12 +585,92 @@ export interface components {
             /** Resolution */
             resolution: string | null;
         };
+        /** DiffEntry */
+        DiffEntry: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "added" | "changed" | "no_longer_true" | "reconfirmed" | "not_reconfirmed" | "older_ignored" | "ambiguous";
+            /** Key */
+            key: string;
+            finding?: components["schemas"]["Finding"] | null;
+            previous?: components["schemas"]["Finding"] | null;
+            /** Not Reconfirmed */
+            not_reconfirmed?: number | null;
+            /**
+             * Unconfirmed
+             * @default false
+             */
+            unconfirmed: boolean;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
+        /** DiffEntryOut */
+        DiffEntryOut: {
+            entry: components["schemas"]["DiffEntry"];
+            /** Material */
+            material: boolean;
+        };
+        /** DiffRecordOut */
+        DiffRecordOut: {
+            /** Owner Id */
+            owner_id: string;
+            /** Watchlist Item Id */
+            watchlist_item_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Report Id */
+            report_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "succeeded" | "failed";
+            /** Attempts */
+            attempts: number;
+            /** Error */
+            error: string;
+            /** Entries */
+            entries: components["schemas"]["DiffEntryOut"][];
+            /** Skipped */
+            skipped: components["schemas"]["Skipped"][];
+            /** Intervening Failed */
+            intervening_failed: components["schemas"]["FailedDiff"][];
+            /** Alert Id */
+            alert_id: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** DocumentIn */
         DocumentIn: {
             /** Filename */
             filename: string;
             /** Content Base64 */
             content_base64: string;
+        };
+        /**
+         * EstablishedFinding
+         * @description The latest established state of one Finding, with the provenance that established it.
+         */
+        EstablishedFinding: {
+            finding: components["schemas"]["Finding"];
+            /**
+             * Not Reconfirmed
+             * @default 0
+             */
+            not_reconfirmed: number;
+            /**
+             * Unconfirmed
+             * @default false
+             */
+            unconfirmed: boolean;
         };
         /** EvidenceItem */
         EvidenceItem: {
@@ -430,6 +737,125 @@ export interface components {
              */
             relevance: number;
         };
+        /**
+         * FailedDiff
+         * @description An intervening Run whose Diff failed permanently; the next success notes it.
+         */
+        FailedDiff: {
+            /** Run Id */
+            run_id: string;
+            /** Report Id */
+            report_id: string | null;
+            /** Error */
+            error: string;
+        };
+        /**
+         * FailureRecord
+         * @description The compact record a Failed Run keeps after its raw material expires. Written in the
+         *     same transaction that makes the Run FAILED, and never removed by retention.
+         *
+         *     `retention_starts_at` is what the sweep's cutoff is compared with. For a failure recorded
+         *     when it happened it equals `failed_at`. For a Run that failed before records were kept
+         *     (`backfilled`), the failure time is unknown (`failed_at` is None, never guessed from the
+         *     Run's creation) and retention starts when the record was backfilled.
+         */
+        FailureRecord: {
+            /** Owner Id */
+            owner_id: string;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Run Created At
+             * Format: date-time
+             */
+            run_created_at: string;
+            /** Failed At */
+            failed_at: string | null;
+            /**
+             * Retention Starts At
+             * Format: date-time
+             */
+            retention_starts_at: string;
+            /** Stage */
+            stage: string | null;
+            /** Reason */
+            reason: string;
+            /** Error Codes */
+            error_codes: string[];
+            /**
+             * Backfilled
+             * @default false
+             */
+            backfilled: boolean;
+        };
+        /** Finding */
+        Finding: {
+            /** Key */
+            key: string;
+            /** Subject */
+            subject: string;
+            /** Predicate */
+            predicate: string;
+            /** Object */
+            object: string;
+            /** Object Key */
+            object_key: string;
+            /**
+             * Polarity
+             * @enum {string}
+             */
+            polarity: "affirmed" | "negated";
+            /**
+             * Scope
+             * @default
+             */
+            scope: string;
+            /**
+             * As Of Period
+             * @default UNKNOWN
+             */
+            as_of_period: string;
+            /** Derived From */
+            derived_from?: string | null;
+            /**
+             * Conflicting
+             * @default false
+             */
+            conflicting: boolean;
+            /**
+             * Resolution
+             * @default vocabulary
+             * @enum {string}
+             */
+            resolution: "vocabulary" | "judge";
+            provenance: components["schemas"]["FindingProvenance"];
+        };
+        /**
+         * FindingProvenance
+         * @description What established a Finding: the Run, its Report, the Claim and Evidence item, and the
+         *     Passages, Sources and Observation dates behind it. Stored with the Finding itself.
+         */
+        FindingProvenance: {
+            /** Run Id */
+            run_id: string;
+            /** Report Id */
+            report_id: string;
+            /** Evidence Id */
+            evidence_id: string;
+            /** Claim */
+            claim: string;
+            /** Statement */
+            statement: string;
+            primary: components["schemas"]["PassageRef"];
+            /** Supporting */
+            supporting: components["schemas"]["PassageRef"][];
+            /** Source Ids */
+            source_ids: string[];
+            /** Observation Dates */
+            observation_dates: {
+                [key: string]: string;
+            };
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -452,6 +878,64 @@ export interface components {
             source_toggles: {
                 [key: string]: boolean;
             };
+        };
+        /** PublicClaim */
+        PublicClaim: {
+            /** Text */
+            text: string;
+            /**
+             * Historical
+             * @default false
+             */
+            historical: boolean;
+            /** Historical Date */
+            historical_date?: string | null;
+        };
+        /** PublicReport */
+        PublicReport: {
+            /** Id */
+            id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Brief */
+            brief: string;
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** Sections */
+            sections: components["schemas"]["PublicSection"][];
+            /** Gaps */
+            gaps: string[];
+            /** Fact Check */
+            fact_check: {
+                [key: string]: unknown;
+            };
+            /** Web Sources */
+            web_sources: components["schemas"]["PublicWebSource"][];
+        };
+        /** PublicSection */
+        PublicSection: {
+            /** Heading */
+            heading: string;
+            /** Claims */
+            claims: components["schemas"]["PublicClaim"][];
+        };
+        /** PublicWebSource */
+        PublicWebSource: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+            /** Published At */
+            published_at?: string | null;
+            /** Credibility Score */
+            credibility_score?: number | null;
         };
         /** ReportListItem */
         ReportListItem: {
@@ -559,6 +1043,30 @@ export interface components {
             /** Persona Id */
             persona_id: string;
         };
+        /** ShareCreated */
+        ShareCreated: {
+            /** Share Id */
+            share_id: string;
+            /** Path */
+            path: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+        };
+        /**
+         * Skipped
+         * @description A current Claim that did not become a Finding, and why. Logged with the Diff.
+         */
+        Skipped: {
+            /** Evidence Id */
+            evidence_id: string;
+            /** Claim */
+            claim: string;
+            /** Reason */
+            reason: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -585,8 +1093,11 @@ export interface components {
                 [key: string]: boolean;
             };
         };
-        /** WatchlistDashboard */
-        WatchlistDashboard: {
+        /**
+         * WatchlistDashboardOut
+         * @description T11 dashboard plus the durable T13/T12 detail that T15 presents.
+         */
+        WatchlistDashboardOut: {
             item: components["schemas"]["WatchlistItem"];
             /** Runs Started */
             runs_started: number;
@@ -603,6 +1114,10 @@ export interface components {
              * @enum {string}
              */
             baseline_state: "none" | "seed" | "established";
+            /** Recent Failures */
+            recent_failures?: components["schemas"]["FailureRecord"][];
+            /** Unconfirmed Findings */
+            unconfirmed_findings?: components["schemas"]["EstablishedFinding"][];
         };
         /** WatchlistItem */
         WatchlistItem: {
@@ -954,7 +1469,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WatchlistDashboard"][];
+                    "application/json": components["schemas"]["WatchlistDashboardOut"][];
                 };
             };
             /** @description Validation Error */
@@ -989,7 +1504,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WatchlistDashboard"];
+                    "application/json": components["schemas"]["WatchlistDashboardOut"];
                 };
             };
             /** @description Validation Error */
@@ -1022,7 +1537,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WatchlistDashboard"];
+                    "application/json": components["schemas"]["WatchlistDashboardOut"];
                 };
             };
             /** @description Validation Error */
@@ -1090,7 +1605,177 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WatchlistDashboard"];
+                    "application/json": components["schemas"]["WatchlistDashboardOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_diffs_watchlist__item_id__diffs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffRecordOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_diff_watchlist__item_id__diffs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+                run_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffRecordOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_alerts_alerts_get: {
+        parameters: {
+            query?: {
+                item_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_alert_alerts__alert_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_alert_alerts__alert_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alert_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertReadPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"];
                 };
             };
             /** @description Validation Error */
@@ -1188,6 +1873,168 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Citation"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_markdown_reports__report_id__export_md_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_pdf_reports__report_id__export_pdf_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_share_reports__report_id__shares_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_share_reports__report_id__shares__share_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                report_id: string;
+                share_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_share_share__token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicReport"];
                 };
             };
             /** @description Validation Error */
