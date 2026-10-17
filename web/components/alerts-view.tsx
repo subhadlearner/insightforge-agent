@@ -32,7 +32,7 @@ export function AlertsView() {
           </header>
           <ul>
             {alert.changes.map((c, i) => (
-              <li key={c.evidence_id ?? i}>
+              <li key={`${c.evidence_id ?? "none"}:${c.outcome}:${i}`}>
                 <strong>{c.outcome.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase())}</strong>
                 {c.previous_object != null && c.previous_polarity && (
                   <div>Previously established — {findingLabel({ subject: c.subject, predicate: c.predicate, object: c.previous_object, polarity: c.previous_polarity, scope: c.scope })}</div>
