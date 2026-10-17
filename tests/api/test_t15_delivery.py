@@ -69,9 +69,10 @@ def add_report(app, owner="alice"):
         ])],
         gaps=["No regional tax comparison."],
     )
+    raw_draft = draft.model_copy(update={"summary": "RAW PRE-CHECK SUMMARY"})
     body = {
         "brief": "EV pricing",
-        "draft": draft.model_dump(mode="json"),
+        "draft": raw_draft.model_dump(mode="json"),
         "verified": VerifiedReport(
             draft=draft,
             summary={"sampled": 2, "verified": 1, "unverified": 1, "unchecked": 0},
@@ -96,6 +97,8 @@ def test_markdown_is_verified_deterministic_and_owner_scoped(tmp_path):
         assert first.status_code == 200 and first.content == second.content
         text = first.text
         assert "# EV pricing" in text and "Verified summary" in text
+        assert "RAW PRE-CHECK SUMMARY" not in text
+        assert "Background from an earlier Report of 2030-03-01: Older private context. [UNVERIFIED]" in text
         assert "Older private context. [UNVERIFIED]" in text
         assert "## Gaps & limitations" in text
         assert "Web price" in text and "https://example.test/price" in text
@@ -152,6 +155,8 @@ def test_share_is_public_without_cookie_and_revocation_survives_restart(tmp_path
         body = public.json()
         assert body["id"] == report.id
         assert body["title"] == "EV pricing"
+        assert any("Older private context. [UNVERIFIED]" == claim["text"]
+                   for section in body["sections"] for claim in section["claims"])
         assert body["fact_check"]["verified"] == 1
         assert len(body["web_sources"]) == 1
         assert body["web_sources"][0]["title"] == "Web price"
