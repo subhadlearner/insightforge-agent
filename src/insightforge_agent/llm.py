@@ -1,12 +1,22 @@
 """The only module that knows about chat model providers (design.md §10)."""
 
-from typing import Literal
+from typing import Literal, get_args
 
 from langchain_core.language_models import BaseChatModel
 
-from insightforge_agent.config import Settings
+from insightforge_agent.config import LLMProvider, Settings
 
 Role = Literal["planner", "writer", "light"]
+ROLES: tuple[Role, ...] = get_args(Role)
+# The real chat providers; "fake" is for tests only.
+CHAT_PROVIDERS: tuple[str, ...] = tuple(p for p in get_args(LLMProvider) if p != "fake")
+
+
+def configured_model_name(role: Role, settings: Settings) -> str:
+    """The model id `build_chat_model` builds for a role under these Settings."""
+    if settings.llm_provider == "fake":
+        return "fake"
+    return getattr(settings, f"{settings.llm_provider}_{role}_model")
 
 
 def build_chat_model(role: Role, settings: Settings | None = None) -> BaseChatModel:
@@ -19,7 +29,7 @@ def build_chat_model(role: Role, settings: Settings | None = None) -> BaseChatMo
 
         return FakeListChatModel(responses=["ok"])
 
-    name = getattr(s, f"{provider}_{role}_model")
+    name = configured_model_name(role, s)
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 

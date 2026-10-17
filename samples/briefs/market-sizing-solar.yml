@@ -1,0 +1,36 @@
+# Sample brief library (design.md section 11; T16 #17).
+# Web only. Exercises market sizing with an outlook: reported figures kept apart from
+# forecasts, estimates from several bodies for the same period (genuine contradictions), and
+# figures in different units (gigawatts, percent).
+id: market-sizing-solar
+industry: Renewable energy
+question_type: Market sizing and outlook, separating reported figures from forecasts
+brief: >-
+  Estimate the size of the global solar photovoltaic market in 2025 by newly installed
+  capacity, name the leading country markets, and summarise the outlook for 2026, keeping
+  reported figures apart from forecasts.
+source_toggles:
+  web: true
+  documents: false
+  memory: false
+expected_report_structure:
+  sections:
+    - heading: Executive Summary
+      notes: At most 150 words, plain language.
+    - heading: Installed capacity in 2025
+      source_types: [web]
+      must_cite: [global new solar PV capacity installed in 2025, in gigawatts]
+      notes: >-
+        Different bodies' estimates for the same year that disagree are conflicting Evidence
+        (LOW Confidence), shown with their Sources rather than reconciled.
+    - heading: Leading markets
+      source_types: [web]
+      must_cite: [2025 installations or share for China and at least one other leading country]
+    - heading: 2026 outlook
+      source_types: [web]
+      must_cite: [a 2026 installation forecast and who made it]
+      notes: Forecasts are stated as forecasts, with the forecaster, never as reported results.
+    - heading: Gaps & limitations
+  checks:
+    - Every figure carries its unit and As-of period; a 2026 forecast is never a 2025 result.
+    - Overlapping-period estimates that disagree are marked conflicting, not merged.
