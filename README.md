@@ -31,11 +31,20 @@ queued); a submission beyond that is refused with 503. Endpoints:
 |---|---|
 | `GET /personas`, `POST /session {"persona_id"}`, `GET` / `DELETE /session` | list and select a persona (sets the signed HttpOnly cookie) |
 | `POST /research/run {"brief", "source_toggles"?, "documents"?}` | 202 with `run_id`; 422 if no source type is available; 503 at capacity |
+| `POST /research/estimate {"source_toggles"?, "document_count"?}` | a heuristic runtime estimate in seconds, shown before submit; creates nothing |
 | `GET /research/status?run_id=` | SSE progress; reconnect with `Last-Event-ID` to resume |
 | `GET /research/{run_id}/clarification`, `POST /research/{run_id}/clarify {"answer"}` | the Run's clarifying question; 409 once resolved |
 | `GET /reports`, `GET /reports/{report_id}` | the selected persona's Reports (there is no delete) |
+| `GET /reports/{report_id}/citations` | one citation per Claim, in draft order: the Source, its date and credibility score, and the exact Passage the Claim cites |
 
 Another persona's Run or Report is 404. Documents are sent as `{"filename", "content_base64"}`.
+Omitted `source_toggles` mean the persona's defaults from `users.yml`, else web only, for both
+`/research/run` and `/research/estimate`. Citations are resolved from the Report's persisted
+provenance (a Historical Claim shows the Passage it inherited, never a fact-check re-fetch); a
+Report whose provenance does not resolve is 500, never a partial list. The estimate is
+`base + document_count x pdf_ingest + one cost per enabled source type`, with coefficients from
+`RUNTIME_ESTIMATE_*`: a rough guide, not a promise, and it checks nothing, so a submission can
+still be refused with 422.
 
 ## Offline demo: Extraction and synthesis
 

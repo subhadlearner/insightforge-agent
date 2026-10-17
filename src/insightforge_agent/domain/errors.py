@@ -12,3 +12,10 @@ class ClarificationConflict(Exception):
 
 class SubmissionRejected(ValueError):
     """The Brief cannot be planned at all, so no Run is created. The API answers 422."""
+
+
+class ProvenanceError(Exception):
+    """A stored Report's provenance is inconsistent: a Claim names an Evidence or Historical
+    item the Report does not hold, a cited Passage, Observation or Source is missing, or the
+    body is malformed. Citations are never fabricated or skipped for it; the citations
+    endpoint answers 500. Deliberately not a NotFoundError: the Report itself exists."""

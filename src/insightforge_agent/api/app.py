@@ -53,6 +53,7 @@ from insightforge_agent.api.session import PersonaSession
 from insightforge_agent.api.watchlist import watchlist_router
 from insightforge_agent.pipeline.watchlist import WatchlistService
 from insightforge_agent.config import Settings
+from insightforge_agent.domain.runtime_estimate import EstimateCoefficients
 from insightforge_agent.pipeline.clarification import ClarificationService
 from insightforge_agent.pipeline.deps import Deps, TimeoutScheduler
 from insightforge_agent.pipeline.executor import BoundedRunExecutor
@@ -87,6 +88,15 @@ def _production_deps(settings: Settings, closers: list) -> MakeDeps:
         closers.append(qdrant.close)
         return build_deps(settings, repos, checkpointer, timeouts, qdrant=qdrant)
     return make
+
+
+def estimate_coefficients(settings: Settings) -> EstimateCoefficients:
+    return EstimateCoefficients(
+        base_seconds=settings.runtime_estimate_base_seconds,
+        pdf_ingest_seconds=settings.runtime_estimate_pdf_ingest_seconds,
+        source_seconds={"web": settings.runtime_estimate_web_seconds,
+                        "documents": settings.runtime_estimate_documents_seconds,
+                        "memory": settings.runtime_estimate_memory_seconds})
 
 
 @dataclass
@@ -209,10 +219,12 @@ def create_app(runtime: Runtime) -> FastAPI:
     app.include_router(research_router(runtime.research, user, runtime.repos.runs,
                                        runtime.repos.events, runtime.settings.sse_poll_seconds,
                                        runtime.settings.sse_max_stream_seconds,
-                                       runtime.closing))
+                                       runtime.closing,
+                                       estimate_coefficients(runtime.settings)))
     app.include_router(clarification_router(runtime.clarifications, user_id))
     app.include_router(watchlist_router(runtime.watchlists, user_id))
-    app.include_router(reports_router(runtime.repos.reports, user_id))
+    app.include_router(reports_router(runtime.repos.reports, runtime.deps.store,
+                                      user_id))
     return app
 
 

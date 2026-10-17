@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     # unreferenced raw material may be removed by the daily sweep.
     retention_days: int = Field(default=30, gt=0)
 
+    # Runtime estimate (T14, design.md section 10): seconds shown before submit, as
+    # base + PDFs x pdf_ingest + one cost per enabled source type. A heuristic, not a promise.
+    runtime_estimate_base_seconds: int = Field(default=30, ge=0)
+    runtime_estimate_pdf_ingest_seconds: int = Field(default=15, ge=0)
+    runtime_estimate_web_seconds: int = Field(default=45, ge=0)
+    runtime_estimate_documents_seconds: int = Field(default=30, ge=0)
+    runtime_estimate_memory_seconds: int = Field(default=15, ge=0)
+
     # Search: ordered; a provider that fails falls through to the next.
     search_providers: Annotated[list[SearchProvider], NoDecode] = ["tavily", "serpapi"]
 

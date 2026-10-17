@@ -13,9 +13,21 @@ Confidence = Literal["HIGH", "MEDIUM", "LOW"]
 CONFIDENCE_ORDER: dict[str, int] = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 
 
+WEB_ONLY: dict[str, bool] = {"web": True}
+
+
+def effective_source_toggles(explicit: dict | None, persona: dict[str, bool]) -> dict:
+    """The source toggles a Brief uses: the explicit ones when given (even empty), else the
+    persona's defaults from users.yml, else web only. Run submission and the runtime estimate
+    both use this, so they never disagree about what an omitted toggle means."""
+    if explicit is not None:
+        return explicit
+    return dict(persona) if persona else dict(WEB_ONLY)
+
+
 class Brief(BaseModel):
     text: str = Field(min_length=1)
-    source_toggles: dict[SourceType, bool] = Field(default_factory=lambda: {"web": True})
+    source_toggles: dict[SourceType, bool] = Field(default_factory=lambda: dict(WEB_ONLY))
     document_ids: list[str] = Field(default_factory=list)
 
 

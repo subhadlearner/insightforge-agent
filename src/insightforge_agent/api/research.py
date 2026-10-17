@@ -22,7 +22,13 @@ FAILED when the 503 is sent.
   `closing` is set (the server is stopping); either way it closes without `end`, and
   EventSource reconnects with `Last-Event-ID`.
 - An unknown Run and another User's Run are the same 404, checked before the cursor.
-  Disconnecting only stops the stream; the Run carries on in the RunExecutor."""
+  Disconnecting only stops the stream; the Run carries on in the RunExecutor.
+
+`POST /research/estimate` is the runtime estimate shown before submit
+(`domain.runtime_estimate`): omitted source toggles inherit the persona's defaults exactly as
+submission does, and `document_count` stands for the PDFs (no bytes are sent). A heuristic: it
+checks no availability (submission may still be 422), and creates no Run, writes nothing and
+takes no RunExecutor capacity."""
 
 import base64
 import binascii
@@ -34,14 +40,15 @@ from collections.abc import Callable
 import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from insightforge_agent.domain.contracts import Brief
-from insightforge_agent.domain.documents import Upload
+from insightforge_agent.domain.contracts import Brief, effective_source_toggles
+from insightforge_agent.domain.documents import MAX_DOCUMENTS, Upload
 from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
 from insightforge_agent.domain.models import TERMINAL_STATES, RunEvent, User
 from insightforge_agent.domain.plan import SourceType
 from insightforge_agent.domain.repositories import RunEventRepository, RunRepository
+from insightforge_agent.domain.runtime_estimate import EstimateCoefficients, estimate_runtime
 from insightforge_agent.pipeline.executor import ExecutorFull, WorkNotAccepted
 from insightforge_agent.pipeline.research import ResearchService
 
@@ -67,6 +74,28 @@ class RunAccepted(BaseModel):
     run_id: str
     state: str
     status_url: str
+
+
+class RuntimeEstimateIn(BaseModel):
+    # Omitted: the persona's defaults from users.yml, else web only (as for a Run).
+    source_toggles: dict[SourceType, bool] | None = None
+    document_count: int = Field(default=0, ge=0, le=MAX_DOCUMENTS)  # PDFs to be uploaded
+
+
+class RuntimeEstimateOut(BaseModel):
+    """A heuristic duration for the UI, not a promise that the Run finishes within it."""
+
+    estimated_seconds: int
+    base_seconds: int
+    document_count: int
+    source_types: list[SourceType]  # the enabled ones the estimate counted, in canonical order
+
+
+_TOGGLES = TypeAdapter(dict[SourceType, bool])
+
+
+def _invalid(e: ValidationError) -> HTTPException:
+    return HTTPException(422, e.errors(include_url=False, include_context=False))
 
 
 def _uploads(documents: list[DocumentIn]) -> list[Upload]:
@@ -100,19 +129,18 @@ def end_frame(run_id: str, state: str) -> str:
 def research_router(service: ResearchService, current_user: Callable[..., User],
                     runs: RunRepository, events: RunEventRepository,
                     poll_seconds: float, max_stream_seconds: float,
-                    closing: threading.Event) -> APIRouter:
+                    closing: threading.Event, estimates: EstimateCoefficients) -> APIRouter:
     router = APIRouter(prefix="/research")
 
     @router.post("/run", status_code=202, response_model=RunAccepted)
     def submit(body: RunIn, user: User = Depends(current_user)):
         uploads = _uploads(body.documents)
-        toggles = body.source_toggles if body.source_toggles is not None else (
-            user.source_toggles or None)
         try:
             brief = Brief(text=body.brief, document_ids=[u.document_id for u in uploads],
-                          **({"source_toggles": toggles} if toggles is not None else {}))
+                          source_toggles=effective_source_toggles(body.source_toggles,
+                                                                  user.source_toggles))
         except ValidationError as e:
-            raise HTTPException(422, e.errors(include_url=False, include_context=False)) from None
+            raise _invalid(e) from None
         try:
             run = service.submit(user.id, brief, uploads)
         except SubmissionRejected as e:
@@ -123,6 +151,19 @@ def research_router(service: ResearchService, current_user: Callable[..., User],
                                 headers={"Retry-After": str(RETRY_AFTER_SECONDS)}) from None
         return RunAccepted(run_id=run.id, state=run.state.value,
                            status_url=f"/research/status?run_id={run.id}")
+
+    @router.post("/estimate", response_model=RuntimeEstimateOut)
+    def estimate(body: RuntimeEstimateIn, user: User = Depends(current_user)):
+        try:  # the persona's defaults are validated as a Brief would validate them
+            toggles = _TOGGLES.validate_python(
+                effective_source_toggles(body.source_toggles, user.source_toggles))
+        except ValidationError as e:
+            raise _invalid(e) from None
+        result = estimate_runtime(estimates, toggles, body.document_count)
+        return RuntimeEstimateOut(estimated_seconds=result.estimated_seconds,
+                                  base_seconds=result.base_seconds,
+                                  document_count=result.document_count,
+                                  source_types=result.source_types)
 
     @router.get("/status")
     async def status(request: Request, run_id: str = Query(min_length=1),
