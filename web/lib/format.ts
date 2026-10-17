@@ -1,6 +1,6 @@
 // Display formatting shared by the components.
 
-import type { RunState } from "./run-events";
+import type { RunStage } from "./run-events";
 
 /** "about 2 min 15 sec": an estimate, worded as one. */
 export function formatEstimate(seconds: number): string {
@@ -30,13 +30,13 @@ export function formatDate(value: string | null | undefined): string | null {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
-export const STAGE_LABELS: Record<RunState, string> = {
+export const STAGE_LABELS: Record<RunStage, string> = {
   INGESTING: "Reading documents",
   PLANNING: "Planning",
   AWAITING_CLARIFICATION: "Waiting for your answer",
   RESUMING: "Resuming research",
   RESEARCHING: "Researching",
-  EXTRACTING: "Extracting facts",
+  EXTRACTING: "Extracting entities",
   SYNTHESIZING: "Weighing evidence",
   WRITING: "Writing the Report",
   FACT_CHECKING: "Fact-checking",

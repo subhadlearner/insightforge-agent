@@ -10,10 +10,10 @@
 
 import { useCallback, useEffect, useReducer, useState } from "react";
 import { parseRunEnd, parseRunEvent, statusUrl } from "@/lib/run-events";
-import { initialRunState, runReducer, type RunState } from "@/lib/run-reducer";
+import { initialRunProgress, runReducer, type RunProgress } from "@/lib/run-reducer";
 
-export function useRunProgress(runId: string): { state: RunState; retry: () => void } {
-  const [state, dispatch] = useReducer(runReducer, initialRunState);
+export function useRunProgress(runId: string): { state: RunProgress; retry: () => void } {
+  const [state, dispatch] = useReducer(runReducer, initialRunProgress);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {

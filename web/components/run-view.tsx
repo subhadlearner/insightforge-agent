@@ -8,7 +8,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { listReports } from "@/lib/api";
 import { STAGE_LABELS } from "@/lib/format";
-import type { RunState } from "@/lib/run-reducer";
+import type { RunProgress } from "@/lib/run-reducer";
 import { ClarificationCard } from "./clarification-card";
 import { StageProgress } from "./stage-progress";
 import { useRunProgress } from "./use-run-progress";
@@ -18,7 +18,7 @@ type ReportLookup = { kind: "idle" | "looking" } | { kind: "found"; id: string }
 const REPORT_LOOKUPS = 5;
 const REPORT_LOOKUP_DELAY_MS = 800;
 
-function headline(state: RunState): string {
+function headline(state: RunProgress): string {
   if (state.terminal === "COMPLETE") return "Your Report is ready";
   if (state.terminal === "FAILED") return "This Run failed";
   if (state.stage === "AWAITING_CLARIFICATION") return "Waiting for your answer";
@@ -82,7 +82,7 @@ export function RunView({ runId }: { runId: string }) {
           {state.connection === "LOST" && (
             <div className="notice notice--error" role="alert">
               <p className="notice__title">Progress for this Run can't be shown</p>
-              <p>It may belong to another persona, or the server may be unavailable. The Run itself is not affected.</p>
+              <p>The server may be unavailable, or this Run may belong to another persona. The Run itself is not affected.</p>
               <button type="button" className="button" onClick={retry}>Try again</button>
             </div>
           )}

@@ -5,7 +5,8 @@
 import type { DocumentIn } from "./api";
 
 export const MAX_DOCUMENTS = 10;
-export const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_DOCUMENT_MB = 20;
+export const MAX_DOCUMENT_BYTES = MAX_DOCUMENT_MB * 1024 * 1024;
 
 export interface Rejected {
   name: string;
@@ -27,7 +28,7 @@ export function addPdfs(existing: File[], incoming: File[]): { files: File[]; re
   for (const file of incoming) {
     if (files.some((f) => sameFile(f, file))) continue;
     if (!isPdf(file)) rejected.push({ name: file.name, reason: "not a PDF" });
-    else if (file.size > MAX_DOCUMENT_BYTES) rejected.push({ name: file.name, reason: "larger than 20 MB" });
+    else if (file.size > MAX_DOCUMENT_BYTES) rejected.push({ name: file.name, reason: `larger than ${MAX_DOCUMENT_MB} MB` });
     else if (files.length >= MAX_DOCUMENTS) rejected.push({ name: file.name, reason: `the limit is ${MAX_DOCUMENTS} documents` });
     else files.push(file);
   }

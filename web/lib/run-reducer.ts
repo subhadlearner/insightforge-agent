@@ -5,7 +5,7 @@
 // COMPLETE or FAILED. RESUMING and AWAITING_CLARIFICATION are shown as the current state but
 // never become steps of the stage rail.
 
-import { isRunState, type RunEvent, type RunState as Stage, type TerminalState } from "./run-events";
+import { isRunStage, type RunEvent, type RunStage as Stage, type TerminalState } from "./run-events";
 
 /** The rail, in pipeline order. INGESTING appears only for a Run that ingested uploads. */
 export const RAIL: readonly Stage[] = [
@@ -20,7 +20,7 @@ export interface ClarificationProgress {
   resolution: "answered" | "timed_out" | null;
 }
 
-export interface RunState {
+export interface RunProgress {
   lastSeq: number;
   stage: Stage | null; // the latest stage event, including the non-rail ones
   seenStages: Stage[]; // rail stages reached, each once, in arrival order
@@ -37,7 +37,7 @@ export type RunAction =
   | { type: "event"; event: RunEvent }
   | { type: "end"; state: TerminalState };
 
-export const initialRunState: RunState = {
+export const initialRunProgress: RunProgress = {
   lastSeq: 0,
   stage: null,
   seenStages: [],
@@ -47,13 +47,13 @@ export const initialRunState: RunState = {
   clarification: { status: "none", resolution: null },
 };
 
-function applyEvent(state: RunState, event: RunEvent): RunState {
+function applyEvent(state: RunProgress, event: RunEvent): RunProgress {
   if (event.seq <= state.lastSeq) return state; // already applied (a replay)
   const next = { ...state, lastSeq: event.seq };
   const p = event.payload;
   switch (event.type) {
     case "stage": {
-      if (!isRunState(p.state)) return next;
+      if (!isRunStage(p.state)) return next;
       const stage = p.state;
       const onRail = RAIL.includes(stage) && !next.seenStages.includes(stage);
       return {
@@ -78,7 +78,7 @@ function applyEvent(state: RunState, event: RunEvent): RunState {
   }
 }
 
-export function runReducer(state: RunState, action: RunAction): RunState {
+export function runReducer(state: RunProgress, action: RunAction): RunProgress {
   switch (action.type) {
     case "open":
       return state.terminal ? state : { ...state, connection: "CONNECTED" };
@@ -94,6 +94,6 @@ export function runReducer(state: RunState, action: RunAction): RunState {
 }
 
 /** The steps to draw: the rail, with INGESTING only if this Run reached it. */
-export function railStages(state: RunState): Stage[] {
+export function railStages(state: RunProgress): Stage[] {
   return RAIL.filter((s) => s !== "INGESTING" || state.seenStages.includes("INGESTING"));
 }

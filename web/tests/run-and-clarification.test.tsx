@@ -122,6 +122,13 @@ describe("Run progress", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Your Report is ready");
   });
 
+  it("draws a reached COMPLETE step as done, not in progress", () => {
+    render(<RunView runId="run_1" />);
+    source().stage(1, "FACT_CHECKING");
+    source().stage(2, "COMPLETE");
+    expect(screen.getByText("Report ready").closest("li")).toHaveClass("rail__step--done");
+  });
+
   it("on FAILED shows the reason and links to no Report", () => {
     render(<RunView runId="run_1" />);
     source().open();
@@ -141,7 +148,7 @@ describe("Run progress", () => {
     source().stage(2, "AWAITING_CLARIFICATION");
     source().stage(3, "RESUMING");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Resuming research…");
-    expect(railNames()).toEqual(["Planning", "Researching", "Extracting facts", "Weighing evidence",
+    expect(railNames()).toEqual(["Planning", "Researching", "Extracting entities", "Weighing evidence",
       "Writing the Report", "Fact-checking", "Report ready"]);
   });
 });

@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { estimateRuntime, type RuntimeEstimate as Estimate, type SourceToggles } from "@/lib/api";
+import { ApiError, estimateRuntime, type RuntimeEstimate as Estimate, type SourceToggles } from "@/lib/api";
 import { formatEstimate } from "@/lib/format";
 
 type State =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "ready"; estimate: Estimate }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string | null }; // a message only when the request was refused
 
 const DEBOUNCE_MS = 250;
 
@@ -33,7 +33,9 @@ export function RuntimeEstimate({ toggles, documentCount, enabled }: {
     const timer = setTimeout(() => {
       estimateRuntime(toggles, documentCount)
         .then((estimate) => live && setState({ kind: "ready", estimate }))
-        .catch((e: Error) => live && setState({ kind: "error", message: e.message }));
+        .catch((e: Error) => live && setState({
+          kind: "error", message: e instanceof ApiError && e.status === 422 ? e.message : null,
+        }));
     }, DEBOUNCE_MS);
     return () => {
       live = false;
@@ -50,7 +52,9 @@ export function RuntimeEstimate({ toggles, documentCount, enabled }: {
         <p className="estimate__value" data-testid="estimate-value">{formatEstimate(state.estimate.estimated_seconds)}</p>
       )}
       {state.kind === "error" && (
-        <p className="estimate__value estimate__value--muted">No estimate right now. You can still submit.</p>
+        <p className="estimate__value estimate__value--muted">
+          {state.message ? `No estimate: ${state.message}` : "No estimate right now. You can still submit."}
+        </p>
       )}
       <p className="estimate__note">
         A rough guide from your sources and documents, not a promise. Runs can take longer.

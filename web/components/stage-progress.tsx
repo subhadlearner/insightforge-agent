@@ -1,19 +1,19 @@
 "use client";
 
 import { STAGE_LABELS } from "@/lib/format";
-import { railStages, type RunState } from "@/lib/run-reducer";
+import { railStages, type RunProgress } from "@/lib/run-reducer";
 
 type StepStatus = "done" | "current" | "pending" | "stopped";
 
 /** The pipeline as an ordered rail. RESUMING and AWAITING_CLARIFICATION never become steps;
  *  FAILED is an outcome shown on the step where the Run stopped, not a step of its own. */
-export function StageProgress({ state }: { state: RunState }) {
+export function StageProgress({ state }: { state: RunProgress }) {
   const steps = railStages(state);
   const reached = new Set(state.seenStages);
   const latest = state.seenStages.at(-1);
 
   function status(step: (typeof steps)[number]): StepStatus {
-    if (state.terminal === "COMPLETE") return "done";
+    if (state.terminal === "COMPLETE" || (step === "COMPLETE" && reached.has(step))) return "done";
     if (step === latest) return state.terminal === "FAILED" ? "stopped" : "current";
     return reached.has(step) ? "done" : "pending";
   }

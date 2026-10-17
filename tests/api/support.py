@@ -78,6 +78,10 @@ class Gate:
     def open(self) -> None:
         self._open.set()
 
+    def close(self) -> None:
+        """Hold fetches again (the web e2e backend toggles this between tests)."""
+        self._open.clear()
+
 
 def settings(tmp_path, **kw) -> Settings:
     db = (tmp_path / "app.db").as_posix()

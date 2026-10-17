@@ -45,10 +45,12 @@ export function BriefForm() {
   const [submission, setSubmission] = useState<Submission>({ kind: "idle" });
   const submitting = submission.kind === "submitting";
 
-  // A different persona brings its own default sources.
+  // A different persona brings its own default sources; the same persona keeps the User's
+  // edits (keyed by ID, not by the identity of the persona object).
+  const defaults = current?.source_toggles;
   useEffect(() => {
-    setToggles(togglesFor(current?.source_toggles));
-  }, [current?.id, current?.source_toggles]);
+    setToggles(togglesFor(defaults));
+  }, [current?.id]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();

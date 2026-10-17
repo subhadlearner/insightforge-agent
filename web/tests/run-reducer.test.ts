@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initialRunState, railStages, runReducer, type RunAction, type RunState } from "@/lib/run-reducer";
+import { initialRunProgress, railStages, runReducer, type RunAction, type RunProgress } from "@/lib/run-reducer";
 import type { RunEvent } from "@/lib/run-events";
 
 let seq = 0;
@@ -10,13 +10,13 @@ function event(type: string, payload: Record<string, unknown> = {}, at?: number)
 }
 const stage = (state: string, at?: number) => event("stage", { state }, at);
 
-function run(...actions: RunAction[]): RunState {
-  return actions.reduce(runReducer, initialRunState);
+function run(...actions: RunAction[]): RunProgress {
+  return actions.reduce(runReducer, initialRunProgress);
 }
 
 describe("runReducer", () => {
   it("starts connecting, with no stage and no outcome", () => {
-    expect(initialRunState).toMatchObject({
+    expect(initialRunProgress).toMatchObject({
       connection: "CONNECTING", stage: null, terminal: null, lastSeq: 0, seenStages: [],
     });
   });
@@ -116,7 +116,7 @@ describe("railStages", () => {
   it("includes INGESTING only when the Run ingested documents", () => {
     expect(railStages(run(stage("PLANNING")))[0]).toBe("PLANNING");
     expect(railStages(run(stage("INGESTING")))[0]).toBe("INGESTING");
-    expect(railStages(initialRunState).at(-1)).toBe("COMPLETE");
-    expect(railStages(initialRunState)).not.toContain("RESUMING");
+    expect(railStages(initialRunProgress).at(-1)).toBe("COMPLETE");
+    expect(railStages(initialRunProgress)).not.toContain("RESUMING");
   });
 });

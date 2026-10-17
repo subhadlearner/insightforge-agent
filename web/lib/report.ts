@@ -10,6 +10,11 @@ import type { Citation, ReportOut } from "./api";
 
 export const UNVERIFIED_MARK = " [UNVERIFIED]";
 
+/** A Claim's position, as both the draft and the citation endpoint number it. */
+export function positionKey(section: number, claim: number): string {
+  return `${section}:${claim}`;
+}
+
 export interface ParsedClaim {
   key: string; // "section:claim", the citation endpoint's position
   number: number; // 1-based, in draft order, for the inline marker
@@ -108,7 +113,7 @@ export function parseReport(out: ReportOut): ParsedReport {
         const historical = claim.historical === true;
         number += 1;
         return {
-          key: `${si}:${ci}`, number, section: si, claim: ci, text: claimText,
+          key: positionKey(si, ci), number, section: si, claim: ci, text: claimText,
           statement: unverified ? claimText.slice(0, -UNVERIFIED_MARK.length) : claimText,
           unverified, evidenceId, historical,
           historicalDate: historical ? dates.get(evidenceId) ?? null : null,
@@ -116,7 +121,7 @@ export function parseReport(out: ReportOut): ParsedReport {
       }),
     };
   });
-  const summary = verified.summary as Json | undefined;
+  const tally = verified.summary as Json | undefined; // the fact-check counts
   return {
     id: out.id,
     runId: out.run_id,
@@ -126,9 +131,9 @@ export function parseReport(out: ReportOut): ParsedReport {
     summary: typeof draft.summary === "string" ? draft.summary : "",
     sections,
     gaps: Array.isArray(draft.gaps) ? draft.gaps.filter((g): g is string => typeof g === "string") : [],
-    factCheck: summary && typeof summary === "object"
-      ? { sampled: count(summary.sampled), verified: count(summary.verified),
-          unverified: count(summary.unverified), unchecked: count(summary.unchecked) }
+    factCheck: tally && typeof tally === "object"
+      ? { sampled: count(tally.sampled), verified: count(tally.verified),
+          unverified: count(tally.unverified), unchecked: count(tally.unchecked) }
       : null,
   };
 }
@@ -136,7 +141,7 @@ export function parseReport(out: ReportOut): ParsedReport {
 /** Each Claim's citation, by the Claim's position. A citation is attached only when its
  *  position and evidence_id both match the Claim; nothing is borrowed from another Claim. */
 export function attachCitations(report: ParsedReport, citations: Citation[]): Map<string, Citation> {
-  const byPosition = new Map(citations.map((c) => [`${c.section}:${c.claim}`, c]));
+  const byPosition = new Map(citations.map((c) => [positionKey(c.section, c.claim), c]));
   const out = new Map<string, Citation>();
   for (const claim of report.sections.flatMap((s) => s.claims)) {
     const c = byPosition.get(claim.key);

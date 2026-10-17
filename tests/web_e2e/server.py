@@ -40,13 +40,8 @@ class Clock:
         return datetime.now(UTC) + self.offset
 
 
-class ClosableGate(Gate):
-    def close(self) -> None:
-        self._open.clear()
-
-
 def build(tmp: Path, sse_seconds: float):
-    gate, clock = ClosableGate(fakes.FixtureSearch()), Clock()
+    gate, clock = Gate(fakes.FixtureSearch()), Clock()
     runtime = Runtime.build(settings(tmp, sse_max_stream_seconds=sse_seconds),
                             scripted_deps(gate, clock))
     app = create_app(runtime)

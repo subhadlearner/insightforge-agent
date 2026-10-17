@@ -7,7 +7,7 @@
 // answer means it was already resolved (another answer, or the timeout); the card re-reads
 // the clarification and shows what happened, and never sends the answer again.
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { answerClarification, ApiError, getClarification, type ClarificationOut } from "@/lib/api";
 import { formatCountdown } from "@/lib/format";
 import type { ClarificationProgress } from "@/lib/run-reducer";
@@ -18,6 +18,8 @@ type View =
   | { kind: "open"; clarification: ClarificationOut };
 
 type Outcome = "sent" | "late" | null;
+
+const RECHECK_AFTER_DEADLINE_MS = 10_000;
 
 export function ClarificationCard({ runId, progress, ended = false }: {
   runId: string;
@@ -31,11 +33,19 @@ export function ClarificationCard({ runId, progress, ended = false }: {
   const [answerError, setAnswerError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  // Reads can overlap (mount, the stream, an answer, the deadline); only the latest counts,
+  // so an older "unresolved" answer can never replace a newer resolution.
+  const latestLoad = useRef(0);
+  useEffect(() => () => {
+    latestLoad.current = Number.POSITIVE_INFINITY; // unmounted: ignore every pending read
+  }, []);
   const load = useCallback(async () => {
+    const id = ++latestLoad.current;
     try {
-      setView({ kind: "open", clarification: await getClarification(runId) });
+      const clarification = await getClarification(runId);
+      if (id === latestLoad.current) setView({ kind: "open", clarification });
     } catch (e) {
-      setView({ kind: "error", message: (e as Error).message });
+      if (id === latestLoad.current) setView({ kind: "error", message: (e as Error).message });
     }
   }, [runId]);
 
@@ -55,9 +65,13 @@ export function ClarificationCard({ runId, progress, ended = false }: {
     return () => clearInterval(timer);
   }, [clarification, resolution]);
 
-  // At the visual deadline, ask the server what happened instead of assuming.
+  // At the visual deadline, ask the server what happened instead of assuming, and keep asking
+  // now and then until it says (the stream usually reports it first).
   useEffect(() => {
-    if (deadlinePassed) void load();
+    if (!deadlinePassed) return;
+    void load();
+    const timer = setInterval(() => void load(), RECHECK_AFTER_DEADLINE_MS);
+    return () => clearInterval(timer);
   }, [deadlinePassed, load]);
 
   async function submit(e: FormEvent) {

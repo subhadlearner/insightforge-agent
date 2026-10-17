@@ -8,7 +8,7 @@
 // - An unfinished stream is closed by the server after a bounded lifetime or at shutdown.
 //   EventSource reconnects by itself and sends Last-Event-ID, so nothing is lost or repeated.
 
-export type RunState =
+export type RunStage =
   | "INGESTING"
   | "PLANNING"
   | "AWAITING_CLARIFICATION"
@@ -21,7 +21,7 @@ export type RunState =
   | "COMPLETE"
   | "FAILED";
 
-export const RUN_STATES: readonly RunState[] = [
+export const RUN_STAGES: readonly RunStage[] = [
   "INGESTING", "PLANNING", "AWAITING_CLARIFICATION", "RESUMING", "RESEARCHING", "EXTRACTING",
   "SYNTHESIZING", "WRITING", "FACT_CHECKING", "COMPLETE", "FAILED",
 ];
@@ -40,8 +40,8 @@ export interface RunEnd {
   state: TerminalState;
 }
 
-export function isRunState(value: unknown): value is RunState {
-  return typeof value === "string" && (RUN_STATES as readonly string[]).includes(value);
+export function isRunStage(value: unknown): value is RunStage {
+  return typeof value === "string" && (RUN_STAGES as readonly string[]).includes(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

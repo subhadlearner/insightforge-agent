@@ -163,3 +163,13 @@ describe("Brief form", () => {
     expect(screen.getByLabelText("Brief")).toHaveValue("BYD");
   });
 });
+
+describe("estimate refusal", () => {
+  it("shows why the estimate was refused (422) and keeps the form usable", async () => {
+    m.estimateRuntime.mockRejectedValue(new api.ApiError(422, "source_toggles.intranet: Input should be 'web', 'documents' or 'memory'"));
+    renderDesk();
+    expect(await screen.findByText(/No estimate: source_toggles.intranet/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Brief"), "BYD");
+    expect(screen.getByRole("button", { name: "Start research" })).toBeEnabled();
+  });
+});

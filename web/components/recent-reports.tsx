@@ -13,7 +13,10 @@ export function RecentReports() {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!current) return;
+    if (!current) {
+      setReports(null);
+      return;
+    }
     let live = true;
     setReports(null);
     setFailed(false);

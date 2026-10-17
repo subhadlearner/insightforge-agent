@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
-import { addPdfs, formatBytes, MAX_DOCUMENTS, type Rejected } from "@/lib/files";
+import { addPdfs, formatBytes, MAX_DOCUMENT_MB, MAX_DOCUMENTS, type Rejected } from "@/lib/files";
 
 export function PdfPicker({ files, onChange, disabled }: {
   files: File[];
@@ -24,7 +24,7 @@ export function PdfPicker({ files, onChange, disabled }: {
     <div className="field documents">
       <div className="documents__head">
         <label htmlFor={inputId} className="field__label">Documents</label>
-        <span className="field__aside">{files.length} of {MAX_DOCUMENTS} PDFs, up to 20 MB each</span>
+        <span className="field__aside">{files.length} of {MAX_DOCUMENTS} PDFs, up to {MAX_DOCUMENT_MB} MB each</span>
       </div>
       {files.length > 0 && (
         <ul className="documents__list">
