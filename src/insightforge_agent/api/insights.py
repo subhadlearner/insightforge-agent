@@ -8,7 +8,36 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from insightforge_agent.domain.alerts import Alert, DiffRecord
+from insightforge_agent.domain.diff import DiffEntry
 from insightforge_agent.domain.errors import NotFoundError
+
+
+class DiffEntryOut(BaseModel):
+    entry: DiffEntry
+    material: bool
+
+
+class DiffRecordOut(BaseModel):
+    owner_id: str
+    watchlist_item_id: str
+    run_id: str
+    report_id: str | None
+    status: str
+    attempts: int
+    error: str
+    entries: list[DiffEntryOut]
+    skipped: list[dict]
+    intervening_failed: list[dict]
+    alert_id: str | None
+    updated_at: object
+
+
+def diff_out(record: DiffRecord) -> DiffRecordOut:
+    data = record.model_dump()
+    return DiffRecordOut(
+        **{k: v for k, v in data.items() if k != "entries"},
+        entries=[DiffEntryOut(entry=e, material=e.material) for e in record.entries],
+    )
 
 
 class AlertReadPatch(BaseModel):
@@ -24,18 +53,18 @@ def insights_router(repos, current_user_id) -> APIRouter:
         except NotFoundError:
             raise HTTPException(404, "watchlist item not found") from None
 
-    @router.get("/watchlist/{item_id}/diffs", response_model=list[DiffRecord])
+    @router.get("/watchlist/{item_id}/diffs", response_model=list[DiffRecordOut])
     def list_diffs(item_id: str, user_id: str = Depends(current_user_id)):
         owned_item(user_id, item_id)
-        return repos.diffs.diffs(user_id, item_id)
+        return [diff_out(record) for record in repos.diffs.diffs(user_id, item_id)]
 
-    @router.get("/watchlist/{item_id}/diffs/{run_id}", response_model=DiffRecord)
+    @router.get("/watchlist/{item_id}/diffs/{run_id}", response_model=DiffRecordOut)
     def get_diff(item_id: str, run_id: str, user_id: str = Depends(current_user_id)):
         owned_item(user_id, item_id)
         record = repos.diffs.diff(user_id, item_id, run_id)
         if record is None:
             raise HTTPException(404, "diff not found")
-        return record
+        return diff_out(record)
 
     @router.get("/alerts", response_model=list[Alert])
     def list_alerts(
