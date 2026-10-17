@@ -98,6 +98,21 @@ describe("T15 Watchlist and Diff UI", () => {
   });
 });
 
+describe("T15 skipped Claims", () => {
+  it("shows skipped Claims as neither Findings nor changes", async () => {
+    m.listDiffs.mockResolvedValue([{
+      owner_id: "alice", watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
+      status: "succeeded", attempts: 1, error: "", alert_id: null,
+      updated_at: "2030-03-01T10:00:00Z", entries: [], intervening_failed: [],
+      skipped: [{ evidence_id: "ev_missing", claim: "Claim with no normalized object", reason: "missing normalized object" }],
+    }]);
+    render(<WatchlistDiffView itemId="wl_1" />);
+    expect(await screen.findByText("Claims not normalized into Findings")).toBeInTheDocument();
+    expect(screen.getByText(/Claim with no normalized object/)).toHaveTextContent("Evidence ev_missing");
+    expect(screen.getByText("These Claims are not Findings and are not changes.")).toBeInTheDocument();
+  });
+});
+
 describe("T15 Alerts", () => {
   it("links current and previous establishing Reports and marks read", async () => {
     render(<AlertsView />);
