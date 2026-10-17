@@ -38,8 +38,8 @@ export function AlertsView() {
               </li>
             ))}
           </ul>
-          {alert.failed_diffs.length > 0 && (
-            <p>There were {alert.failed_diffs.length} intervening failed Diffs; this Alert reflects the net change from the still-valid Baseline.</p>
+          {(alert.failed_diffs ?? []).length > 0 && (
+            <p>There were {(alert.failed_diffs ?? []).length} intervening failed Diffs; this Alert reflects the net change from the still-valid Baseline.</p>
           )}
           <button className="link-button" type="button" onClick={() => toggle(alert)}>
             Mark {alert.read ? "unread" : "read"}
