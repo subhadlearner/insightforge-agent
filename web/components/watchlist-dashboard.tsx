@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { listWatchlists, type WatchlistDashboard as Dashboard } from "@/lib/api";
+import { findingLabel } from "@/lib/finding-label";
 
 export function WatchlistDashboard() {
   const [items, setItems] = useState<Dashboard[] | null>(null);
@@ -50,7 +51,7 @@ export function WatchlistDashboard() {
               <h3>Unconfirmed Findings</h3>
               <ul>{d.unconfirmed_findings.map((x) => (
                 <li key={x.finding.key}>
-                  {x.finding.subject} {x.finding.predicate}: {x.finding.object}
+                  {findingLabel(x.finding)}
                   {" "}({x.not_reconfirmed} runs without reconfirmation)
                 </li>
               ))}</ul>
