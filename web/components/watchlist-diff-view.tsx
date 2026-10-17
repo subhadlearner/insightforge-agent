@@ -23,6 +23,19 @@ function FindingMeta({ finding }: { finding: Finding | null | undefined }) {
         Report
       </Link>
       {" · "}Evidence {finding.provenance.evidence_id}
+      <details>
+        <summary>Provenance</summary>
+        <p>Run {finding.provenance.run_id}</p>
+        <p>Claim: {finding.provenance.claim}</p>
+        {finding.provenance.statement !== finding.provenance.claim && (
+          <p>Evidence statement: {finding.provenance.statement}</p>
+        )}
+        <p>Sources: {finding.provenance.source_ids.join(", ") || "none"}</p>
+        <p>
+          Observations: {Object.entries(finding.provenance.observation_dates)
+            .map(([id, date]) => `${id} at ${date}`).join("; ") || "none"}
+        </p>
+      </details>
     </div>
   );
 }
