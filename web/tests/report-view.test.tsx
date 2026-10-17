@@ -34,6 +34,7 @@ describe("Report viewer", () => {
     render(<ReportView reportId="rep_1" />);
     await screen.findByRole("button", { name: "View source for claim 3" });
     const appendix = document.querySelector(".report__print-sources") as HTMLElement;
+    expect(appendix).toHaveAttribute("data-print-sources-state", "ready");
     expect(appendix).toBeInTheDocument();
     const entries = within(appendix).getAllByRole("listitem");
     expect(entries).toHaveLength(3);
