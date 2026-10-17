@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getWatchlist, listDiffs, type DiffRecord, type Finding, type WatchlistDashboard } from "@/lib/api";
+import { findingLabel } from "@/lib/finding-label";
 
 function findingText(f: Finding | null | undefined) {
-  if (!f) return "Not present in this Run";
-  return `${f.subject} · ${f.predicate} · ${f.object}${f.scope ? ` · ${f.scope}` : ""}`;
+  return f ? findingLabel(f) : "no corresponding Finding was produced";
 }
 
 function FindingMeta({ finding, label }: { finding: Finding | null | undefined; label: string }) {
@@ -90,10 +90,10 @@ export function WatchlistDiffView({ itemId }: { itemId: string }) {
               {diff.entries.map(({ entry, material }, index) => (
                 <section className={`diff-entry ${material ? "diff-entry--material" : ""}`} key={entry.key + index}>
                   <h3>{entry.outcome.replaceAll("_", " ")}{material ? " · material change" : ""}</h3>
-                  {entry.previous && <p><strong>Previous:</strong> {findingText(entry.previous)}</p>}
-                  <p><strong>Current:</strong> {findingText(entry.finding)}</p>
-                  <>{entry.previous && <FindingMeta finding={entry.previous} label="Previous" />}
-                  {entry.finding && <FindingMeta finding={entry.finding} label="Current" />}</>
+                  {entry.previous && <p><strong>Previously established:</strong> {findingText(entry.previous)}</p>}
+                  <p><strong>This Run:</strong> {findingText(entry.finding)}</p>
+                  {entry.previous && <FindingMeta finding={entry.previous} label="Previously established" />}
+                  {entry.finding && <FindingMeta finding={entry.finding} label="This Run" />}
                   {entry.unconfirmed && <p><strong>Unconfirmed:</strong> absence is not deletion; the established Finding remains.</p>}
                   {entry.reason && <p>{entry.reason}</p>}
                 </section>
