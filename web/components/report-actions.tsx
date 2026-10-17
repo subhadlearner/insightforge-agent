@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { createShare, downloadReport, revokeShare, type ShareCreated } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { createShare, downloadReport, listShares, revokeShare, type ShareCreated } from "@/lib/api";
 
-type Busy = "md" | "pdf" | "share" | "revoke" | null;
+type Busy = "md" | "pdf" | "share" | string | null;
 
 function save(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -18,8 +18,23 @@ function save(blob: Blob, filename: string) {
 
 export function ReportActions({ reportId }: { reportId: string }) {
   const [busy, setBusy] = useState<Busy>(null);
-  const [share, setShare] = useState<ShareCreated | null>(null);
+  const [shares, setShares] = useState<ShareCreated[]>([]);
+  const [loadingShares, setLoadingShares] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingShares(true);
+    setShares([]);
+    listShares(reportId).then((found) => {
+      if (active) setShares(found);
+    }).catch((e: Error) => {
+      if (active) setMessage(e.message);
+    }).finally(() => {
+      if (active) setLoadingShares(false);
+    });
+    return () => { active = false; };
+  }, [reportId]);
 
   async function download(format: "md" | "pdf") {
     setBusy(format);
@@ -38,8 +53,8 @@ export function ReportActions({ reportId }: { reportId: string }) {
     setBusy("share");
     setMessage(null);
     try {
-      const next = await createShare(reportId);
-      setShare(next);
+      const created = await createShare(reportId);
+      setShares((prev) => [...prev, created]);
       setMessage("Public share link created.");
     } catch (e) {
       setMessage((e as Error).message);
@@ -48,13 +63,12 @@ export function ReportActions({ reportId }: { reportId: string }) {
     }
   }
 
-  async function revoke() {
-    if (!share) return;
-    setBusy("revoke");
+  async function revoke(shareId: string) {
+    setBusy(shareId);
     setMessage(null);
     try {
-      await revokeShare(reportId, share.share_id);
-      setShare(null);
+      await revokeShare(reportId, shareId);
+      setShares((prev) => prev.filter((share) => share.share_id !== shareId));
       setMessage("Share link revoked. It can no longer be opened.");
     } catch (e) {
       setMessage((e as Error).message);
@@ -62,10 +76,6 @@ export function ReportActions({ reportId }: { reportId: string }) {
       setBusy(null);
     }
   }
-
-  const publicUrl = share && typeof window !== "undefined"
-    ? `${window.location.origin}${share.path}`
-    : null;
 
   return (
     <section className="report-actions" aria-label="Report actions">
@@ -78,21 +88,24 @@ export function ReportActions({ reportId }: { reportId: string }) {
           onClick={() => download("pdf")}>
           {busy === "pdf" ? "Rendering PDF…" : "Export PDF"}
         </button>
-        {!share ? (
-          <button className="button" type="button" disabled={busy !== null} onClick={create}>
-            {busy === "share" ? "Creating link…" : "Create share link"}
-          </button>
-        ) : (
-          <button className="button" type="button" disabled={busy !== null} onClick={revoke}>
-            {busy === "revoke" ? "Revoking…" : "Revoke share link"}
-          </button>
-        )}
+        <button className="button" type="button" disabled={busy !== null || loadingShares} onClick={create}>
+          {busy === "share" ? "Creating link…" : "Create share link"}
+        </button>
       </div>
-      {publicUrl && (
-        <p className="report-actions__share">
-          Public link: <a href={share!.path}>{publicUrl}</a>
-          {" "}· expires {new Date(share!.expires_at).toLocaleDateString()}
-        </p>
+      {loadingShares && <p className="report-actions__status">Loading active share links…</p>}
+      {shares.length > 0 && (
+        <ul aria-label="Active share links">
+          {shares.map((share) => (
+            <li key={share.share_id} className="report-actions__share">
+              Public link: <a href={share.path}>{typeof window !== "undefined" ? window.location.origin : ""}{share.path}</a>
+              {" "}· expires {new Date(share.expires_at).toLocaleDateString()}{" "}
+              <button className="link-button" type="button" disabled={busy !== null}
+                onClick={() => revoke(share.share_id)}>
+                {busy === share.share_id ? "Revoking…" : "Revoke share link"}
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
       {message && <p className="report-actions__status" aria-live="polite">{message}</p>}
     </section>
