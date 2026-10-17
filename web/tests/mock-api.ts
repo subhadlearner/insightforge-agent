@@ -1,0 +1,13 @@
+// The lib/api functions component tests replace (the real ApiError is kept). Each test file
+// calls `vi.mock("@/lib/api", mockApi)`.
+export async function mockApi(importOriginal: () => Promise<unknown>) {
+  const { vi } = await import("vitest");
+  const real = (await importOriginal()) as typeof import("@/lib/api");
+  return {
+    ...real,
+    getPersonas: vi.fn(), getSession: vi.fn(), selectPersona: vi.fn(),
+    estimateRuntime: vi.fn(), submitRun: vi.fn(),
+    getClarification: vi.fn(), answerClarification: vi.fn(),
+    listReports: vi.fn(), getReport: vi.fn(), getCitations: vi.fn(),
+  };
+}
