@@ -54,7 +54,7 @@ export interface DiffRecord {
 export interface AlertChange {
   outcome: "added" | "changed" | "no_longer_true"; subject: string; predicate: string;
   scope: string; object: string; polarity: "affirmed" | "negated"; as_of_period: string;
-  derived: boolean; when: string; report_id: string; previous_object?: string | null;
+  derived: boolean; when: string; report_id: string; evidence_id: string; previous_object?: string | null;
   previous_report_id?: string | null;
 }
 export interface Alert {
