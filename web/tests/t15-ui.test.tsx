@@ -107,6 +107,29 @@ describe("T15 Alerts", () => {
   });
 });
 
+describe("T15 polarity-aware Alerts", () => {
+  it("shows no_longer_true as affirmed before and negated in this Run", async () => {
+    m.listAlerts.mockResolvedValue([{
+      id: "al_negated", owner_id: "alice", watchlist_item_id: "wl_1",
+      run_id: "run_2", report_id: "rep_2", brief: "Tesla offers Autopilot",
+      created_at: "2030-03-01T10:00:00Z", read: false, failed_diffs: [],
+      changes: [{
+        outcome: "no_longer_true", subject: "Tesla", predicate: "offers",
+        scope: "China", object: "Autopilot", polarity: "negated",
+        previous_object: "Autopilot", previous_polarity: "affirmed",
+        as_of_period: "2030-03-01", derived: true,
+        when: "Change detected on 2030-03-01",
+        report_id: "rep_2", previous_report_id: "rep_1", evidence_id: "ev_2",
+      }],
+    }]);
+    render(<AlertsView />);
+    expect(await screen.findByText("No longer true")).toBeInTheDocument();
+    expect(screen.getByText(/Previously established — Affirmed: Tesla/)).toBeInTheDocument();
+    expect(screen.getByText(/This Run — Negated: Tesla/)).toBeInTheDocument();
+    expect(screen.getByText("Change detected on 2030-03-01")).toBeInTheDocument();
+  });
+});
+
 describe("T15 Report actions", () => {
   it("creates and revokes one public link without retrying mutations", async () => {
     m.createShare.mockResolvedValue({
