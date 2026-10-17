@@ -21,6 +21,7 @@ export type Run = Schemas["Run"];
 
 export interface FindingProvenance {
   run_id: string; report_id: string; evidence_id: string; claim: string; statement: string;
+  source_ids: string[]; observation_dates: Record<string, string>;
 }
 export interface Finding {
   key: string; subject: string; predicate: string; object: string; polarity: "affirmed" | "negated";
