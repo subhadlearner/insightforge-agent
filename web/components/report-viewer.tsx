@@ -136,11 +136,11 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
         </section>
       )}
 
-      {citations.kind === "ready" && (
-        <section className="report__print-sources" aria-label="Print sources">
+      <section className="report__print-sources" aria-label="Print sources"
+        data-print-sources-state={citations.kind}>
           <h2>Sources</h2>
           {citations.kind === "failed" ? (
-            <p>Sources unavailable because this Report\'s stored citation provenance could not be resolved.</p>
+            <p>Sources unavailable because this Report's stored citation provenance could not be resolved.</p>
           ) : citations.kind === "loading" ? (
             <p>Loading Sources…</p>
           ) : <ol>
