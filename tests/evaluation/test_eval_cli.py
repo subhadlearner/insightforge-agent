@@ -4,18 +4,24 @@ report files the command wrote, checked against the Runs and Reports it persiste
 
 The provider names label scripted runs here; no provider is called."""
 
+import copy
+import itertools
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from insightforge_agent.domain.contracts import ReportDraft
 from insightforge_agent.domain.evidence import Thresholds
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.evaluation.cli import main
 from insightforge_agent.evaluation.judge import CRITERIA, RUBRIC_VERSION
 from insightforge_agent.evaluation.library import load_library
+from insightforge_agent.pipeline.citations import report_citations
+from insightforge_agent.stores.source_store import SourceStore
 from insightforge_agent.stores.sqlite import SqliteRepos
 from tests.evaluation.world import World
 from tests.scripted import ScriptedChat
@@ -194,6 +200,144 @@ def test_each_samples_brief_and_expected_structure_reach_the_judge(full_run):
             assert all(item in prompt for item in expected.must_cite), sample.id
 
 
+# --- domain coverage --------------------------------------------------------------------------
+# The briefs are about different industries, so their offline Runs must research their own
+# subject: a cloud Brief that completes on EV pages proves nothing. These checks read what the
+# production pipeline persisted (the plan, Sources, extracted facts, the Run summary, the
+# Evidence bundle and the citations `report_citations` resolves). The contaminant is the
+# EV material other tests use, read from its own fixture. Scripted models copy Passage
+# sentences into Claims, so nothing here shows a model understood its sources: that is T18.
+
+EV_FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "search" / "ev_market.json")
+                        .read_text(encoding="utf-8"))
+EV_URLS = set(EV_FIXTURE["pages"])
+EV_TERMS = ("BYD", "Tesla", "electric vehicle", "EV ", "LFP", "battery", "Orrin")
+DOMAIN_TERMS = {  # what each Brief is about, in its own words
+    "competitive-landscape-cloud": ("Amazon", "Azure", "Google Cloud", "Microsoft", "Alphabet",
+                                    "cloud"),
+    "regulatory-impact-semiconductors": ("export", "Nvidia", "AMD", "chip"),
+    "market-sizing-solar": ("solar",),
+    "document-annual-report": ("Northwind", "NW-200", "medical devices", "Cardiology"),
+}
+_OPENERS = {"The", "In", "A", "An", "Its", "This", "New"}
+
+
+def names_in(text: str) -> set[str]:
+    return set(re.findall(r"\b[A-Z][A-Za-z0-9-]+", text)) - _OPENERS
+
+
+def mentions(text: str, terms) -> bool:
+    return any(t.casefold() in text.casefold() for t in terms)
+
+
+def domain_problems(repos, sample: dict, report) -> list[str]:
+    """Where a sample's persisted Run strays from its own subject, or cites a Passage that does
+    not state what its Claim attributes."""
+    owner, run_id, sid = sample["owner_id"], sample["run_id"], sample["sample_id"]
+    terms, problems = DOMAIN_TERMS[sid], []
+    brief = next(x for x in load_library(LIBRARY, ROOT) if x.id == sid)
+    expected = {s.heading for s in brief.expected_report_structure.sections}
+    documents = {Path(d).name for d in brief.documents}
+    for record in repos.subtasks.list(owner, run_id):
+        query = record.subtask.query
+        if not mentions(query, terms) or mentions(query, EV_TERMS):
+            problems.append(f"Sub-task query off subject: {query!r}")
+    headings = [s["heading"] for s in report.body["evidence"]["sections"]]
+    if len(set(headings) & expected) < 3 or not set(headings) <= expected:
+        problems.append(f"Evidence headings {headings} do not cover the expected Aspects")
+    sources = {s.id: s for s in repos.sources.list_for_run(owner, run_id)}
+    for s in sources.values():
+        if s.locator in EV_URLS or mentions(s.title, EV_TERMS):
+            problems.append(f"another industry's Source was ingested: {s.locator}")
+    for fact in repos.entities.list_for_run(owner, run_id):
+        if mentions(" ".join(fact.entities), EV_TERMS):
+            problems.append(f"another industry's entity was extracted: {fact.entities}")
+    summary = repos.summaries.get_for_run(owner, run_id)
+    if mentions(" ".join(summary.key_entities), EV_TERMS):
+        problems.append(f"the Run summary names another industry: {summary.key_entities}")
+    store = SourceStore(repos.sources, repos.observations, repos.passages)
+    for c in report_citations(store, owner, report):
+        claim = ReportDraft.model_validate(report.body["draft"]).sections[c.section] \
+            .claims[c.claim].text
+        where = f"claim {c.section}.{c.claim}"
+        if c.source_id not in sources:
+            problems.append(f"{where} cites a Source this Run did not fetch")
+        if mentions(claim, EV_TERMS) or mentions(c.passage_text, EV_TERMS):
+            problems.append(f"{where} rests on another industry: {claim!r}")
+        source = sources.get(c.source_id)
+        if source is not None and source.kind == "pdf":
+            if source.title not in documents:
+                problems.append(f"{where} cites a document this brief did not upload")
+        elif not mentions(c.passage_text, terms):
+            problems.append(f"{where} cites a Passage off subject: {c.passage_text!r}")
+        unstated = names_in(claim) - names_in(c.passage_text)
+        if unstated:
+            problems.append(f"{where} attributes {sorted(unstated)} to a Passage that does "
+                            f"not name them")
+    return problems
+
+
+def stored_report(result: dict, sid: str):
+    s = samples(result)[sid]
+    repos = stored(result)
+    return repos, s, repos.reports.get_for_run(s["owner_id"], s["run_id"])
+
+
+@pytest.mark.parametrize("sid", sorted(DOMAIN_TERMS))
+def test_each_non_ev_brief_researches_and_cites_its_own_subject(full_run, sid):
+    _, report, _, _ = full_run
+    repos, s, stored_ = stored_report(provider(report, "anthropic"), sid)
+    assert s["status"] == "complete"
+    assert domain_problems(repos, s, stored_) == []
+    assert s["citations"]["claims"] >= 3 and s["citations"]["accuracy"] == 1.0
+    assert s["fact_check"]["checked"] >= 1
+
+
+def test_every_brief_cites_only_its_own_runs_sources_and_no_two_briefs_share_one(full_run):
+    _, report, _, _ = full_run
+    result = provider(report, "anthropic")
+    repos = stored(result)
+    store = SourceStore(repos.sources, repos.observations, repos.passages)
+    cited: dict[str, set[str]] = {}
+    for s in result["samples"]:
+        body = repos.reports.get_for_run(s["owner_id"], s["run_id"])
+        cited[s["sample_id"]] = {store.source_for_passage(s["owner_id"], c.passage).locator
+                                 for c in report_citations(store, s["owner_id"], body)}
+    for a, b in itertools.combinations(cited, 2):
+        assert not cited[a] & cited[b], (a, b)
+    assert cited["memory-prior-report"] & EV_URLS  # the EV brief does research EV pages
+
+
+def test_a_brief_whose_search_returns_another_industrys_pages_completes_but_fails_coverage(
+        tmp_path):
+    """Completion alone would pass this Run; the domain checks do not."""
+    world = World(substitute={"AWS Azure Google Cloud revenue growth 2025":
+                              "BYD battery electric vehicle sales 2025"})
+    code, report, _ = evaluate(tmp_path, "--provider", "gemini", "--judge-provider", "none",
+                               "--brief", "competitive-landscape-cloud", world=world)
+    repos, s, stored_ = stored_report(provider(report, "gemini"), "competitive-landscape-cloud")
+    assert code == 0 and s["status"] == "complete"
+    problems = domain_problems(repos, s, stored_)
+    assert any("another industry's Source" in p for p in problems)
+    assert any("rests on another industry" in p for p in problems)
+
+
+def test_a_claim_cited_to_another_companys_passage_fails_attribution(full_run):
+    """Swap the primary Passages of two Evidence items about different companies: every link
+    still resolves, but each Claim now names a company its cited Passage does not."""
+    _, report, _, _ = full_run
+    repos, s, stored_ = stored_report(provider(report, "anthropic"),
+                                      "competitive-landscape-cloud")
+    body = copy.deepcopy(stored_.body)
+    items = [i for sec in body["evidence"]["sections"] for i in sec["items"]]
+    aws = next(i for i in items if i["statement"].startswith("Amazon Web Services revenue"))
+    azure = next(i for i in items if i["statement"].startswith("Microsoft Azure revenue"))
+    aws["primary"], azure["primary"] = azure["primary"], aws["primary"]
+    problems = domain_problems(repos, s, stored_.model_copy(update={"body": body}))
+    assert any("attributes" in p and "Amazon" in p for p in problems)
+    assert any("attributes" in p and "Microsoft" in p for p in problems)
+
+
 def test_the_document_brief_cites_and_checks_the_uploaded_pdf(full_run):
     _, report, _, _ = full_run
     s = samples(provider(report, "anthropic"))["document-annual-report"]
@@ -233,8 +377,8 @@ def test_provider_and_judge_identity_are_recorded_from_what_ran(full_run):
                                            "light": "claude-haiku-5-5"}
     # The models that actually ran here are scripted, and the report says so.
     assert set(result["runtime_models"].values()) == {"ScriptedChat"}
-    assert result["runtime_services"] == {"embedder": "HashingEmbedder", "search": "DriftingPages",
-                                          "fetcher": "DriftingPages"}
+    assert result["runtime_services"] == {"embedder": "HashingEmbedder", "search": "RecordedPages",
+                                          "fetcher": "RecordedPages"}
     assert result["conditions"]["configured_embedding_model"] == "BAAI/bge-small-en-v1.5"
     assert (result["conditions"]["fact_check_rate"], result["conditions"]["clarification"]) == (
         0.2, "off")
