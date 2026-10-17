@@ -4,7 +4,7 @@ import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 from urllib.parse import quote
 
 import jwt
@@ -144,6 +144,13 @@ class PublicWebSource(BaseModel):
     credibility_score: float | None = None
 
 
+class PublicFactCheck(BaseModel):
+    sampled: int
+    verified: int
+    unverified: int
+    unchecked: int
+
+
 class PublicReport(BaseModel):
     id: str
     created_at: datetime
@@ -152,7 +159,7 @@ class PublicReport(BaseModel):
     summary: str
     sections: list[PublicSection]
     gaps: list[str]
-    fact_check: dict[str, Any]
+    fact_check: PublicFactCheck
     web_sources: list[PublicWebSource]
 
 
@@ -249,7 +256,12 @@ def public_projection(report: Report, store: SourceStore, owner_id: str) -> Publ
             for s in draft.sections
         ],
         gaps=draft.gaps,
-        fact_check=dict(verified.summary),
+        fact_check=PublicFactCheck(
+            sampled=int(verified.summary.get("sampled", 0)),
+            verified=int(verified.summary.get("verified", 0)),
+            unverified=int(verified.summary.get("unverified", 0)),
+            unchecked=int(verified.summary.get("unchecked", 0)),
+        ),
         web_sources=[
             PublicWebSource(
                 id=s.id, title=s.title, url=s.locator,
