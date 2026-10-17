@@ -4,12 +4,15 @@ The API does not recompute Findings, materiality, temporal ordering or Alert wor
 semantics belong to T12; these routes only expose the durable records to the UI.
 """
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from insightforge_agent.domain.alerts import Alert, DiffRecord
+from insightforge_agent.domain.alerts import Alert, DiffRecord, DiffStatus, FailedDiff
 from insightforge_agent.domain.diff import DiffEntry
 from insightforge_agent.domain.errors import NotFoundError
+from insightforge_agent.domain.findings import Skipped
 
 
 class DiffEntryOut(BaseModel):
@@ -22,14 +25,14 @@ class DiffRecordOut(BaseModel):
     watchlist_item_id: str
     run_id: str
     report_id: str | None
-    status: str
+    status: DiffStatus
     attempts: int
     error: str
     entries: list[DiffEntryOut]
-    skipped: list[dict]
-    intervening_failed: list[dict]
+    skipped: list[Skipped]
+    intervening_failed: list[FailedDiff]
     alert_id: str | None
-    updated_at: object
+    updated_at: datetime
 
 
 def diff_out(record: DiffRecord) -> DiffRecordOut:
