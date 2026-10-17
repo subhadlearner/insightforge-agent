@@ -42,7 +42,7 @@ const dashboard: api.WatchlistDashboard = {
     stage: "RESEARCHING", reason: "provider unavailable",
     error_codes: ["all_search_providers_failed"], backfilled: false,
   }],
-  unconfirmed_findings: [{ finding, not_reconfirmed: 3, unconfirmed: true }],
+  unconfirmed_findings: [{ finding: { ...finding, key: "unconfirmed-feature", predicate: "feature", object: "Autopilot", polarity: "negated" }, not_reconfirmed: 3, unconfirmed: true }],
   baseline_state: "established",
 };
 
@@ -80,6 +80,7 @@ describe("T15 Watchlist and Diff UI", () => {
     expect(await screen.findByText("3 of 4 runs started", { exact: false })).toBeInTheDocument();
     expect(screen.getByText(/RESEARCHING: provider unavailable/)).toBeInTheDocument();
     expect(screen.getByText(/3 runs without reconfirmation/)).toBeInTheDocument();
+    expect(screen.getByText(/Negated: Model 3.*Autopilot/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View Diff history" })).toHaveAttribute("href", "/watchlist/wl_1");
   });
 
@@ -91,8 +92,8 @@ describe("T15 Watchlist and Diff UI", () => {
     expect(screen.queryByText(/Change detected on 2030-03-01/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Report" })[1]).toHaveAttribute("href", "/reports/rep_1");
     expect(screen.getAllByRole("link", { name: "Report" })[2]).toHaveAttribute("href", "/reports/rep_2");
-    expect(screen.getByText("Previous provenance:")).toBeInTheDocument();
-    expect(screen.getByText("Current provenance:")).toBeInTheDocument();
+    expect(screen.getByText("Previously established provenance:")).toBeInTheDocument();
+    expect(screen.getByText("This Run provenance:")).toBeInTheDocument();
   });
 });
 
@@ -100,6 +101,7 @@ describe("T15 Alerts", () => {
   it("links current and previous establishing Reports and marks read", async () => {
     render(<AlertsView />);
     expect(await screen.findByText(/Change detected on 2030-03-01/)).toBeInTheDocument();
+    expect(screen.getByText(/This Run — Affirmed: Model 3/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open new Report" })).toHaveAttribute("href", "/reports/rep_2");
     expect(screen.getByRole("link", { name: "Previous establishing Report" })).toHaveAttribute("href", "/reports/rep_1");
   });
@@ -134,5 +136,63 @@ describe("T15 public share", () => {
     expect(await screen.findByRole("heading", { name: "Pricing update" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Price page" })).toHaveAttribute("href", "https://example.test/price");
     expect(screen.queryByText(/Run log/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("T15 persisted Diff semantic outcomes", () => {
+  async function show(entry: api.DiffRecord["entries"][number]["entry"], material = false) {
+    m.listDiffs.mockResolvedValue([{
+      owner_id: "alice", watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
+      status: "succeeded", attempts: 1, error: "", alert_id: null,
+      updated_at: "2030-03-01T10:00:00Z", skipped: [], intervening_failed: [],
+      entries: [{ entry, material }],
+    }]);
+    render(<WatchlistDiffView itemId="wl_1" />);
+    await screen.findByText(/run run_2/i);
+  }
+
+  it("keeps affirmed and negated sides explicit for no_longer_true", async () => {
+    await show({
+      outcome: "no_longer_true", key: finding.key,
+      previous: { ...finding, polarity: "affirmed" },
+      finding: { ...finding, polarity: "negated" }, unconfirmed: false, reason: "",
+    }, true);
+    expect(screen.getByText(/no longer true · material change/i)).toBeInTheDocument();
+    expect(screen.getByText(/Previously established:/).parentElement).toHaveTextContent("Affirmed: Model 3");
+    expect(screen.getByText(/This Run:/).parentElement).toHaveTextContent("Negated: Model 3");
+  });
+
+  it("shows first-time negated added without a material-change label", async () => {
+    await show({
+      outcome: "added", key: finding.key, previous: null,
+      finding: { ...finding, polarity: "negated" }, unconfirmed: false, reason: "",
+    });
+    expect(screen.getByRole("heading", { name: "added" })).toBeInTheDocument();
+    expect(screen.getByText(/This Run:/).parentElement).toHaveTextContent("Negated: Model 3");
+    expect(screen.queryByText(/material change/)).not.toBeInTheDocument();
+  });
+
+  for (const outcome of ["older_ignored", "ambiguous"] as const) {
+    it(`labels ${outcome} incoming Finding as This Run, without replacing established state`, async () => {
+      await show({
+        outcome, key: finding.key, previous: { ...finding, object: "120 dollars" },
+        finding: { ...finding, object: "90 dollars" },
+        unconfirmed: false, reason: "older or conflicting evidence",
+      });
+      expect(screen.getByText(/Previously established:/).parentElement).toHaveTextContent("120 dollars");
+      expect(screen.getByText(/This Run:/).parentElement).toHaveTextContent("90 dollars");
+      expect(screen.queryByText(/Current provenance:/)).not.toBeInTheDocument();
+      expect(screen.getByText("older or conflicting evidence")).toBeInTheDocument();
+    });
+  }
+
+  it("does not fabricate a Finding when not reconfirmed", async () => {
+    await show({
+      outcome: "not_reconfirmed", key: finding.key, previous: finding,
+      finding: null, unconfirmed: true, reason: "",
+    });
+    expect(screen.getByText(/Previously established:/).parentElement).toHaveTextContent("Affirmed: Model 3");
+    expect(screen.getByText(/This Run:/).parentElement).toHaveTextContent("no corresponding Finding was produced");
+    expect(screen.getByText(/absence is not deletion/)).toBeInTheDocument();
   });
 });
