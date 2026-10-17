@@ -985,7 +985,19 @@ a {
   overflow-wrap: anywhere;
 }
 
+ .report__print-sources {
+  display: none;
+}
+
 @media print {
+  .report__print-sources {
+    display: block;
+    break-before: page;
+  }
+  .report__print-sources li {
+    break-inside: avoid;
+    margin-bottom: 0.5rem;
+  }
   .masthead,
   .report-actions,
   .skip-link {
