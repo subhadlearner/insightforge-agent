@@ -86,6 +86,17 @@ export function WatchlistDiffView({ itemId }: { itemId: string }) {
                 Net change is from the still-valid Baseline; {diff.intervening_failed.length} intervening Diff{diff.intervening_failed.length === 1 ? "" : "s"} failed.
               </p>
             )}
+            {diff.skipped.length > 0 && (
+              <section className="diff__skipped">
+                <h3>Claims not normalized into Findings</h3>
+                <p>These Claims are not Findings and are not changes.</p>
+                <ul>{diff.skipped.map((skipped, index) => (
+                  <li key={`${skipped.evidence_id}:${index}`}>
+                    {skipped.claim} — {skipped.reason} (Evidence {skipped.evidence_id})
+                  </li>
+                ))}</ul>
+              </section>
+            )}
             <div className="diff__entries">
               {diff.entries.map(({ entry, material }, index) => (
                 <section className={`diff-entry ${material ? "diff-entry--material" : ""}`} key={entry.key + index}>
