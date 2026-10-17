@@ -4,6 +4,8 @@ import sys
 def main() -> None:
     """`insightforge-agent demo` runs the offline Extraction and synthesis demo;
     `insightforge-agent bench ...` runs the offline benchmark tools;
+    `insightforge-agent eval ...` runs the sample briefs per provider and writes the evaluation
+    report (real model and search calls);
     `insightforge-agent models download` fetches the local embedding and Docling models once;
     `insightforge-agent serve [--host H] [--port P]` serves the API (Settings from the
     environment and `.env`)."""
@@ -31,4 +33,8 @@ def main() -> None:
         from insightforge_agent.benchmark.cli import main as bench
 
         raise SystemExit(bench(sys.argv[2:]))
+    if sys.argv[1:2] == ["eval"]:
+        from insightforge_agent.evaluation.cli import main as evaluate
+
+        raise SystemExit(evaluate(sys.argv[2:]))
     print("Hello from insightforge-agent!")

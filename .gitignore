@@ -13,3 +13,5 @@ dist/
 # Local data
 *.db
 *.sqlite3
+# insightforge-agent eval output (Run databases and reports)
+eval-results/

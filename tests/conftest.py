@@ -13,7 +13,7 @@ _ENV_KEYS = (
 # `pytestmark` keep it; the suites below are labelled here so one line says where they sit.
 _HERE = Path(__file__).parent
 _TIER_OF = {
-    "scripted": [_HERE / "pipeline", _HERE / "test_planner_spike_scripted.py",
+    "scripted": [_HERE / "pipeline", _HERE / "evaluation", _HERE / "test_planner_spike_scripted.py",
                  _HERE / "test_llm.py"],
     "replay": [_HERE / "benchmark" / "test_judge_and_recording.py",
                _HERE / "benchmark" / "test_report_and_cli.py",
