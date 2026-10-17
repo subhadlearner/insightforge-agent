@@ -65,7 +65,12 @@ def evaluate_sample(deps: Deps, sample: SampleBrief, root: Path,
     if run.state != RunState.COMPLETE:
         status = "failed" if run.state == RunState.FAILED else "error"
         return result.model_copy(update={"status": status, "reason": failure_reason(deps, run)})
-    report = deps.repos.reports.get_for_run(owner, run.id)
+    try:
+        report = deps.repos.reports.get_for_run(owner, run.id)
+    except Exception as e:  # noqa: BLE001 - the other samples are still measured and written
+        return result.model_copy(update={
+            "reason": f"the Run is COMPLETE but its Report could not be read: "
+                      f"{type(e).__name__}: {e}"})
     result.status, result.report_id = "complete", report.id
     try:
         result.fact_check = fact_check_metrics(report)

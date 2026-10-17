@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from insightforge_agent.domain.evidence import Thresholds
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.evaluation.cli import main
 from insightforge_agent.evaluation.judge import CRITERIA, RUBRIC_VERSION
@@ -258,7 +259,7 @@ def test_the_markdown_report_is_written_beside_the_json(full_run):
     _, report, run_dir, _ = full_run
     md = (run_dir / "eval-report.md").read_text(encoding="utf-8")
     assert "## Provider: anthropic" in md and "Remediation (section 11): **not_required**" in md
-    assert "(20%, at least 5, seeded by the" in md
+    assert "Fact-check sampling: 20% of Claims, at least 5, seeded by the Run" in md
     for s in provider(report, "anthropic")["samples"]:
         assert f"| {s['sample_id']} | complete |" in md
     assert "not that the Passage semantically supports the Claim" in md
@@ -369,13 +370,74 @@ def test_a_partial_anthropic_run_below_the_threshold_is_undetermined_and_says_so
 
 def test_providers_run_under_different_conditions_are_never_comparable(tmp_path):
     world = World(overrides={"groq": {"fact_check_rate": 0.5}})
-    code, report, _ = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
-                               "--judge-provider", "none", "--brief",
-                               "competitive-landscape-cloud", world=world)
+    code, report, run_dir = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
+                                     "--judge-provider", "none", "--brief",
+                                     "competitive-landscape-cloud", world=world)
     assert code == 0
     assert provider(report, "groq")["conditions"]["fact_check_rate"] == 0.5
     for metric, c in report["comparability"].items():
         assert c["comparable"] is False and "fact_check_rate" in c["reason"], metric
+    # Each provider's sampling is described in its own section, never one for all.
+    md = (run_dir / "eval-report.md").read_text(encoding="utf-8")
+    gemini_md, groq_md = md.split("## Provider: groq")
+    assert "Fact-check sampling: 20% of Claims" in gemini_md.split("## Provider: gemini")[1]
+    assert "Fact-check sampling: 50% of Claims" in groq_md.split("## Provider")[0]
+    definitions = md.split("## Metric definitions")[1]
+    assert "20%" not in definitions and "50%" not in definitions
+
+
+def test_different_evidence_thresholds_are_recorded_and_never_comparable(tmp_path):
+    world = World(overrides={"groq": {"thresholds": Thresholds(credibility_high=0.9,
+                                                                recency_fresh_days=30)}})
+    code, report, _ = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
+                               "--judge-provider", "none", "--brief",
+                               "competitive-landscape-cloud", world=world)
+    groq, gemini = provider(report, "groq")["conditions"], provider(report, "gemini")["conditions"]
+    assert code == 0
+    assert (groq["credibility_high"], groq["recency_fresh_days"]) == (0.9, 30)
+    assert (gemini["credibility_high"], gemini["credibility_medium"],
+            gemini["recency_fresh_days"], gemini["recency_recent_days"]) == (0.65, 0.4, 365, 1095)
+    for metric, c in report["comparability"].items():
+        assert c["comparable"] is False, metric
+        assert "credibility_high" in c["reason"] and "recency_fresh_days" in c["reason"], metric
+
+
+class UnreadableReports(World):
+    """Once a Run whose Brief holds `keyword` is COMPLETE, reading its Report fails (a store
+    fault on the recovery path; the pipeline itself still stores the Report)."""
+
+    def __init__(self, keyword: str) -> None:
+        super().__init__()
+        self.keyword = keyword
+
+    def make_deps(self, settings, repos, checkpointer, qdrant):
+        deps = super().make_deps(settings, repos, checkpointer, qdrant)
+        inner, runs, keyword = repos.reports, repos.runs, self.keyword
+
+        class Reports:
+            def __getattr__(self, name):
+                return getattr(inner, name)
+
+            def get_for_run(self, owner_id, run_id):
+                run = runs.get(owner_id, run_id)
+                if run.state == RunState.COMPLETE and keyword in run.brief:
+                    raise OSError("disk I/O error")
+                return inner.get_for_run(owner_id, run_id)
+        repos.reports = Reports()
+        return deps
+
+
+def test_a_completed_run_whose_report_cannot_be_read_is_an_error_and_the_rest_is_written(
+        tmp_path):
+    code, report, run_dir = evaluate(tmp_path, "--provider", "gemini", "--judge-provider",
+                                     "none", *TWO, world=UnreadableReports("solar"))
+    result = provider(report, "gemini")
+    bad, good = samples(result)["market-sizing-solar"], samples(result)["competitive-landscape-cloud"]
+    assert code == 0 and (run_dir / "eval-report.md").exists()
+    assert bad["status"] == "error" and bad["run_id"] and bad["report_id"] is None
+    assert "Report could not be read" in bad["reason"] and "disk I/O error" in bad["reason"]
+    assert bad["fact_check"] is None and bad["synthesis"]["status"] == "not_judged"
+    assert good["status"] == "complete" and good["fact_check"]["pass_rate"] is not None
 
 
 # --- the judge ------------------------------------------------------------------------------

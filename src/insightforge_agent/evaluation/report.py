@@ -148,7 +148,7 @@ def remediation_of(provider: str, samples: list[SampleResult], totals: Totals,
             f"{shown}" + (f", below {PASS_RATE_THRESHOLD:.0%}" if below else "")
             + "; section 11 is decided on the full Anthropic run"))
     # Completeness first: a rate over fewer briefs than the run held decides nothing.
-    unmeasured = [s.sample_id for s in samples if s.fact_check is None]
+    unmeasured = [s.sample_id for s in samples if not measured(s, "fact_check")]
     if rate is None or unmeasured:
         return Remediation(status="undetermined", reason=(
             f"pass rate {shown}" + (f", below {PASS_RATE_THRESHOLD:.0%}," if below else "")
@@ -162,13 +162,31 @@ def remediation_of(provider: str, samples: list[SampleResult], totals: Totals,
                        reason=f"pass rate {shown} meets {PASS_RATE_THRESHOLD:.0%}")
 
 
-def _measured(result: ProviderResult, metric: str) -> frozenset[str]:
-    if metric == "synthesis":
-        return frozenset(s.sample_id for s in result.samples if s.synthesis.status == "judged")
-    return frozenset(s.sample_id for s in result.samples if getattr(s, metric) is not None)
-
-
 METRICS = ("fact_check", "citations", "synthesis")
+
+
+def measured(sample: SampleResult, metric: str) -> bool:
+    """The brief has a defined value for the metric: a pass rate over at least one checked
+    Claim, an accuracy over at least one Claim, or a judged score. A metric object with a zero
+    denominator is not a measurement."""
+    if metric == "fact_check":
+        return sample.fact_check is not None and sample.fact_check.pass_rate is not None
+    if metric == "citations":
+        return sample.citations is not None and sample.citations.accuracy is not None
+    return sample.synthesis.status == "judged"
+
+
+def _measured(result: ProviderResult, metric: str) -> frozenset[str]:
+    return frozenset(s.sample_id for s in result.samples if measured(s, metric))
+
+
+def _differing(providers: list[ProviderResult]) -> list[str]:
+    """Conditions and runtime services (embedder, search, fetcher) that are not the same for
+    every provider. The chat models are what an evaluation varies, so they are not compared."""
+    setups = [{**p.conditions, **{f"service {k}": v for k, v in p.runtime_services.items()}}
+              for p in providers]
+    keys = set().union(*setups)
+    return sorted(k for k in keys if len({repr(s.get(k)) for s in setups}) > 1)
 
 
 def comparability_of(providers: list[ProviderResult]) -> dict[str, Comparison]:
@@ -176,9 +194,7 @@ def comparability_of(providers: list[ProviderResult]) -> dict[str, Comparison]:
     measured on can still differ between providers."""
     if len(providers) < 2:
         return {}
-    first = providers[0].conditions
-    differing = sorted(k for p in providers[1:] for k in first.keys() | p.conditions.keys()
-                       if first.get(k) != p.conditions.get(k))
+    differing = _differing(providers)
     if differing:
         reason = f"the providers ran under different conditions ({', '.join(differing)})"
         return {m: Comparison(comparable=False, reason=reason) for m in METRICS}
@@ -202,15 +218,22 @@ def comparability_of(providers: list[ProviderResult]) -> dict[str, Comparison]:
 # --- Markdown ------------------------------------------------------------------------------
 
 
-def definitions(judge: JudgeIdentity, conditions: dict[str, Setting]) -> str:
+def sampling(conditions: dict[str, Setting]) -> str:
+    """One provider's fact-check sampling, from the conditions its Runs ran under."""
     rate, minimum = conditions.get("fact_check_rate"), conditions.get("fact_check_minimum")
-    sampling = (f"{rate:.0%}, at least {minimum}" if isinstance(rate, float) else "as configured")
+    if not isinstance(rate, float) or not isinstance(minimum, int):
+        return "not recorded"
+    return f"{rate:.0%} of Claims, at least {minimum}, seeded by the Run"
+
+
+def definitions(judge: JudgeIdentity) -> str:
     return f"""\
 ## Metric definitions
 
 - **Fact-check pass rate** (deterministic): the Fact-Checker's persisted verdicts,
-  `verified / (verified + unverified)` over its sampled Claims ({sampling}, seeded by the
-  Run). `unchecked` Claims (re-fetch failed) are left out. Totals pool Claims across Reports.
+  `verified / (verified + unverified)` over its sampled Claims (each provider's sampling is
+  shown in its section). `unchecked` Claims (re-fetch failed) are left out. Totals pool Claims
+  across Reports.
 - **Citation accuracy** (deterministic): every Claim, sampled or not. Accurate when the
   citation resolves (Claim -> Evidence or Historical item -> primary Passage -> Source) and that
   Passage states every figure of the Claim. Unresolved Claims count as inaccurate. This checks
@@ -286,6 +309,7 @@ def render_markdown(report: EvalReport) -> str:
             "",
             "Services: " + ", ".join(f"{k} `{v}`" for k, v in p.runtime_services.items()), "",
             f"Conditions: {_settings(p.conditions)}", "",
+            f"Fact-check sampling: {sampling(p.conditions)}", "",
             "| Brief | Status | Fact-check pass rate | Citation accuracy | Synthesis |",
             "|---|---|---|---|---|",
         ]
@@ -311,5 +335,5 @@ def render_markdown(report: EvalReport) -> str:
         lines += [f"- {metric}: **{'comparable' if c.comparable else 'not comparable'}**, "
                   f"{c.reason}" for metric, c in report.comparability.items()]
         lines.append("")
-    lines.append(definitions(judge, report.providers[0].conditions))
+    lines.append(definitions(judge))
     return "\n".join(lines)

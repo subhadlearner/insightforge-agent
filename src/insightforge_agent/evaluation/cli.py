@@ -130,6 +130,11 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         "passage_token_cap": deps.passage_token_cap,
         "run_token_cap": deps.run_token_cap,
         "writer_retries": deps.writer_retries,
+        # The effective Evidence thresholds: they set Confidence and ranking.
+        "credibility_high": deps.thresholds.credibility_high,
+        "credibility_medium": deps.thresholds.credibility_medium,
+        "recency_fresh_days": deps.thresholds.recency_fresh_days,
+        "recency_recent_days": deps.thresholds.recency_recent_days,
         "clarification": "off" if deps.timeouts is None else "on",
         "vector_store": "in-process",
     }
