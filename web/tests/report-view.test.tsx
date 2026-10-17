@@ -9,6 +9,7 @@ vi.mock("@/lib/api", async (orig) => (await import("./mock-api")).mockApi(orig))
 const m = vi.mocked(api);
 
 beforeEach(() => {
+  m.listShares.mockResolvedValue([]);
   m.getReport.mockResolvedValue(reportOut());
   m.getCitations.mockResolvedValue(citations());
 });
@@ -28,6 +29,22 @@ describe("Report viewer", () => {
     render(<ReportView reportId="rep_1" />);
     const historical = await screen.findByText(/Background from an earlier Report of 30 Jun 2029/);
     expect(historical.closest("p")).toHaveClass("claim--historical");
+  });
+
+  it("maps print Source numbers to Claim citation markers without Passage text", async () => {
+    render(<ReportView reportId="rep_1" />);
+    await screen.findByRole("button", { name: "View source for claim 3" });
+    const appendix = document.querySelector(".report__print-sources") as HTMLElement;
+    expect(appendix).toHaveAttribute("data-print-sources-state", "ready");
+    expect(appendix).toBeInTheDocument();
+    const entries = within(appendix).getAllByRole("listitem");
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toHaveTextContent("Source 1: BYD annual report");
+    expect(entries[1]).toHaveTextContent("Source 2: Tesla Q4 deliveries");
+    expect(entries[2]).toHaveTextContent("Source 3: Seagull price list");
+    expect(entries[2]).toHaveTextContent("Page 4");
+    expect(entries[2]).toHaveTextContent("Section: Pricing");
+    expect(appendix).not.toHaveTextContent("Seagull now starts at 69,800 yuan.");
   });
 
   it("gives every Claim one accessible citation marker", async () => {
@@ -71,6 +88,8 @@ describe("Report viewer", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("BYD and Tesla");
     expect(await screen.findByTestId("citations-unavailable")).toHaveTextContent(
       "Supporting evidence is unavailable because this Report's stored citation provenance could not be resolved.");
+    expect(document.querySelector(".report__print-sources")).toHaveAttribute("data-print-sources-state", "failed");
+    expect(document.querySelector(".report__print-sources")).toHaveTextContent("Sources unavailable because this Report\'s stored citation provenance could not be resolved.");
     const markers = screen.getAllByRole("button", { name: /Source unavailable for claim/ });
     expect(markers).toHaveLength(3);
     markers.forEach((b) => expect(b).toBeDisabled());

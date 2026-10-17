@@ -16,6 +16,19 @@ export type ClarificationOut = Schemas["ClarificationOut"];
 export type ReportListItem = Schemas["ReportListItem"];
 export type ReportOut = Schemas["ReportOut"];
 export type Citation = Schemas["Citation"];
+export type WatchlistItem = Schemas["WatchlistItem"];
+export type Run = Schemas["Run"];
+export type Finding = Schemas["Finding"];
+export type EstablishedFinding = Schemas["EstablishedFinding"];
+export type FailureRecord = Schemas["FailureRecord"];
+export type WatchlistDashboard = Schemas["WatchlistDashboardOut"] & {
+  recent_failures: FailureRecord[];
+  unconfirmed_findings: EstablishedFinding[];
+};
+export type DiffRecord = Schemas["DiffRecordOut"];
+export type Alert = Schemas["Alert"];
+export type ShareCreated = Schemas["ShareCreated"];
+export type PublicReport = Schemas["PublicReport"];
 export type SourceToggles = NonNullable<Schemas["RuntimeEstimateIn"]["source_toggles"]>;
 export type SourceType = keyof SourceToggles;
 
@@ -116,3 +129,60 @@ export const getReport = (reportId: string) =>
 
 export const getCitations = (reportId: string) =>
   request<Citation[]>("GET", `/reports/${encodeURIComponent(reportId)}/citations`);
+
+
+// --- T15 watchlist intelligence -----------------------------------------------------------
+
+export const listWatchlists = () => request<WatchlistDashboard[]>("GET", "/watchlist");
+
+export const getWatchlist = (itemId: string) =>
+  request<WatchlistDashboard>("GET", `/watchlist/${encodeURIComponent(itemId)}`);
+
+export const listDiffs = (itemId: string) =>
+  request<DiffRecord[]>("GET", `/watchlist/${encodeURIComponent(itemId)}/diffs`);
+
+export const listAlerts = (itemId?: string) =>
+  request<Alert[]>("GET", itemId ? `/alerts?item_id=${encodeURIComponent(itemId)}` : "/alerts");
+
+export const markAlertRead = (alertId: string, read: boolean) =>
+  request<Alert>("PATCH", `/alerts/${encodeURIComponent(alertId)}`, { read });
+
+// --- T15 export and sharing ---------------------------------------------------------------
+
+export async function downloadReport(reportId: string, format: "md" | "pdf"): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/reports/${encodeURIComponent(reportId)}/export.${format}`,
+      { credentials: "same-origin" },
+    );
+  } catch {
+    throw new ApiError(0, "The server could not be reached. Check that the API is running.");
+  }
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      detail = describeDetail((await response.json() as { detail?: unknown }).detail);
+    } catch {
+      detail = null;
+    }
+    throw new ApiError(response.status, detail ?? `The server answered ${response.status}.`);
+  }
+  return response.blob();
+}
+
+export const listShares = (reportId: string) =>
+  request<ShareCreated[]>("GET", `/reports/${encodeURIComponent(reportId)}/shares`);
+
+export const createShare = (reportId: string) =>
+  request<ShareCreated>("POST", `/reports/${encodeURIComponent(reportId)}/shares`);
+
+export async function revokeShare(reportId: string, shareId: string): Promise<void> {
+  await request<null>(
+    "DELETE",
+    `/reports/${encodeURIComponent(reportId)}/shares/${encodeURIComponent(shareId)}`,
+  );
+}
+
+export const getSharedReport = (token: string) =>
+  request<PublicReport>("GET", `/share/${encodeURIComponent(token)}`);

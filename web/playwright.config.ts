@@ -24,7 +24,7 @@ export default defineConfig({
       command: "uv run python -m tests.web_e2e.server",
       cwd: "..",
       url: `${API_ORIGIN}/personas`,
-      env: { E2E_PORT: String(API_PORT), E2E_SSE_SECONDS: "3" },
+      env: { E2E_PORT: String(API_PORT), E2E_SSE_SECONDS: "3", E2E_WEB_ORIGIN: `http://localhost:${WEB_PORT}` },
       timeout: 120_000,
       reuseExistingServer: false,
     },

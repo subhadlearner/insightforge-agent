@@ -47,11 +47,18 @@ from fastapi import FastAPI
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from insightforge_agent.api.clarify import clarification_router
+from insightforge_agent.api.delivery import delivery_router
+from insightforge_agent.api.insights import insights_router
 from insightforge_agent.api.reports import reports_router
 from insightforge_agent.api.research import research_router
 from insightforge_agent.api.session import PersonaSession
 from insightforge_agent.api.watchlist import watchlist_router
 from insightforge_agent.pipeline.watchlist import WatchlistService
+from insightforge_agent.pipeline.report_delivery import (
+    PdfRenderer,
+    ShareTokenService,
+    SubprocessPlaywrightRenderer,
+)
 from insightforge_agent.config import Settings
 from insightforge_agent.domain.runtime_estimate import EstimateCoefficients
 from insightforge_agent.pipeline.clarification import ClarificationService
@@ -111,13 +118,15 @@ class Runtime:
     research: ResearchService
     watchlists: WatchlistService
     retention: RetentionSweeper
+    pdf_renderer: PdfRenderer
+    share_tokens: ShareTokenService
     recovered: Counter = field(default_factory=Counter)  # what the startup sweep did
     # Set once, when the process is stopping: open streams end. A Runtime is not restarted.
     closing: threading.Event = field(default_factory=threading.Event)
     _closers: list[Callable[[], object]] = field(default_factory=list)
 
     @classmethod
-    def build(cls, settings: Settings, make_deps: MakeDeps | None = None) -> "Runtime":
+    def build(cls, settings: Settings, make_deps: MakeDeps | None = None, pdf_renderer: PdfRenderer | None = None) -> "Runtime":
         """Open the process's resources and wire them. Nothing runs until `start`.
         `make_deps` replaces the real models, search and Qdrant (tests pass scripted ones)."""
         if settings.session_secret is None:
@@ -127,7 +136,7 @@ class Runtime:
                                  secure=settings.session_cookie_secure)
         closers: list[Callable[[], object]] = []
         try:
-            return cls._wire(settings, session, closers, make_deps)
+            return cls._wire(settings, session, closers, make_deps, pdf_renderer)
         except BaseException:
             for close in reversed(closers):  # nothing half-built stays open
                 close()
@@ -135,7 +144,7 @@ class Runtime:
 
     @classmethod
     def _wire(cls, settings: Settings, session: PersonaSession, closers: list,
-              make_deps: MakeDeps | None) -> "Runtime":
+              make_deps: MakeDeps | None, pdf_renderer: PdfRenderer | None) -> "Runtime":
         repos = SqliteRepos(sqlite_path(settings.database_url))
         closers.append(repos.close)
         ck = sqlite3.connect(sqlite_path(settings.checkpoint_database_url),
@@ -156,11 +165,19 @@ class Runtime:
         deps.on_complete = schedules.completed
         retention = RetentionSweeper(repos.retention, deps.doc_index, deps.now,
                                      retention_days=settings.retention_days, closing=closing)
+        configured_share_secret = (
+            settings.share_jwt_secret.get_secret_value()
+            if settings.share_jwt_secret is not None else ""
+        )
+        share_secret = configured_share_secret or settings.session_secret.get_secret_value()
         return cls(settings=settings, session=session, repos=repos, deps=deps,
                    scheduler=scheduler, executor=executor,
                    clarifications=ClarificationService(deps, submit=executor.submit),
                    research=research, watchlists=WatchlistService(deps, schedules),
-                   retention=retention, closing=closing, _closers=closers)
+                   retention=retention,
+                   pdf_renderer=pdf_renderer or SubprocessPlaywrightRenderer(),
+                   share_tokens=ShareTokenService(share_secret),
+                   closing=closing, _closers=closers)
 
     def start(self) -> None:
         self.scheduler.start(paused=True)
@@ -223,8 +240,22 @@ def create_app(runtime: Runtime) -> FastAPI:
                                        _estimate_coefficients(runtime.settings)))
     app.include_router(clarification_router(runtime.clarifications, user_id))
     app.include_router(watchlist_router(runtime.watchlists, user_id))
+    app.include_router(insights_router(runtime.repos, user_id))
     app.include_router(reports_router(runtime.repos.reports, runtime.deps.store,
                                       user_id))
+    app.include_router(delivery_router(
+        runtime.repos.reports,
+        runtime.deps.store,
+        runtime.repos.shares,
+        user_id,
+        runtime.share_tokens,
+        runtime.pdf_renderer,
+        runtime.session.sign,
+        runtime.deps.now,
+        runtime.deps.new_id,
+        runtime.settings.web_origin,
+        runtime.settings.share_link_ttl_days,
+    ))
     return app
 
 

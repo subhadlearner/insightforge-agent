@@ -28,3 +28,51 @@ jobs:
         run: uv run pytest -m scripted
       - name: Everything else offline (live and integration tests are excluded)
         run: uv run pytest -m "not baseline and not replay and not scripted and not live and not integration"
+      - name: Integration
+        run: uv run pytest -q -m integration
+      - name: Diff whitespace
+        run: git diff --check
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Generated API schema is current
+        run: |
+          E2E_PORT=8201 E2E_SSE_SECONDS=1 E2E_WEB_ORIGIN=http://127.0.0.1:3200 uv run python -m tests.web_e2e.server &
+          backend=$!
+          trap 'kill "$backend" 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8201/openapi.json >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8201/openapi.json >/dev/null
+          cd web
+          INSIGHTFORGE_API_ORIGIN=http://127.0.0.1:8201 npm run api:types
+          cd ..
+          git diff --exit-code -- web/lib/api-schema.d.ts
+      - name: Frontend unit and component tests
+        working-directory: web
+        run: npm test
+      - name: TypeScript
+        working-directory: web
+        run: npm run typecheck
+      - name: Production build
+        working-directory: web
+        run: npm run build
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Browser E2E
+        working-directory: web
+        run: npm run test:e2e

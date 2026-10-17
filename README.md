@@ -71,7 +71,7 @@ where FastAPI is; `next dev` reads it at start, and `next build` bakes it into t
 | `npm test` | unit and component tests (Vitest, jsdom) |
 | `npm run typecheck` | TypeScript |
 | `npm run build` | production build |
-| `npm run test:e2e` | Playwright through the real rewrite, against `tests/web_e2e/server.py` (scripted models, no keys); first run `npx playwright install chromium`; needs `uv` |
+| `npm run test:e2e` | Playwright through the real rewrite, against `tests/web_e2e/server.py` (scripted models, no keys); first run `npx playwright install chromium`; needs `uv`; that Chromium install also powers T15 PDF export |
 | `npm run api:types` | regenerate `lib/api-schema.d.ts` from a running API's OpenAPI schema |
 
 ## Offline demo: Extraction and synthesis
@@ -141,3 +141,49 @@ lets already admitted work finish. All endpoints use the existing owner-scoped 4
 T11 persists current Claim/Evidence seeds with full provenance on first success, marked
 `normalization_pending=true`. Normalized Finding state, comparisons, Material changes and
 Alerts remain T12; the Baseline is never treated as just a previous Report pointer.
+
+
+## Report export and public links (T15)
+
+T15 adds these HTTP routes:
+
+| Route | Purpose |
+|---|---|
+| `GET /watchlist/{item_id}/diffs` | owner-scoped persisted Diff history |
+| `GET /watchlist/{item_id}/diffs/{run_id}` | one persisted Diff |
+| `GET /alerts`, `GET /alerts/{alert_id}`, `PATCH /alerts/{alert_id}` | owner-scoped durable Alerts and read state |
+| `GET /reports/{report_id}/export.md` | owner-scoped verified Markdown download |
+| `GET /reports/{report_id}/export.pdf` | owner-scoped Chromium PDF download |
+| `GET /reports/{report_id}/shares` | list the current owner’s active, unexpired, non-revoked links for this Report |
+| `POST /reports/{report_id}/shares` | create a signed public Report link |
+| `DELETE /reports/{report_id}/shares/{share_id}` | revoke one public link |
+| `GET /share/{token}` | token-scoped public Report projection; no persona required |
+
+The Watchlist UI is at `/watchlist`; a Watchlist Item links to its persisted Diff history,
+and `/alerts` shows durable material-change Alerts with links to the new and previous
+establishing Reports.
+
+Report actions provide Markdown and PDF downloads plus a revocable public link. Markdown uses
+the fact-checked Report and preserves `[UNVERIFIED]` markings. PDF does not maintain a second
+Report template: the API launches Playwright headless Chromium through
+`web/scripts/render-pdf.mjs`, signs the owner's persona cookie for that browser context, and
+prints the existing `/reports/{id}` viewer HTML.
+
+After `npm install`, install Chromium once:
+
+```
+cd web
+npx playwright install chromium
+```
+
+`WEB_ORIGIN` tells the API where Next is running and defaults to `http://localhost:3000`
+(to match the required `next dev` hostname). Public links are HS256 JWT bearer
+capabilities with a unique durable share ID, Report identity and expiry; the default lifetime is
+7 days. Revocation is stored in SQLite and survives restart. Set `SHARE_JWT_SECRET` to isolate
+the public-link signing key; when omitted or blank this demo deliberately falls back to the
+required `SESSION_SECRET`.
+
+The public share DTO is intentionally narrower than the private Report/citation APIs. It exposes
+only the linked fact-checked Report, fact-check summary and cited web Source metadata. It does
+not expose uploaded-document Passage text, Run events/logs, internal Evidence objects, or any
+other Report.

@@ -9,5 +9,9 @@ export async function mockApi(importOriginal: () => Promise<unknown>) {
     estimateRuntime: vi.fn(), submitRun: vi.fn(),
     getClarification: vi.fn(), answerClarification: vi.fn(),
     listReports: vi.fn(), getReport: vi.fn(), getCitations: vi.fn(),
+    listWatchlists: vi.fn(), getWatchlist: vi.fn(), listDiffs: vi.fn(),
+    listAlerts: vi.fn(), markAlertRead: vi.fn(),
+    downloadReport: vi.fn(), listShares: vi.fn(), createShare: vi.fn(), revokeShare: vi.fn(),
+    getSharedReport: vi.fn(),
   };
 }
