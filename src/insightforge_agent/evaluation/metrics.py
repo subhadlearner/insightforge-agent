@@ -116,7 +116,7 @@ def citation_metrics(store: SourceStore, owner_id: str, report: Report) -> Citat
             m.problems.append(problem)
 
     for found in resolved:
-        c, where = found.text, f"claim {found.section}.{found.claim}"
+        c, where = found.claim, f"claim {found.section}.{found.position}"
         m.claims += 1
         if isinstance(found.citation, ProvenanceError):
             kind = "historical" if c.historical else "unknown"

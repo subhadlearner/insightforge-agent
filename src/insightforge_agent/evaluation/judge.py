@@ -25,8 +25,8 @@ CRITERIA = {
                 "Gaps & limitations why it cannot.",
     "organisation": "Sections are coherent and in a sensible order; the summary reflects the "
                     "body; Claims sit under the right heading.",
-    "synthesis": "Connects and compares findings into an answer to the Brief, rather than "
-                 "listing disconnected facts.",
+    "synthesis": "Connects and compares its Claims into an answer to the Brief, rather than "
+                 "listing disconnected statements.",
     "calibration": "States uncertainty honestly: forecasts as forecasts, historical background "
                    "as background, conflicting or unverified material flagged, no overreach.",
 }

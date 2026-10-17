@@ -7,7 +7,7 @@ the plan (documents, memory or web), so one Deps serves every sample brief. Per 
 brief whose text holds a `fail_all` keyword gets only failing Sub-tasks (a Failed Run), one
 with a `fail_one` keyword loses its last Sub-task (a Run that completes with a gap), and
 `drift` makes every re-fetch of a page return different text (the Fact-Checker finds no match,
-so its Claims are unverified)."""
+so its Claims are unverified). `overrides` sets Deps fields (pipeline settings) per provider."""
 
 import json
 import re
@@ -134,6 +134,7 @@ class World:
     fail_all: dict[str, tuple[str, ...]] = field(default_factory=dict)  # provider -> keywords
     fail_one: dict[str, tuple[str, ...]] = field(default_factory=dict)
     drift: frozenset[str] = frozenset()  # providers whose re-fetches drift
+    overrides: dict[str, dict] = field(default_factory=dict)  # provider -> Deps fields
     built: dict[str, Deps] = field(default_factory=dict)
 
     def make_deps(self, settings: Settings, repos, checkpointer, qdrant: QdrantClient) -> Deps:
@@ -148,6 +149,7 @@ class World:
             researcher_model=researchers(), search=pages, fetcher=pages,
             checkpointer=checkpointer, embedder=embedder, chunker=Chunker(),
             doc_index=DocChunkIndex(qdrant, embedder, "test-hash", 256),
-            report_index=ReportSectionIndex(qdrant, embedder, "test-hash", 256))
+            report_index=ReportSectionIndex(qdrant, embedder, "test-hash", 256),
+            **self.overrides.get(provider, {}))
         self.built[provider] = deps
         return deps

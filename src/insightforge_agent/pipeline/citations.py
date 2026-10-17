@@ -23,9 +23,9 @@ from insightforge_agent.stores.source_store import SourceStore
 class ClaimCitation(NamedTuple):
     """One Claim of a Report and its Citation, or the ProvenanceError that stops it resolving."""
 
-    section: int
-    claim: int
-    text: Claim
+    section: int  # the section's index in the draft
+    position: int  # the Claim's index in its section
+    claim: Claim
     citation: Citation | ProvenanceError
 
 

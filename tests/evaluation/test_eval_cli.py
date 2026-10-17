@@ -31,6 +31,13 @@ def keys(monkeypatch):
     monkeypatch.setenv("SEARCH_PROVIDERS", "tavily")
 
 
+class TunedChat(ScriptedChat):
+    """A scripted judge that carries generation settings, as a real chat model does."""
+
+    temperature: float = 0.0
+    max_tokens: int = 16000
+
+
 class Judges:
     """The judge factory: records the Settings it was built from."""
 
@@ -39,7 +46,7 @@ class Judges:
 
     def __call__(self, settings):
         self.built.append(settings)
-        return ScriptedChat(reply=lambda messages: AIMessage(content=self.reply))
+        return TunedChat(reply=lambda messages: AIMessage(content=self.reply))
 
 
 def evaluate(tmp_path, *args, world=None, judges=None) -> tuple[int, dict, Path]:
@@ -179,11 +186,14 @@ def test_provider_and_judge_identity_are_recorded_from_what_ran(full_run):
     assert set(result["runtime_models"].values()) == {"ScriptedChat"}
     assert result["runtime_services"] == {"embedder": "HashingEmbedder", "search": "DriftingPages",
                                           "fetcher": "DriftingPages"}
-    assert report["conditions"]["configured_embedding_model"] == "BAAI/bge-small-en-v1.5"
+    assert result["conditions"]["configured_embedding_model"] == "BAAI/bge-small-en-v1.5"
+    assert (result["conditions"]["fact_check_rate"], result["conditions"]["clarification"]) == (
+        0.2, "off")
     assert [s.llm_provider for s in judges.built] == ["groq"]
     assert report["judge"] == {"provider": "groq", "model": "openai/gpt-oss-120b",
-                               "runtime_model": "ScriptedChat", "role": "writer",
-                               "sampling": "provider defaults", "rubric_version": RUBRIC_VERSION}
+                               "runtime_model": "TunedChat", "role": "writer",
+                               "inference": {"temperature": 0.0, "max_tokens": 16000},
+                               "rubric_version": RUBRIC_VERSION}
     assert {s["synthesis"]["status"] for s in result["samples"]} == {"judged"}
     assert result["totals"]["synthesis"]["mean_score"] == 4.0
 
@@ -199,7 +209,8 @@ def test_the_full_library_at_or_above_the_threshold_needs_no_remediation(full_ru
 def test_the_markdown_report_is_written_beside_the_json(full_run):
     _, report, run_dir, _ = full_run
     md = (run_dir / "eval-report.md").read_text(encoding="utf-8")
-    assert "## Provider: anthropic" in md and "Remediation (§11): **not_required**" in md
+    assert "## Provider: anthropic" in md and "Remediation (section 11): **not_required**" in md
+    assert "(20%, at least 5, seeded by the" in md
     for s in provider(report, "anthropic")["samples"]:
         assert f"| {s['sample_id']} | complete |" in md
     assert "not that the Passage semantically supports the Claim" in md
@@ -270,7 +281,17 @@ def test_a_failed_setup_run_leaves_the_memory_brief_unrun(tmp_path):
     assert s["fact_check"] is None and result["totals"]["fact_check"]["pass_rate"] is None
 
 
-def test_below_the_threshold_the_anthropic_run_requires_remediation(tmp_path):
+def test_below_the_threshold_the_full_anthropic_run_requires_remediation(tmp_path):
+    world = World(drift=frozenset({"anthropic"}))
+    code, report, _ = evaluate(tmp_path, "--provider", "anthropic", "--judge-provider", "none",
+                               world=world)
+    anthropic = provider(report, "anthropic")
+    assert code == 0 and anthropic["totals"]["complete"] == 5
+    assert anthropic["totals"]["fact_check"]["pass_rate"] < 0.8
+    assert anthropic["remediation"]["status"] == "required"
+
+
+def test_a_partial_anthropic_run_below_the_threshold_is_undetermined_and_says_so(tmp_path):
     world = World(drift=frozenset({"anthropic"}))
     code, report, _ = evaluate(tmp_path, "--provider", "anthropic", "--provider", "gemini",
                                "--judge-provider", "none", "--brief",
@@ -278,9 +299,22 @@ def test_below_the_threshold_the_anthropic_run_requires_remediation(tmp_path):
     anthropic, gemini = provider(report, "anthropic"), provider(report, "gemini")
     assert code == 0
     assert anthropic["totals"]["fact_check"]["pass_rate"] < 0.8
-    assert anthropic["remediation"]["status"] == "required"
+    assert anthropic["remediation"]["status"] == "undetermined"
+    assert "partial run" in anthropic["remediation"]["reason"]
+    assert "below 80%" in anthropic["remediation"]["reason"]
     assert gemini["totals"]["fact_check"]["pass_rate"] >= 0.8  # the same world without drift
     assert gemini["remediation"]["status"] == "not_applicable"
+
+
+def test_providers_run_under_different_conditions_are_never_comparable(tmp_path):
+    world = World(overrides={"groq": {"fact_check_rate": 0.5}})
+    code, report, _ = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
+                               "--judge-provider", "none", "--brief",
+                               "competitive-landscape-cloud", world=world)
+    assert code == 0
+    assert provider(report, "groq")["conditions"]["fact_check_rate"] == 0.5
+    for metric, c in report["comparability"].items():
+        assert c["comparable"] is False and "fact_check_rate" in c["reason"], metric
 
 
 # --- the judge ------------------------------------------------------------------------------

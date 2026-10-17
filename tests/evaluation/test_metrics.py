@@ -7,6 +7,7 @@ when that Passage states every figure of the Claim."""
 
 import pytest
 
+from insightforge_agent.domain.contracts import PassageRef
 from insightforge_agent.evaluation.metrics import (
     MetricError,
     citation_metrics,
@@ -14,7 +15,6 @@ from insightforge_agent.evaluation.metrics import (
     pool_citations,
     pool_fact_checks,
 )
-from insightforge_agent.domain.contracts import PassageRef
 from tests.evaluation.builders import (
     OWNER,
     World,
