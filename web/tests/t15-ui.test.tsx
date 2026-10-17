@@ -88,8 +88,8 @@ describe("T15 Watchlist and Diff UI", () => {
     expect(await screen.findByText(/changed · material change/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Change detected on 2030-03-01 \(As-of derived from source observation date\)/)).toHaveLength(2);
     expect(screen.queryByText(/Changed on 2030-03-01/)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "Report" })[0]).toHaveAttribute("href", "/reports/rep_1");
-    expect(screen.getAllByRole("link", { name: "Report" })[1]).toHaveAttribute("href", "/reports/rep_2");
+    expect(screen.getAllByRole("link", { name: "Report" })[1]).toHaveAttribute("href", "/reports/rep_1");
+    expect(screen.getAllByRole("link", { name: "Report" })[2]).toHaveAttribute("href", "/reports/rep_2");
     expect(screen.getByText("Previous provenance:")).toBeInTheDocument();
     expect(screen.getByText("Current provenance:")).toBeInTheDocument();
   });
