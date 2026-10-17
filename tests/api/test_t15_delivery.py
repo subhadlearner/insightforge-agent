@@ -250,3 +250,36 @@ def test_public_fact_check_uses_explicit_allowlist_with_production_summary(tmp_p
         }
         for field in ("implemented", "claims", "similarity_threshold", "pass_rate", "private_future_setting"):
             assert field not in response.json()["fact_check"]
+
+
+def test_active_share_listing_is_owner_scoped_durable_and_filters_revoked_expired(tmp_path):
+    clock = {"now": T0}
+    with App(tmp_path, now=lambda: clock["now"], pdf_renderer=FakePdf()) as app:
+        report = add_report(app)
+        add_report(app, "bob")
+        app.login("alice")
+        first = app.client.post(f"/reports/{report.id}/shares").json()
+        second = app.client.post(f"/reports/{report.id}/shares").json()
+        listed = app.client.get(f"/reports/{report.id}/shares")
+        assert listed.status_code == 200
+        assert {share["share_id"] for share in listed.json()} == {
+            first["share_id"], second["share_id"],
+        }
+        assert {share["path"] for share in listed.json()} == {
+            first["path"], second["path"],
+        }
+        app.login("bob")
+        assert app.client.get(f"/reports/{report.id}/shares").status_code == 404
+        app.login("alice")
+        assert app.client.delete(
+            f"/reports/{report.id}/shares/{first['share_id']}"
+        ).status_code == 204
+        assert [share["share_id"] for share in app.client.get(
+            f"/reports/{report.id}/shares"
+        ).json()] == [second["share_id"]]
+
+    with App(tmp_path, now=lambda: clock["now"], pdf_renderer=FakePdf()) as restarted:
+        restarted.login("alice")
+        assert restarted.client.get(f"/reports/{report.id}/shares").json() == [second]
+        clock["now"] = T0 + timedelta(days=7)
+        assert restarted.client.get(f"/reports/{report.id}/shares").json() == []
