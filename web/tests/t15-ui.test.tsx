@@ -83,7 +83,6 @@ describe("T15 Watchlist and Diff UI", () => {
 
 describe("T15 Alerts", () => {
   it("links current and previous establishing Reports and marks read", async () => {
-    m.markAlertRead.mockResolvedValue({ ...(await m.listAlerts()), read: true } as never);
     render(<AlertsView />);
     expect(await screen.findByText(/Change detected on 2030-03-01/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open new Report" })).toHaveAttribute("href", "/reports/rep_2");
