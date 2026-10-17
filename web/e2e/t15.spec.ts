@@ -19,8 +19,9 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await page.getByRole("link", { name: "View Diff history" }).click();
   await expect(page).toHaveURL(/\/watchlist\/wl_e2e$/);
   await expect(page.getByText(/changed · material change/i)).toBeVisible();
-  await expect(page.getByText(/Change detected on .*As-of derived from source observation date/)).toHaveCount(2);
+  await expect(page.getByText(/As of .* \(derived from source observation date\)/)).toHaveCount(2);
   await expect(page.getByText(/Changed on/)).toHaveCount(0);
+  await expect(page.getByText(/Change detected on/)).toHaveCount(0);
   await expect(page.getByText("Previous provenance:")).toBeVisible();
   await expect(page.getByText("Current provenance:")).toBeVisible();
 
