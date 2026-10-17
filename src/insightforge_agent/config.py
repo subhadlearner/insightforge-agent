@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # deliberately reuses SESSION_SECRET (the persona cookie has its own purpose prefix).
     share_jwt_secret: SecretStr | None = None
     share_link_ttl_days: int = Field(default=7, gt=0)
-    web_origin: str = "http://127.0.0.1:3000"
+    web_origin: str = "http://localhost:3000"
 
     # Diff (T12): consecutive Not reconfirmed Diffs after which a Finding shows as unconfirmed.
     not_reconfirmed_threshold: int = Field(default=3, ge=1)
