@@ -14,7 +14,10 @@ const finding: api.Finding = {
   key: "model3|price|china", subject: "Model 3", predicate: "price",
   object: "29,000 dollars", polarity: "affirmed", scope: "China",
   as_of_period: "2030-03-01", derived_from: "observation_date",
-  provenance: { run_id: "run_2", report_id: "rep_2", evidence_id: "ev_2", claim: "x", statement: "x" },
+  provenance: {
+    run_id: "run_2", report_id: "rep_2", evidence_id: "ev_2", claim: "x", statement: "x",
+    source_ids: ["src_2"], observation_dates: { obs_2: "2030-03-01T09:00:00Z" },
+  },
 };
 
 const dashboard: api.WatchlistDashboard = {
