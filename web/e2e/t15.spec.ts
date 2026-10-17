@@ -66,6 +66,8 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await expect(publicPage.getByRole("link", { name: "Watchlist" })).toHaveCount(0);
   await expect(publicPage.getByRole("link", { name: "Alerts" })).toHaveCount(0);
 
+  await page.reload();
+  await expect(page.getByRole("list", { name: "Active share links" }).getByRole("link")).toHaveAttribute("href", path!);
   await page.getByRole("button", { name: "Revoke share link" }).click();
   await expect(page.getByText(/can no longer be opened/)).toBeVisible();
   await publicPage.reload();
