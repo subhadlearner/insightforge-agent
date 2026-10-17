@@ -165,7 +165,11 @@ class Runtime:
         deps.on_complete = schedules.completed
         retention = RetentionSweeper(repos.retention, deps.doc_index, deps.now,
                                      retention_days=settings.retention_days, closing=closing)
-        share_secret = (settings.share_jwt_secret or settings.session_secret).get_secret_value()
+        configured_share_secret = (
+            settings.share_jwt_secret.get_secret_value()
+            if settings.share_jwt_secret is not None else ""
+        )
+        share_secret = configured_share_secret or settings.session_secret.get_secret_value()
         return cls(settings=settings, session=session, repos=repos, deps=deps,
                    scheduler=scheduler, executor=executor,
                    clarifications=ClarificationService(deps, submit=executor.submit),
