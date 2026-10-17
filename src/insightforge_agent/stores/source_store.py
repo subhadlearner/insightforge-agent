@@ -143,6 +143,11 @@ class SourceStore:
         """A bounded batch of Passages by identity, in the order asked."""
         return [self._passages.get(owner_id, observation_id, i) for i in indices]
 
+    def source_for_passage(self, owner_id: str, ref: PassageRef) -> Source:
+        """Resolve only Source metadata behind a Passage reference, without reading text."""
+        observation = self._observations.get(owner_id, ref.observation_id)
+        return self._sources.get(owner_id, observation.source_id)
+
     def citation(self, owner_id: str, ref: PassageRef) -> Citation:
         """Resolve a Passage reference to its text and Source. Claim position and Evidence id
         are left for the caller to fill. Raises NotFoundError if any record is missing."""
