@@ -245,7 +245,14 @@ def build(tmp: Path, sse_seconds: float):
             )],
         )
         detail = {
-            "entries": [entry.model_dump(mode="json")],
+            "entries": [
+                entry.model_dump(mode="json"),
+                DiffEntry(
+                    outcome="not_reconfirmed", key=unconfirmed_finding.key,
+                    previous=unconfirmed_finding, finding=None,
+                    not_reconfirmed=1, unconfirmed=False,
+                ).model_dump(mode="json"),
+            ],
             "skipped": [],
             "intervening_failed": [],
         }
