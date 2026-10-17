@@ -46,6 +46,34 @@ Report whose provenance does not resolve is 500, never a partial list. The estim
 `RUNTIME_ESTIMATE_*`: a rough guide, not a promise, and it checks nothing, so a submission can
 still be refused with 422.
 
+## Web UI (T14)
+
+The Next.js app in `web/` is the research workbench: pick a persona, write a Brief, choose
+sources and attach PDFs, see the runtime estimate, follow the Run live, answer a clarifying
+question, and read the Report with a citation drawer for every Claim. Run the API as above,
+then in a second terminal (Node 20.9 or later):
+
+```
+cd web
+npm install
+npm run dev
+```
+
+Open http://localhost:3000 (use `localhost`: `next dev` blocks its development assets for
+other host names such as `127.0.0.1`). The browser only talks to Next; `/api/*` is rewritten
+to FastAPI, so the persona cookie and the live progress stream are same-origin and no CORS is
+configured. `INSIGHTFORGE_API_ORIGIN` (default `http://127.0.0.1:8000`) tells the Next server
+where FastAPI is; `next dev` reads it at start, and `next build` bakes it into the build that
+`next start` serves.
+
+| Command (in `web/`) | What it does |
+|---|---|
+| `npm test` | unit and component tests (Vitest, jsdom) |
+| `npm run typecheck` | TypeScript |
+| `npm run build` | production build |
+| `npm run test:e2e` | Playwright through the real rewrite, against `tests/web_e2e/server.py` (scripted models, no keys); first run `npx playwright install chromium`; needs `uv` |
+| `npm run api:types` | regenerate `lib/api-schema.d.ts` from a running API's OpenAPI schema |
+
 ## Offline demo: Extraction and synthesis
 
 Exercise the real Extraction and synthesis stages with seeded Sources and scripted models. No
