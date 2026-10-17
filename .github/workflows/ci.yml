@@ -9,7 +9,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -47,7 +47,7 @@ jobs:
       - name: Install web dependencies
         working-directory: web
         run: npm ci
-      - name: Generate current API types
+      - name: Generated API schema is current
         run: |
           E2E_PORT=8201 E2E_SSE_SECONDS=1 E2E_WEB_ORIGIN=http://127.0.0.1:3200 uv run python -m tests.web_e2e.server &
           backend=$!
@@ -60,22 +60,7 @@ jobs:
           cd web
           INSIGHTFORGE_API_ORIGIN=http://127.0.0.1:8201 npm run api:types
           cd ..
-          if ! git diff --quiet -- web/lib/api-schema.d.ts; then
-            cp web/lib/api-schema.d.ts /tmp/api-schema.d.ts
-            git fetch origin feature/t15-watchlist-export-share
-            git checkout -B t15-schema origin/feature/t15-watchlist-export-share
-            cp /tmp/api-schema.d.ts web/lib/api-schema.d.ts
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add web/lib/api-schema.d.ts
-            git commit -m "T15: regenerate OpenAPI types [skip ci]"
-            git push origin HEAD:feature/t15-watchlist-export-share
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: t15-generated-api-schema
-          path: web/lib/api-schema.d.ts
-          overwrite: true
+          git diff --exit-code -- web/lib/api-schema.d.ts
       - name: Frontend unit and component tests
         working-directory: web
         run: npm test
