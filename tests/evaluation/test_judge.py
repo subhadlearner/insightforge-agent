@@ -1,0 +1,104 @@
+"""Synthesis quality (T16 #17): one LLM-judge call per Report against a fixed, versioned rubric.
+A reply that is not a complete, in-range score sheet is an error, never a score; the judge
+scores synthesis only and sees no Passage text."""
+
+import json
+from pathlib import Path
+
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+from insightforge_agent.evaluation.judge import (
+    CRITERIA,
+    RUBRIC_VERSION,
+    judge_synthesis,
+    not_judged,
+)
+from insightforge_agent.evaluation.library import load_library
+from tests.evaluation.builders import World, claim, historical, item, report, section, verdict
+from tests.scripted import ScriptedChat
+
+ROOT = Path(__file__).resolve().parents[2]
+SAMPLE = next(s for s in load_library(ROOT / "samples" / "briefs", ROOT)
+              if s.id == "memory-prior-report")
+PASSAGE_TEXT = "PASSAGE-ONLY-TEXT BYD sold 4.27 million vehicles in 2025."
+
+
+def judge(reply: str) -> ScriptedChat:
+    return ScriptedChat(script=[AIMessage(content=reply)])
+
+
+def sheet(**scores) -> str:
+    full = {c: 4 for c in CRITERIA} | scores
+    return json.dumps({**full, "rationale": "Clear and well organised."})
+
+
+def stored():
+    w = World()
+    [p] = w.web("https://a.example/1", PASSAGE_TEXT)
+    [old] = w.web("https://old.example/1", "BYD led LFP batteries.")
+    r = report([section("Recent sales and pricing", claim("BYD sold 4.27 million vehicles.",
+                                                          "ev_1")),
+                section("Earlier findings", claim("BYD led LFP batteries (reported 2026-03-01).",
+                                                  "hist_1", historical_=True))],
+               [item("ev_1", p)], [historical("hist_1", old)],
+               verdicts=[verdict(0, 0, "ev_1", "unverified", p)], gaps=["Pricing in Europe."])
+    return r
+
+
+def test_a_complete_score_sheet_is_judged_with_its_rubric_version():
+    result = judge_synthesis(judge(sheet(coverage=5, synthesis=3)), SAMPLE, stored())
+    assert result.status == "judged" and result.rubric_version == RUBRIC_VERSION
+    assert result.scores == {"coverage": 5, "organisation": 4, "synthesis": 3, "calibration": 4}
+    assert result.score == 4.0
+
+
+def test_the_judge_sees_the_brief_the_expected_structure_and_the_report_as_published():
+    model = judge(sheet())
+    judge_synthesis(model, SAMPLE, stored())
+    [conversation] = model.seen
+    system = next(str(m.content) for m in conversation if isinstance(m, SystemMessage))
+    user = next(str(m.content) for m in conversation if isinstance(m, HumanMessage))
+    assert SAMPLE.brief in user
+    for expected in SAMPLE.expected_report_structure.sections:
+        assert expected.heading in user
+    assert "BYD sold 4.27 million vehicles. [UNVERIFIED]" in user  # the published draft
+    assert "(historical) BYD led LFP batteries" in user
+    assert "Pricing in Europe." in user
+    assert "PASSAGE-ONLY-TEXT" not in user  # synthesis is judged without Passage text
+    assert "Do not judge factual accuracy" in system and RUBRIC_VERSION in system
+
+
+def test_a_reply_that_is_not_json_is_an_error_not_a_score():
+    result = judge_synthesis(judge("The report is good. 4/5."), SAMPLE, stored())
+    assert result.status == "error" and result.score is None and result.scores is None
+    assert result.reason
+
+
+def test_a_missing_criterion_is_an_error():
+    partial = json.loads(sheet())
+    del partial["calibration"]
+    result = judge_synthesis(judge(json.dumps(partial)), SAMPLE, stored())
+    assert result.status == "error" and result.score is None
+
+
+def test_an_out_of_range_or_fractional_score_is_an_error():
+    for bad in (6, 0, 3.5):
+        result = judge_synthesis(judge(sheet(coverage=bad)), SAMPLE, stored())
+        assert result.status == "error" and result.score is None, bad
+
+
+def test_an_extra_criterion_is_an_error():
+    extra = json.loads(sheet()) | {"accuracy": 5}
+    assert judge_synthesis(judge(json.dumps(extra)), SAMPLE, stored()).status == "error"
+
+
+def test_a_judge_call_that_raises_is_an_error():
+    def boom(messages):
+        raise RuntimeError("provider unavailable")
+    result = judge_synthesis(ScriptedChat(reply=boom), SAMPLE, stored())
+    assert result.status == "error" and "provider unavailable" in result.reason
+
+
+def test_without_a_judge_synthesis_is_not_judged():
+    result = not_judged("--judge-provider none")
+    assert result.status == "not_judged" and result.score is None and result.scores is None

@@ -1,0 +1,96 @@
+{
+  "provider": "tavily",
+  "recorded": "fictional",
+  "_note": "FICTIONAL TEST DATA for the offline evaluation harness (tests/evaluation/world.py). Every page is invented, internally consistent and marked as fictional in its title. None of it is real market evidence.",
+  "queries": {
+    "AWS Azure Google Cloud revenue growth 2025": [
+      {"url": "https://cloud-earnings.example/2025-results", "title": "Hyperscaler results for 2025 (fictional test data)"},
+      {"url": "https://markets-desk.example/cloud-growth", "title": "Cloud growth compared (fictional test data)"}
+    ],
+    "cloud infrastructure market share 2025 AWS Azure Google Cloud": [
+      {"url": "https://infra-analyst.example/market-share-q4-2025", "title": "Cloud infrastructure market share, Q4 2025 (fictional test data)"},
+      {"url": "https://markets-desk.example/cloud-growth", "title": "Cloud growth compared (fictional test data)"}
+    ],
+    "AI infrastructure capital expenditure 2025 Amazon Microsoft Alphabet": [
+      {"url": "https://capex-tracker.example/ai-capex-2025", "title": "AI data-centre spending in 2025 (fictional test data)"}
+    ],
+    "US export controls AI chips China 2025 rule changes": [
+      {"url": "https://trade-policy.example/ai-chip-rules-2025", "title": "AI chip export rules in 2025 (fictional test data)"},
+      {"url": "https://chip-wire.example/licence-reversal", "title": "Chip licence policy reversed (fictional test data)"}
+    ],
+    "Nvidia AMD China revenue impact export controls 2025": [
+      {"url": "https://chip-wire.example/earnings-impact", "title": "Export rules hit chip earnings (fictional test data)"}
+    ],
+    "Nvidia AMD China specific AI chip products 2025": [
+      {"url": "https://chip-wire.example/china-products", "title": "China-specific AI chips (fictional test data)"}
+    ],
+    "global solar PV installed capacity 2025 gigawatts": [
+      {"url": "https://solar-stats.example/2025-installations", "title": "Solar installations in 2025 (fictional test data)"},
+      {"url": "https://energy-agency.example/renewables-2025", "title": "Renewables review 2025 (fictional test data)"}
+    ],
+    "leading solar markets 2025 China United States India installations": [
+      {"url": "https://solar-stats.example/country-markets", "title": "Leading solar markets in 2025 (fictional test data)"}
+    ],
+    "solar PV installation forecast 2026 outlook": [
+      {"url": "https://energy-agency.example/outlook-2026", "title": "Solar outlook for 2026 (fictional test data)"},
+      {"url": "https://solar-stats.example/2025-installations", "title": "Solar installations in 2025 (fictional test data)"}
+    ],
+    "medical devices market growth 2025": [
+      {"url": "https://medtech-markets.example/2025-growth", "title": "Medical devices market in 2025 (fictional test data)"}
+    ]
+  },
+  "pages": {
+    "https://cloud-earnings.example/2025-results": {
+      "title": "Hyperscaler results for 2025 (fictional test data)",
+      "body": "Amazon Web Services revenue grew 17 percent in 2025 to 118 billion dollars.\n\nMicrosoft Azure revenue grew 31 percent in 2025.\n\nGoogle Cloud revenue grew 28 percent in 2025 to 54 billion dollars."
+    },
+    "https://markets-desk.example/cloud-growth": {
+      "title": "Cloud growth compared (fictional test data)",
+      "body": "Azure grew faster than Amazon Web Services in every quarter of 2025.\n\nGoogle Cloud reported an operating margin of 17 percent in 2025."
+    },
+    "https://infra-analyst.example/market-share-q4-2025": {
+      "title": "Cloud infrastructure market share, Q4 2025 (fictional test data)",
+      "body": "Amazon Web Services held 30 percent of the cloud infrastructure market in the fourth quarter of 2025.\n\nMicrosoft Azure held 22 percent of the cloud infrastructure market in the fourth quarter of 2025.\n\nGoogle Cloud held 13 percent of the cloud infrastructure market in the fourth quarter of 2025."
+    },
+    "https://capex-tracker.example/ai-capex-2025": {
+      "title": "AI data-centre spending in 2025 (fictional test data)",
+      "body": "Amazon spent 125 billion dollars on capital expenditure in 2025, mostly on AI data centres.\n\nMicrosoft spent 88 billion dollars on capital expenditure in fiscal 2025.\n\nAlphabet spent 91 billion dollars on capital expenditure in 2025."
+    },
+    "https://trade-policy.example/ai-chip-rules-2025": {
+      "title": "AI chip export rules in 2025 (fictional test data)",
+      "body": "The Commerce Department announced new AI chip export rules on 13 January 2025.\n\nThe January 2025 export rules took effect on 15 May 2025.\n\nIn April 2025 the Commerce Department required a licence for H20 chip sales to China."
+    },
+    "https://chip-wire.example/licence-reversal": {
+      "title": "Chip licence policy reversed (fictional test data)",
+      "body": "In August 2025 the Commerce Department began granting H20 export licences again."
+    },
+    "https://chip-wire.example/earnings-impact": {
+      "title": "Export rules hit chip earnings (fictional test data)",
+      "body": "Nvidia recorded a 4.5 billion dollar charge on H20 inventory in the first quarter of its fiscal 2026.\n\nAMD expected an 800 million dollar charge from the April 2025 export licence requirement.\n\nNvidia said China was 13 percent of its revenue in fiscal 2025."
+    },
+    "https://chip-wire.example/china-products": {
+      "title": "China-specific AI chips (fictional test data)",
+      "body": "Nvidia designed the H20 chip for China to stay within the export limits.\n\nAMD designed the MI308 accelerator for customers in China."
+    },
+    "https://solar-stats.example/2025-installations": {
+      "title": "Solar installations in 2025 (fictional test data)",
+      "body": "The world installed 597 gigawatts of new solar PV capacity in 2025.\n\nNew solar PV installations in 2025 were 33 percent higher than in 2024."
+    },
+    "https://energy-agency.example/renewables-2025": {
+      "title": "Renewables review 2025 (fictional test data)",
+      "body": "The energy agency estimated 560 gigawatts of new solar PV capacity in 2025."
+    },
+    "https://solar-stats.example/country-markets": {
+      "title": "Leading solar markets in 2025 (fictional test data)",
+      "body": "China installed 329 gigawatts of solar PV capacity in 2025.\n\nThe United States installed 43 gigawatts of solar PV capacity in 2025.\n\nIndia installed 31 gigawatts of solar PV capacity in 2025."
+    },
+    "https://energy-agency.example/outlook-2026": {
+      "title": "Solar outlook for 2026 (fictional test data)",
+      "body": "The energy agency forecasts 620 gigawatts of new solar PV capacity in 2026.\n\nThe 2026 forecast assumes slower solar growth in China."
+    },
+    "https://medtech-markets.example/2025-growth": {
+      "title": "Medical devices market in 2025 (fictional test data)",
+      "body": "The global medical devices market grew 6 percent in 2025.\n\nCardiology devices grew 9 percent in 2025, the fastest medical device segment."
+    }
+  }
+}
