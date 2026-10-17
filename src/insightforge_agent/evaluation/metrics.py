@@ -18,7 +18,7 @@ from datetime import date
 
 from pydantic import BaseModel, ValidationError, computed_field
 
-from insightforge_agent.domain.contracts import ClaimVerdict, HistoricalContext
+from insightforge_agent.domain.contracts import ClaimVerdict, HistoricalContext, ReportDraft
 from insightforge_agent.domain.errors import ProvenanceError
 from insightforge_agent.domain.memory import without_report_date
 from insightforge_agent.domain.models import Report
@@ -58,8 +58,11 @@ class FactCheckMetrics(BaseModel):
 
 
 def fact_check_metrics(report: Report) -> FactCheckMetrics:
-    """The persisted fact-check counts, cross-checked against the persisted verdicts."""
+    """The persisted fact-check counts, cross-checked against the persisted verdicts and the
+    stored draft: each verdict names a distinct Claim of the draft by position and cites that
+    Claim's item. Inconsistent data is refused, never repaired."""
     try:
+        draft = ReportDraft.model_validate(report.body["draft"])
         verified = report.body["verified"]
         summary = verified["summary"]
         verdicts = [ClaimVerdict.model_validate(v) for v in verified["verdicts"]]
@@ -68,6 +71,25 @@ def fact_check_metrics(report: Report) -> FactCheckMetrics:
                              unchecked=summary["unchecked"])
     except (KeyError, TypeError, ValidationError) as e:
         raise MetricError(f"report {report.id}: no usable fact-check result: {e!r}") from e
+    claims = {(si, ci): c for si, s in enumerate(draft.sections)
+              for ci, c in enumerate(s.claims)}
+    if m.claims != len(claims):
+        raise MetricError(f"report {report.id}: the fact-check summary counts {m.claims} claims; "
+                          f"the draft has {len(claims)}")
+    seen: set[tuple[int, int]] = set()
+    for v in verdicts:
+        where = (v.section, v.claim)
+        if where not in claims:
+            raise MetricError(f"report {report.id}: a verdict names claim {v.section}.{v.claim}; "
+                              "the draft has no Claim there")
+        if where in seen:
+            raise MetricError(f"report {report.id}: claim {v.section}.{v.claim} has a verdict "
+                              "more than once")
+        if v.evidence_id != claims[where].evidence_id:
+            raise MetricError(f"report {report.id}: the verdict on claim {v.section}.{v.claim} "
+                              f"cites {v.evidence_id}; the Claim cites "
+                              f"{claims[where].evidence_id}")
+        seen.add(where)
     counted = {k: sum(v.verdict == k for v in verdicts)
                for k in ("verified", "unverified", "unchecked")}
     stated = {"verified": m.verified, "unverified": m.unverified, "unchecked": m.unchecked}

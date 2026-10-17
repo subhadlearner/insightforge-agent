@@ -57,6 +57,42 @@ def test_a_summary_that_disagrees_with_its_verdicts_is_refused():
         fact_check_metrics(r)
 
 
+def one_claim_report(verdicts_for):
+    """One Claim, citing ev_0, with the verdicts `verdicts_for(ref)` builds; the summary
+    agrees with those verdicts, as a summary written from them would."""
+    w = World()
+    [ref] = w.web("https://a.example/1", "Paragraph.")
+    return report([section("Findings", claim("Claim.", "ev_0"))], [item("ev_0", ref)],
+                  verdicts=verdicts_for(ref))
+
+
+def test_a_duplicated_verdict_is_refused_not_counted_twice():
+    """Two verified verdicts on the one Claim would otherwise read as 2 of 2 checked."""
+    r = one_claim_report(lambda ref: [verdict(0, 0, "ev_0", "verified", ref)] * 2)
+    with pytest.raises(MetricError, match="more than once"):
+        fact_check_metrics(r)
+
+
+def test_a_verdict_on_a_claim_the_report_does_not_have_is_refused():
+    for section_, claim_ in ((0, 1), (1, 0), (-1, 0)):
+        r = one_claim_report(lambda ref: [verdict(section_, claim_, "ev_0", "verified", ref)])
+        with pytest.raises(MetricError, match="no Claim"):
+            fact_check_metrics(r)
+
+
+def test_a_verdict_whose_evidence_is_not_its_claims_is_refused():
+    r = one_claim_report(lambda ref: [verdict(0, 0, "ev_other", "verified", ref)])
+    with pytest.raises(MetricError, match="ev_other"):
+        fact_check_metrics(r)
+
+
+def test_a_summary_claim_count_that_is_not_the_reports_is_refused():
+    r = checked_report("verified", "unverified")
+    r.body["verified"]["summary"]["claims"] = 3
+    with pytest.raises(MetricError, match="claims"):
+        fact_check_metrics(r)
+
+
 def test_a_report_without_a_fact_check_summary_is_refused():
     r = checked_report("verified")
     del r.body["verified"]

@@ -8,13 +8,16 @@ never run by the default test suite. Each provider gets its own SQLite files und
 directory and an in-process vector store; the app's database is never touched. One judge
 scores every provider, so their synthesis scores can be compared. Writes `eval-report.json`
 and `eval-report.md`. Exit 0 once the report is written, whatever it measured; 2 for a usage
-or configuration error, before any Run starts."""
+or configuration error, and 1 when the judge or a provider's pipeline cannot be built: both
+before any Run starts, leaving no output behind."""
 
 import argparse
+import shutil
 import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -163,19 +166,33 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
 
     started = now()
     out = opts.out / started.strftime("%Y%m%dT%H%M%SZ")
-    out.mkdir(parents=True, exist_ok=False)
     judge, identity = None, JudgeIdentity(provider="none", rubric_version=RUBRIC_VERSION)
     if judge_settings is not None:
-        judge = make_judge(judge_settings)
+        try:
+            judge = make_judge(judge_settings)
+        except Exception as e:  # noqa: BLE001 - reported; nothing has been written or run
+            return _cannot_build(f"the {opts.judge_provider} judge", e)
         identity = JudgeIdentity(
             provider=opts.judge_provider, rubric_version=RUBRIC_VERSION,
             model=configured_model_name(JUDGE_ROLE, judge_settings),
             runtime_model=_model_id(judge), role=JUDGE_ROLE, inference=_inference(judge))
-    results = []
-    for provider in opts.provider:
-        print(f"eval: {provider}: running {len(samples)} brief(s)", file=sys.stderr)
-        results.append(_evaluate(provider, settings[provider], samples, info, root,
-                                 out / provider, make_deps, judge))
+    with ExitStack() as stack:
+        # Every provider is wired before any Run starts, so a construction failure costs no
+        # provider calls and leaves no partial evaluation behind.
+        out.mkdir(parents=True, exist_ok=False)
+        built = {}
+        for provider in opts.provider:
+            try:
+                built[provider] = _open(settings[provider], out / provider, make_deps, stack)
+            except Exception as e:  # noqa: BLE001
+                stack.close()
+                shutil.rmtree(out)
+                return _cannot_build(f"the {provider} pipeline", e)
+        results = []
+        for provider, deps in built.items():
+            print(f"eval: {provider}: running {len(samples)} brief(s)", file=sys.stderr)
+            results.append(_evaluate(provider, settings[provider], deps, samples, info, root,
+                                     out / provider, judge))
     report = EvalReport(generated_at=started, library=info, code=_code_version(root),
                         judge=identity, providers=results,
                         comparability=comparability_of(results))
@@ -185,37 +202,43 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
     return 0
 
 
-def _evaluate(provider: str, settings: Settings, samples, library: LibraryInfo, root: Path,
-              workdir: Path, make_deps: MakeDeps,
-              judge: BaseChatModel | None) -> ProviderResult:
+def _open(settings: Settings, workdir: Path, make_deps: MakeDeps, stack: ExitStack) -> Deps:
+    """One provider's own SQLite files and vector store, and its Deps over them; `stack`
+    closes them."""
     workdir.mkdir(parents=True)
     repos = SqliteRepos(str(workdir / "eval.db"))
+    stack.callback(repos.close)
     ck = sqlite3.connect(str(workdir / "checkpoints.db"), check_same_thread=False)
+    stack.callback(ck.close)
     qdrant = QdrantClient(":memory:")
-    try:
-        deps = make_deps(settings, repos, SqliteSaver(ck), qdrant)
-        sample_results = []
-        for sample in samples:
-            print(f"eval: {provider}: {sample.id}", file=sys.stderr)
-            sample_results.append(evaluate_sample(deps, sample, root, judge))
-        runtime = {role: _model_id(getattr(deps, f"{role}_model"))
-                   for role in ("planner", "writer", "light", "researcher")}
-        services = {"embedder": _model_id(deps.embedder), "search": _model_id(deps.search),
-                    "fetcher": _model_id(deps.fetcher)}
-        conditions = _conditions(settings, deps)
-    finally:
-        qdrant.close()
-        ck.close()
-        repos.close()
+    stack.callback(qdrant.close)
+    return make_deps(settings, repos, SqliteSaver(ck), qdrant)
+
+
+def _evaluate(provider: str, settings: Settings, deps: Deps, samples, library: LibraryInfo,
+              root: Path, workdir: Path, judge: BaseChatModel | None) -> ProviderResult:
+    sample_results = []
+    for sample in samples:
+        print(f"eval: {provider}: {sample.id}", file=sys.stderr)
+        sample_results.append(evaluate_sample(deps, sample, root, judge))
     totals = totals_of(sample_results)
     return ProviderResult(
         provider=provider,
         configured_models={role: configured_model_name(role, settings) for role in ROLES},
-        runtime_models=runtime, runtime_services=services, conditions=conditions,
-        workdir=str(workdir), samples=sample_results, totals=totals,
-        remediation=remediation_of(provider, sample_results, totals, library))
+        runtime_models={role: _model_id(getattr(deps, f"{role}_model"))
+                        for role in ("planner", "writer", "light", "researcher")},
+        runtime_services={"embedder": _model_id(deps.embedder),
+                          "search": _model_id(deps.search), "fetcher": _model_id(deps.fetcher)},
+        conditions=_conditions(settings, deps), workdir=str(workdir), samples=sample_results,
+        totals=totals, remediation=remediation_of(provider, sample_results, totals, library))
 
 
 def _usage(message: str) -> int:
     print(f"insightforge-agent eval: error: {message}", file=sys.stderr)
     return 2
+
+
+def _cannot_build(what: str, error: Exception) -> int:
+    print(f"insightforge-agent eval: error: could not build {what}: {type(error).__name__}: "
+          f"{error}; no Run was started and no report was written", file=sys.stderr)
+    return 1

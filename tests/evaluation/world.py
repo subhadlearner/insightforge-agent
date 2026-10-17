@@ -7,7 +7,11 @@ the plan (documents, memory or web), so one Deps serves every sample brief. Per 
 brief whose text holds a `fail_all` keyword gets only failing Sub-tasks (a Failed Run), one
 with a `fail_one` keyword loses its last Sub-task (a Run that completes with a gap), and
 `drift` makes every re-fetch of a page return different text (the Fact-Checker finds no match,
-so its Claims are unverified). `overrides` sets Deps fields (pipeline settings) per provider."""
+so its Claims are unverified). `overrides` sets Deps fields (pipeline settings) per provider.
+
+Every web brief researches the same recorded EV pages, so this world shows orchestration (each
+sample's Brief, source types and expected structure reaching the pipeline and the judge), not
+research quality on the brief's own subject."""
 
 import json
 import re

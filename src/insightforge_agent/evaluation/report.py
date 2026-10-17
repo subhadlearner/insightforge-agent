@@ -147,15 +147,17 @@ def remediation_of(provider: str, samples: list[SampleResult], totals: Totals,
             f"partial run ({len(samples)} of the {LIBRARY_SIZE}-brief library); pass rate "
             f"{shown}" + (f", below {PASS_RATE_THRESHOLD:.0%}" if below else "")
             + "; section 11 is decided on the full Anthropic run"))
+    # Completeness first: a rate over fewer briefs than the run held decides nothing.
+    unmeasured = [s.sample_id for s in samples if s.fact_check is None]
+    if rate is None or unmeasured:
+        return Remediation(status="undetermined", reason=(
+            f"pass rate {shown}" + (f", below {PASS_RATE_THRESHOLD:.0%}," if below else "")
+            + f" over {len(samples) - len(unmeasured)} of {len(samples)} briefs; "
+            f"not measured: {', '.join(unmeasured) or 'none'}"))
     if below:
         return Remediation(status="required", reason=(
             f"pass rate {shown} is below {PASS_RATE_THRESHOLD:.0%}: a documented remediation "
             "attempt is required (design.md section 11)"))
-    unmeasured = [s.sample_id for s in samples if s.fact_check is None]
-    if rate is None or unmeasured:
-        return Remediation(status="undetermined", reason=(
-            f"pass rate {shown} over {len(samples) - len(unmeasured)} of {len(samples)} briefs; "
-            f"not measured: {', '.join(unmeasured) or 'none'}"))
     return Remediation(status="not_required",
                        reason=f"pass rate {shown} meets {PASS_RATE_THRESHOLD:.0%}")
 
@@ -228,6 +230,8 @@ def definitions(judge: JudgeIdentity, conditions: dict[str, Setting]) -> str:
 - Clarification is off (no timeout scheduler): a Planner question is refused and the Brief is
   planned as given, as for a Watchlist Run.
 - Runs use an in-process vector store and their own SQLite files, never the app's database.
+- Each brief's expected structure and `checks` are descriptive: the judge reads the structure,
+  but no metric here enforces the checks. They are reviewed by hand.
 """
 
 

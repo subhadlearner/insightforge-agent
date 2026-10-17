@@ -9,11 +9,12 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.evaluation.cli import main
 from insightforge_agent.evaluation.judge import CRITERIA, RUBRIC_VERSION
+from insightforge_agent.evaluation.library import load_library
 from insightforge_agent.stores.sqlite import SqliteRepos
 from tests.evaluation.world import World
 from tests.scripted import ScriptedChat
@@ -42,11 +43,12 @@ class Judges:
     """The judge factory: records the Settings it was built from."""
 
     def __init__(self, reply: str = SHEET) -> None:
-        self.reply, self.built = reply, []
+        self.reply, self.built, self.models = reply, [], []
 
     def __call__(self, settings):
         self.built.append(settings)
-        return TunedChat(reply=lambda messages: AIMessage(content=self.reply))
+        self.models.append(TunedChat(reply=lambda messages: AIMessage(content=self.reply)))
+        return self.models[-1]
 
 
 def evaluate(tmp_path, *args, world=None, judges=None) -> tuple[int, dict, Path]:
@@ -92,10 +94,11 @@ def full_run(tmp_path_factory):
         mp.setenv(key, "test-key-not-used")
     mp.setenv("SEARCH_PROVIDERS", "tavily")
     mp.chdir(tmp)
-    judges = Judges()
+    judges, world = Judges(), World()
+    judges.world = world  # the scripted models record what each Run's Planner was given
     try:
         code, report, run_dir = evaluate(tmp, "--provider", "anthropic", "--judge-provider",
-                                         "groq", judges=judges)
+                                         "groq", world=world, judges=judges)
     finally:
         mp.undo()
     return code, report, run_dir, judges
@@ -143,6 +146,51 @@ def test_citation_accuracy_covers_every_claim_of_every_report(full_run):
         assert sum(k["claims"] for k in s["citations"]["by_kind"].values()) == claims
     assert result["totals"]["citations"]["claims"] == sum(
         s["citations"]["claims"] for s in result["samples"])
+
+
+# What tells the samples apart, as each Brief states it. The scripted research content is
+# shared fixture material, so these tests show that each sample's own scope reaches the
+# Planner and the judge; research quality on real content is T18's to judge.
+DISTINCT = {
+    "competitive-landscape-cloud": ("Amazon Web Services", "Microsoft Azure", "Google Cloud"),
+    "regulatory-impact-semiconductors": ("export controls", "Nvidia", "AMD"),
+    "market-sizing-solar": ("newly installed", "outlook for 2026", "forecasts"),
+    "document-annual-report": ("Northwind Health", "annual report"),
+    "memory-prior-report": ("earlier report", "last six months"),
+}
+ALLOWED = {"document-annual-report": "web, documents", "memory-prior-report": "web, memory"}
+
+
+def human_texts(model) -> list[str]:
+    return list(dict.fromkeys(str(m.content) for conv in model.seen for m in conv
+                              if isinstance(m, HumanMessage)))
+
+
+def test_each_samples_own_brief_and_sources_reach_the_planner(full_run):
+    _, _, _, judges = full_run
+    plans = [t for t in human_texts(judges.world.built["anthropic"].planner_model)
+             if t.startswith("PLAN.")]
+    for sample in load_library(LIBRARY, ROOT):
+        [plan] = [t for t in plans if f"Brief: {sample.brief}" in t]
+        assert f"Allowed source types: {ALLOWED.get(sample.id, 'web')}." in plan, sample.id
+        assert all(term in plan for term in DISTINCT[sample.id]), sample.id
+        brief_part = plan.split("\nEarlier Runs")[0]  # summaries may mention the setup Run
+        assert not any(DISTINCT[o][0] in brief_part for o in DISTINCT if o != sample.id)
+    # The memory follow-up plans with its setup Run's summary, never another sample's.
+    [follow_up] = [t for t in plans if "Update the earlier briefing on BYD" in t]
+    assert "Earlier Runs" in follow_up and "Amazon Web Services" not in follow_up
+
+
+def test_each_samples_brief_and_expected_structure_reach_the_judge(full_run):
+    _, _, _, judges = full_run
+    [judge] = judges.models
+    prompts = human_texts(judge)
+    assert len(prompts) == 5
+    for sample in load_library(LIBRARY, ROOT):
+        [prompt] = [p for p in prompts if f"Brief: {sample.brief}" in p]
+        for expected in sample.expected_report_structure.sections:
+            assert f"- {expected.heading}" in prompt, (sample.id, expected.heading)
+            assert all(item in prompt for item in expected.must_cite), sample.id
 
 
 def test_the_document_brief_cites_and_checks_the_uploaded_pdf(full_run):
@@ -291,6 +339,19 @@ def test_below_the_threshold_the_full_anthropic_run_requires_remediation(tmp_pat
     assert anthropic["remediation"]["status"] == "required"
 
 
+def test_a_full_anthropic_run_with_a_failed_brief_below_the_threshold_is_undetermined(tmp_path):
+    world = World(drift=frozenset({"anthropic"}),
+                  fail_all={"anthropic": ("solar photovoltaic",)})
+    code, report, _ = evaluate(tmp_path, "--provider", "anthropic", "--judge-provider", "none",
+                               world=world)
+    anthropic = provider(report, "anthropic")
+    assert code == 0 and anthropic["totals"]["complete"] == 4
+    assert anthropic["totals"]["fact_check"]["pass_rate"] < 0.8
+    assert anthropic["remediation"]["status"] == "undetermined"
+    assert "below 80%" in anthropic["remediation"]["reason"]
+    assert "not measured: market-sizing-solar" in anthropic["remediation"]["reason"]
+
+
 def test_a_partial_anthropic_run_below_the_threshold_is_undetermined_and_says_so(tmp_path):
     world = World(drift=frozenset({"anthropic"}))
     code, report, _ = evaluate(tmp_path, "--provider", "anthropic", "--provider", "gemini",
@@ -369,6 +430,44 @@ def test_bad_arguments_are_refused_before_any_run(tmp_path, args):
     world = World()
     code, _, out = evaluate(tmp_path, *args, world=world)
     assert code == 2 and not out.exists() and world.built == {}
+
+
+class Unbuildable(World):
+    """A world whose Deps cannot be built for one provider (a model or service that fails to
+    construct after its Settings validated)."""
+
+    def __init__(self, broken: str) -> None:
+        super().__init__()
+        self.broken = broken
+
+    def make_deps(self, settings, repos, checkpointer, qdrant):
+        if settings.llm_provider == self.broken:
+            raise RuntimeError("cannot construct the search client")
+        return super().make_deps(settings, repos, checkpointer, qdrant)
+
+
+def test_a_provider_whose_deps_cannot_be_built_stops_before_any_run(tmp_path, capsys):
+    world = Unbuildable("groq")
+    code, _, out = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
+                            "--judge-provider", "none", world=world)
+    assert code == 1 and "groq" in capsys.readouterr().err
+    # No partial evaluation is left behind; `--out` itself may hold earlier evaluations.
+    assert list(out.iterdir()) == []
+    # gemini's Deps were built, but nothing ran on them.
+    gemini = world.built["gemini"]
+    assert gemini.planner_model.seen == [] and gemini.writer_model.seen == []
+
+
+def test_a_judge_that_cannot_be_built_stops_before_any_run(tmp_path, capsys):
+    def broken(settings):
+        raise RuntimeError("cannot construct the judge")
+    world = World()
+    out = tmp_path / "out"
+    code = main(["--library", str(LIBRARY), "--out", str(out), "--provider", "gemini",
+                 "--judge-provider", "groq"], make_deps=world.make_deps, make_judge=broken,
+                root=ROOT)
+    assert code == 1 and "cannot construct the judge" in capsys.readouterr().err
+    assert not out.exists() and world.built == {}
 
 
 def test_the_judge_provider_must_be_chosen_explicitly(tmp_path):
