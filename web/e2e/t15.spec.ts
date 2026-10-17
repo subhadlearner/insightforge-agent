@@ -19,8 +19,10 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await page.getByRole("link", { name: "View Diff history" }).click();
   await expect(page).toHaveURL(/\/watchlist\/wl_e2e$/);
   await expect(page.getByText(/changed · material change/i)).toBeVisible();
-  await expect(page.getByText(/Observed on .*As-of derived from source observation date/)).toBeVisible();
+  await expect(page.getByText(/Change detected on .*As-of derived from source observation date/)).toBeVisible();
   await expect(page.getByText(/Changed on/)).toHaveCount(0);
+  await expect(page.getByText("Previous provenance:")).toBeVisible();
+  await expect(page.getByText("Current provenance:")).toBeVisible();
 
   await page.goto("/alerts");
   await expect(page.getByText(/Change detected on/)).toBeVisible();
@@ -57,6 +59,10 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await expect(publicPage.getByRole("heading", { name: /Model 3 pricing — 29,000 dollars/ })).toBeVisible();
   await expect(publicPage.getByRole("link", { name: "Pricing source t15_2" })).toBeVisible();
   expect((await publicContext.cookies()).some((c) => c.name === "insightforge_persona")).toBe(false);
+  await expect(publicPage.getByRole("navigation", { name: "Research navigation" })).toHaveCount(0);
+  await expect(publicPage.getByLabel("Researching as")).toHaveCount(0);
+  await expect(publicPage.getByRole("link", { name: "Watchlist" })).toHaveCount(0);
+  await expect(publicPage.getByRole("link", { name: "Alerts" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Revoke share link" }).click();
   await expect(page.getByText(/can no longer be opened/)).toBeVisible();
