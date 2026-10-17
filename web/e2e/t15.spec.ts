@@ -11,8 +11,8 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await choosePersona(page);
 
   await page.goto("/watchlist");
-  await expect(page.getByText("3 of 3 runs started", { exact: false })).toBeVisible();
-  await expect(page.getByText(/2 completed · 1 failed/)).toBeVisible();
+  await expect(page.getByText("5 of 5 runs started", { exact: false })).toBeVisible();
+  await expect(page.getByText(/4 completed · 1 failed/)).toBeVisible();
   await expect(page.getByText(/fixture provider unavailable/)).toBeVisible();
   await expect(page.getByText(/3 runs without reconfirmation/)).toBeVisible();
   await expect(page.getByText(/Negated: Model 3.*Autopilot/)).toBeVisible();
@@ -20,7 +20,7 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await page.getByRole("link", { name: "View Diff history" }).click();
   await expect(page).toHaveURL(/\/watchlist\/wl_e2e$/);
   await expect(page.getByText(/changed · material change/i)).toBeVisible();
-  await expect(page.getByText(/As of .* \(derived from source observation date\)/)).toHaveCount(2);
+  await expect(page.locator(".diff-entry--material").getByText(/As of .* \(derived from source observation date\)/)).toHaveCount(2);
   await expect(page.getByText(/Changed on/)).toHaveCount(0);
   await expect(page.getByText(/Change detected on/)).toHaveCount(0);
   await expect(page.getByText("Previously established provenance:")).toBeVisible();
