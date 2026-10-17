@@ -200,7 +200,7 @@ def _claim_sources(
 
 
 def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
-    verified, _, sources = _claim_sources(report, store, owner_id)
+    verified, dates, sources = _claim_sources(report, store, owner_id)
     draft: ReportDraft = verified.draft
     lines = [f"# {draft.title}", ""]
     if draft.summary:
@@ -211,7 +211,10 @@ def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
         lines += [f"## {section.heading}", ""]
         for claim in section.claims:
             source = store.source_for_passage(owner_id, refs[claim.evidence_id])
-            lines.append(f"- {claim.text} [Source {source_numbers[source.id]}]")
+            historical = (f"Background from an earlier Report of {dates[claim.evidence_id]}: "
+                          if claim.historical and claim.evidence_id in dates
+                          else "Background from an earlier Report: " if claim.historical else "")
+            lines.append(f"- {historical}{claim.text} [Source {source_numbers[source.id]}]")
         lines.append("")
     if draft.gaps:
         lines += ["## Gaps & limitations", ""]
