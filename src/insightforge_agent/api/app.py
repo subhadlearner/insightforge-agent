@@ -47,6 +47,7 @@ from fastapi import FastAPI
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from insightforge_agent.api.clarify import clarification_router
+from insightforge_agent.api.insights import insights_router
 from insightforge_agent.api.reports import reports_router
 from insightforge_agent.api.research import research_router
 from insightforge_agent.api.session import PersonaSession
@@ -223,6 +224,7 @@ def create_app(runtime: Runtime) -> FastAPI:
                                        _estimate_coefficients(runtime.settings)))
     app.include_router(clarification_router(runtime.clarifications, user_id))
     app.include_router(watchlist_router(runtime.watchlists, user_id))
+    app.include_router(insights_router(runtime.repos, user_id))
     app.include_router(reports_router(runtime.repos.reports, runtime.deps.store,
                                       user_id))
     return app
