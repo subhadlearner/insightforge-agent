@@ -18,7 +18,9 @@ export function WatchlistDashboard() {
   if (!items.length) return <p className="page-status">No Watchlist Items yet.</p>;
   return (
     <div className="watchlist-grid">
-      {items.map((d) => (
+      {items.map((d) => {
+        const details = new Map(d.recent_failures.map((failure) => [failure.run_id, failure]));
+        return (
         <article className="watchlist-card" key={d.item.id}>
           <h2>{d.item.brief}</h2>
           <p className="watchlist-card__counts">
@@ -28,12 +30,19 @@ export function WatchlistDashboard() {
             {" · "}{d.completed_runs} completed{" · "}{d.failed_runs} failed
           </p>
           <p>Every {d.item.cadence_minutes} minute{d.item.cadence_minutes === 1 ? "" : "s"}.</p>
-          {d.recent_failures.length > 0 && (
+          {d.recent_failed_runs.length > 0 && (
             <div>
               <h3>Recent Failed Runs</h3>
-              <ul>{d.recent_failures.map((f) => (
-                <li key={f.run_id}>{f.stage ? `${f.stage}: ` : ""}{f.reason}</li>
-              ))}</ul>
+              <ul>{d.recent_failed_runs.map((run) => {
+                const failure = details.get(run.id);
+                return (
+                  <li key={run.id}>
+                    {failure
+                      ? `${failure.stage ? `${failure.stage}: ` : ""}${failure.reason}`
+                      : `Run ${run.id} failed`}
+                  </li>
+                );
+              })}</ul>
             </div>
           )}
           {d.unconfirmed_findings.length > 0 && (
@@ -49,7 +58,8 @@ export function WatchlistDashboard() {
           )}
           <Link href={`/watchlist/${encodeURIComponent(d.item.id)}`}>View Diff history</Link>
         </article>
-      ))}
+        );
+      })}
     </div>
   );
 }
