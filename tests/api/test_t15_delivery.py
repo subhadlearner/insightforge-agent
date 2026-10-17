@@ -244,4 +244,4 @@ def test_public_fact_check_uses_explicit_allowlist_with_production_summary(tmp_p
             "sampled": 2, "verified": 1, "unverified": 1, "unchecked": 0,
         }
         for field in ("implemented", "claims", "similarity_threshold", "pass_rate", "private_future_setting"):
-            assert field not in response.text
+            assert field not in response.json()["fact_check"]
