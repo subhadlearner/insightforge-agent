@@ -15,6 +15,7 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await expect(page.getByText(/2 completed · 1 failed/)).toBeVisible();
   await expect(page.getByText(/fixture provider unavailable/)).toBeVisible();
   await expect(page.getByText(/3 runs without reconfirmation/)).toBeVisible();
+  await expect(page.getByText(/Negated: Model 3.*Autopilot/)).toBeVisible();
 
   await page.getByRole("link", { name: "View Diff history" }).click();
   await expect(page).toHaveURL(/\/watchlist\/wl_e2e$/);
@@ -22,8 +23,8 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await expect(page.getByText(/As of .* \(derived from source observation date\)/)).toHaveCount(2);
   await expect(page.getByText(/Changed on/)).toHaveCount(0);
   await expect(page.getByText(/Change detected on/)).toHaveCount(0);
-  await expect(page.getByText("Previous provenance:")).toBeVisible();
-  await expect(page.getByText("Current provenance:")).toBeVisible();
+  await expect(page.getByText("Previously established provenance:")).toBeVisible();
+  await expect(page.getByText("This Run provenance:")).toBeVisible();
 
   await page.goto("/alerts");
   await expect(page.getByText(/Change detected on/)).toBeVisible();
