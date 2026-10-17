@@ -148,7 +148,7 @@ describe("T15 persisted Diff semantic outcomes", () => {
       entries: [{ entry, material }],
     }]);
     render(<WatchlistDiffView itemId="wl_1" />);
-    await screen.findByText(/run run_2/i);
+    await screen.findByRole("heading", { name: "Run run_2" });
   }
 
   it("keeps affirmed and negated sides explicit for no_longer_true", async () => {
