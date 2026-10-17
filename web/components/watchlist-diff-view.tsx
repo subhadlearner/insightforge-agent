@@ -16,7 +16,7 @@ function FindingMeta({ finding, label }: { finding: Finding | null | undefined; 
       <strong>{label} provenance:</strong>{" "}
       <span>
         {finding.derived_from
-          ? `Change detected on ${finding.as_of_period} (As-of derived from source observation date)`
+          ? `As of ${finding.as_of_period} (derived from source observation date)`
           : `As of ${finding.as_of_period}`}
       </span>
       {" · "}
