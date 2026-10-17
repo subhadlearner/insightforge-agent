@@ -141,7 +141,7 @@ def build(tmp: Path, sse_seconds: float):
                     statement="Model 3 does not include Autopilot in China.",
                     confidence="HIGH", primary=feature_ref, supporting=[feature_ref],
                     entity="Model 3", predicate="feature", value="Autopilot",
-                    scope="China", polarity="negated", as_of_period=at.date().isoformat(),
+                    scope="China", as_of_period=at.date().isoformat(),
                     derived_from="observation_date",
                 )
                 feature_claim = Claim(text=feature_evidence.statement, evidence_id=feature_evidence.id)
