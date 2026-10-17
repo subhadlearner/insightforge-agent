@@ -12,10 +12,14 @@ const m = vi.mocked(api);
 
 const finding: api.Finding = {
   key: "model3|price|china", subject: "Model 3", predicate: "price",
-  object: "29,000 dollars", polarity: "affirmed", scope: "China",
+  object: "29,000 dollars", object_key: "29000 dollars",
+  polarity: "affirmed", scope: "China",
   as_of_period: "2030-03-01", derived_from: "observation_date",
+  conflicting: false, resolution: "vocabulary",
   provenance: {
     run_id: "run_2", report_id: "rep_2", evidence_id: "ev_2", claim: "x", statement: "x",
+    primary: { observation_id: "obs_2", index: 0 },
+    supporting: [{ observation_id: "obs_2", index: 0 }],
     source_ids: ["src_2"], observation_dates: { obs_2: "2030-03-01T09:00:00Z" },
   },
 };
@@ -29,7 +33,10 @@ const dashboard: api.WatchlistDashboard = {
   runs_started: 3, completed_runs: 2, failed_runs: 1,
   recent_failed_runs: [],
   recent_failures: [{
-    run_id: "run_bad", stage: "RESEARCHING", reason: "provider unavailable",
+    owner_id: "alice", run_id: "run_bad",
+    run_created_at: "2030-03-01T09:30:00Z", failed_at: "2030-03-01T09:31:00Z",
+    retention_starts_at: "2030-03-01T09:31:00Z",
+    stage: "RESEARCHING", reason: "provider unavailable",
     error_codes: ["all_search_providers_failed"], backfilled: false,
   }],
   unconfirmed_findings: [{ finding, not_reconfirmed: 3, unconfirmed: true }],
@@ -40,9 +47,9 @@ beforeEach(() => {
   m.listWatchlists.mockResolvedValue([dashboard]);
   m.getWatchlist.mockResolvedValue(dashboard);
   m.listDiffs.mockResolvedValue([{
-    watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
+    owner_id: "alice", watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
     status: "succeeded", attempts: 1, error: "", alert_id: "al_2",
-    updated_at: "2030-03-01T10:00:00Z", intervening_failed: [],
+    updated_at: "2030-03-01T10:00:00Z", skipped: [], intervening_failed: [],
     entries: [{
       material: true,
       entry: {
@@ -53,7 +60,7 @@ beforeEach(() => {
     }],
   }]);
   m.listAlerts.mockResolvedValue([{
-    id: "al_2", watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
+    id: "al_2", owner_id: "alice", watchlist_item_id: "wl_1", run_id: "run_2", report_id: "rep_2",
     brief: "Tesla pricing", created_at: "2030-03-01T10:00:00Z", read: false, failed_diffs: [],
     changes: [{
       outcome: "changed", subject: "Model 3", predicate: "price", scope: "China",
