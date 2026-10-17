@@ -146,6 +146,10 @@ class SourceStore:
     def source_for_passage(self, owner_id: str, ref: PassageRef) -> Source:
         """Resolve only Source metadata behind a Passage reference, without reading text."""
         observation = self._observations.get(owner_id, ref.observation_id)
+        # Validate that the cited Passage still exists; only its Source metadata is returned.
+        # This keeps export/share provenance failure semantics aligned with the citation API
+        # without exposing Passage text in the public DTO.
+        self._passages.get(owner_id, ref.observation_id, ref.index)
         return self._sources.get(owner_id, observation.source_id)
 
     def citation(self, owner_id: str, ref: PassageRef) -> Citation:
