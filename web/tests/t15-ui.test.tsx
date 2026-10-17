@@ -31,7 +31,10 @@ const dashboard: api.WatchlistDashboard = {
     created_at: "2030-03-01T09:00:00Z", revision: 1, next_tick_at: "2030-03-01T09:15:00Z",
   },
   runs_started: 3, completed_runs: 2, failed_runs: 1,
-  recent_failed_runs: [],
+  recent_failed_runs: [{
+    id: "run_bad", owner_id: "alice", brief: "Tesla pricing", state: "FAILED",
+    created_at: "2030-03-01T09:30:00Z", watchlist_item_id: "wl_1",
+  }],
   recent_failures: [{
     owner_id: "alice", run_id: "run_bad",
     run_created_at: "2030-03-01T09:30:00Z", failed_at: "2030-03-01T09:31:00Z",
