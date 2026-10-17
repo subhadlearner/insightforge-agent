@@ -79,9 +79,14 @@ def test_an_estimate_creates_no_run_and_takes_no_capacity(tmp_path):
     # One worker, no queue: had an estimate reserved capacity, the submit below would be 503.
     with App(tmp_path, run_concurrency=1, run_queue_limit=0) as app:
         app.login("alice")
+        repos = app.runtime.repos
+        with repos.lock:
+            writes = repos._db.total_changes
         for _ in range(5):
             assert estimate(app, document_count=3).status_code == 200
-        assert app.runtime.repos.runs.list_for_owner("alice") == []
+        with repos.lock:
+            assert repos._db.total_changes == writes  # no row written anywhere
+        assert repos.runs.list_for_owner("alice") == []
         submitted = app.submit()
         assert submitted.status_code == 202
         app.wait(submitted.json()["run_id"])

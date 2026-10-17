@@ -36,6 +36,7 @@ import json
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import asdict
 
 import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -129,7 +130,7 @@ def end_frame(run_id: str, state: str) -> str:
 def research_router(service: ResearchService, current_user: Callable[..., User],
                     runs: RunRepository, events: RunEventRepository,
                     poll_seconds: float, max_stream_seconds: float,
-                    closing: threading.Event, estimates: EstimateCoefficients) -> APIRouter:
+                    closing: threading.Event, coefficients: EstimateCoefficients) -> APIRouter:
     router = APIRouter(prefix="/research")
 
     @router.post("/run", status_code=202, response_model=RunAccepted)
@@ -159,11 +160,8 @@ def research_router(service: ResearchService, current_user: Callable[..., User],
                 effective_source_toggles(body.source_toggles, user.source_toggles))
         except ValidationError as e:
             raise _invalid(e) from None
-        result = estimate_runtime(estimates, toggles, body.document_count)
-        return RuntimeEstimateOut(estimated_seconds=result.estimated_seconds,
-                                  base_seconds=result.base_seconds,
-                                  document_count=result.document_count,
-                                  source_types=result.source_types)
+        return RuntimeEstimateOut(
+            **asdict(estimate_runtime(coefficients, toggles, body.document_count)))
 
     @router.get("/status")
     async def status(request: Request, run_id: str = Query(min_length=1),

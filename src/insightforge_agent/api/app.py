@@ -90,7 +90,7 @@ def _production_deps(settings: Settings, closers: list) -> MakeDeps:
     return make
 
 
-def estimate_coefficients(settings: Settings) -> EstimateCoefficients:
+def _estimate_coefficients(settings: Settings) -> EstimateCoefficients:
     return EstimateCoefficients(
         base_seconds=settings.runtime_estimate_base_seconds,
         pdf_ingest_seconds=settings.runtime_estimate_pdf_ingest_seconds,
@@ -220,7 +220,7 @@ def create_app(runtime: Runtime) -> FastAPI:
                                        runtime.repos.events, runtime.settings.sse_poll_seconds,
                                        runtime.settings.sse_max_stream_seconds,
                                        runtime.closing,
-                                       estimate_coefficients(runtime.settings)))
+                                       _estimate_coefficients(runtime.settings)))
     app.include_router(clarification_router(runtime.clarifications, user_id))
     app.include_router(watchlist_router(runtime.watchlists, user_id))
     app.include_router(reports_router(runtime.repos.reports, runtime.deps.store,
