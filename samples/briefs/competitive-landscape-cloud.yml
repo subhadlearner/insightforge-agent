@@ -1,0 +1,38 @@
+# Sample brief library (design.md section 11; T16 #17).
+# Web only. Exercises a multi-company comparison: one Aspect per comparison axis, figures for
+# several named companies side by side, and Independent Sources behind HIGH Confidence.
+id: competitive-landscape-cloud
+industry: Cloud infrastructure
+question_type: Competitive landscape across several named companies
+brief: >-
+  Compare Amazon Web Services, Microsoft Azure and Google Cloud on their 2025 cloud revenue
+  growth, their share of the cloud infrastructure market, and their capital spending on AI
+  infrastructure, and say where each is gaining or losing ground.
+source_toggles:
+  web: true
+  documents: false
+  memory: false
+expected_report_structure:
+  sections:
+    - heading: Executive Summary
+      notes: At most 150 words, plain language.
+    - heading: Revenue growth
+      source_types: [web]
+      must_cite: [2025 cloud revenue or growth rate for each of AWS, Azure and Google Cloud]
+    - heading: Market share
+      source_types: [web]
+      must_cite: [cloud infrastructure market share for each of the three providers]
+      notes: >-
+        Shares from different analysts for overlapping periods that disagree are conflicting
+        Evidence (LOW Confidence), not a single averaged figure.
+    - heading: AI infrastructure investment
+      source_types: [web]
+      must_cite: [2025 capital expenditure or AI data-centre investment by each parent company]
+    - heading: Competitive position
+      source_types: [web]
+      notes: Where each provider is gaining or losing ground, drawn from the sections above.
+    - heading: Gaps & limitations
+  checks:
+    - Every figure is attributed to the company it describes; no Claim mixes one company's figure with another's name.
+    - Market-share figures carry their As-of period (quarter or year) and the analyst Source.
+    - HIGH Confidence is given only to items supported by Independent Sources (different domains).

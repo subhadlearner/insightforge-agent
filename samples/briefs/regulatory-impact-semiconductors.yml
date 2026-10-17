@@ -1,0 +1,36 @@
+# Sample brief library (design.md section 11; T16 #17).
+# Web only. Exercises regulatory impact analysis: dated rule changes (announcements, not
+# present states), their effect on named companies, and As-of periods kept apart from
+# publication dates.
+id: regulatory-impact-semiconductors
+industry: Semiconductors
+question_type: Regulatory impact on named companies
+brief: >-
+  Assess how US export controls on advanced AI chips sold to China changed during 2025, and
+  what effect they had on Nvidia's and AMD's China revenue and on the products they offer
+  there.
+source_toggles:
+  web: true
+  documents: false
+  memory: false
+expected_report_structure:
+  sections:
+    - heading: Executive Summary
+      notes: At most 150 words, plain language.
+    - heading: Export control changes
+      source_types: [web]
+      must_cite: [the 2025 rule changes and when each was announced or took effect]
+      notes: >-
+        An announced rule is an announcement, not a present state: its As-of period is the date
+        it states, never one derived from the Observation date.
+    - heading: Revenue impact
+      source_types: [web]
+      must_cite: [Nvidia China revenue or the charge it reported, AMD China revenue or the charge it reported]
+    - heading: Product and strategy responses
+      source_types: [web]
+      must_cite: [China-specific chip products or licence decisions]
+    - heading: Gaps & limitations
+  checks:
+    - Rule changes carry the date the Source states; none is given an Observation-derived period.
+    - Company figures cite company filings or reporting about them, each with its period.
+    - Expected or forecast effects are not stated as reported results.
