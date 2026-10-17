@@ -21,7 +21,9 @@ export function SharedReportView({ token }: { token: string }) {
       <header className="report__header">
         <p className="report__meta">
           Shared Report of {formatDate(report.created_at) ?? report.created_at}
-          {typeof fc.sampled === "number" && <> · fact-checked {String(fc.sampled)} claims</>}
+          {typeof fc.sampled === "number" && (
+            <> · fact-checked {String(fc.sampled)} claims: {String(fc.verified ?? 0)} verified, {String(fc.unverified ?? 0)} unverified, {String(fc.unchecked ?? 0)} unchecked</>
+          )}
         </p>
         <h1 className="report__title">{report.title}</h1>
         {report.brief && <p className="report__brief"><span className="report__brief-label">Brief</span> {report.brief}</p>}
