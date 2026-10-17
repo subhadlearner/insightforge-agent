@@ -139,7 +139,11 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
       {citations.kind === "ready" && (
         <section className="report__print-sources" aria-label="Print sources">
           <h2>Sources</h2>
-          <ol>
+          {citations.kind === "failed" ? (
+            <p>Sources unavailable because this Report\'s stored citation provenance could not be resolved.</p>
+          ) : citations.kind === "loading" ? (
+            <p>Loading Sources…</p>
+          ) : <ol>
             {claims.map((claim) => {
               const source = byClaim.get(claim.key);
               return (
@@ -157,9 +161,8 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
                 </li>
               );
             })}
-          </ol>
+          </ol>}
         </section>
-      )}
 
       <CitationDrawer
         claim={openClaim}
