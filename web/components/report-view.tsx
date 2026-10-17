@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { ApiError, getCitations, getReport } from "@/lib/api";
 import { parseReport, type ParsedReport } from "@/lib/report";
 import { ReportViewer, type CitationsState } from "./report-viewer";
+import { ReportActions } from "./report-actions";
 
 type ReportState =
   | { kind: "loading" }
@@ -55,5 +56,10 @@ export function ReportView({ reportId }: { reportId: string }) {
       </div>
     );
   }
-  return <ReportViewer report={report.report} citations={citations} />;
+  return (
+    <>
+      <ReportActions reportId={reportId} />
+      <ReportViewer report={report.report} citations={citations} />
+    </>
+  );
 }
