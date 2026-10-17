@@ -1,5 +1,6 @@
 """T15 Report Markdown/PDF export and signed, revocable public links."""
 
+import json
 from datetime import timedelta
 
 import jwt
@@ -10,6 +11,7 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.domain.models import Report, Run, RunState
 from insightforge_agent.pipeline.report_delivery import JWT_ALGORITHM, PdfRenderError
+from insightforge_agent.pipeline.fact_check import summarise
 from insightforge_agent.stores.source_store import PassageDraft
 from tests.api.support import App, T0
 
@@ -216,3 +218,30 @@ def test_revoking_one_share_does_not_revoke_another(tmp_path):
         app.client.cookies.clear()
         assert app.client.get(first["path"]).status_code == 404
         assert app.client.get(second["path"]).status_code == 200
+
+
+def test_public_fact_check_uses_explicit_allowlist_with_production_summary(tmp_path):
+    with App(tmp_path, now=lambda: T0, pdf_renderer=FakePdf()) as app:
+        report = add_report(app)
+        production_summary = summarise(total=2, verdicts=[], threshold=0.85)
+        production_summary.update(sampled=2, verified=1, unverified=1, unchecked=0)
+        body = dict(report.body)
+        verified = dict(body["verified"])
+        verified["summary"] = production_summary | {"private_future_setting": "do not publish"}
+        body["verified"] = verified
+        with app.runtime.repos.lock, app.runtime.repos._db:
+            app.runtime.repos._db.execute(
+                "UPDATE reports SET body=? WHERE owner_id=? AND id=?",
+                (json.dumps(body), "alice", report.id),
+            )
+        app.login("alice")
+        share = app.client.post(f"/reports/{report.id}/shares")
+        assert share.status_code == 201
+        app.client.cookies.clear()
+        response = app.client.get(share.json()["path"])
+        assert response.status_code == 200
+        assert response.json()["fact_check"] == {
+            "sampled": 2, "verified": 1, "unverified": 1, "unchecked": 0,
+        }
+        for field in ("implemented", "claims", "similarity_threshold", "pass_rate", "private_future_setting"):
+            assert field not in response.text
