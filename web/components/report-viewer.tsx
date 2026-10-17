@@ -136,6 +136,31 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
         </section>
       )}
 
+      {citations.kind === "ready" && (
+        <section className="report__print-sources" aria-label="Print sources">
+          <h2>Sources</h2>
+          <ol>
+            {claims.map((claim) => {
+              const source = byClaim.get(claim.key);
+              return (
+                <li key={claim.key} value={claim.number}>
+                  <strong>Source {claim.number}:</strong>{" "}
+                  {source ? (
+                    <>
+                      {source.source_title}
+                      {" · Published: "}{formatDate(source.published_at) ?? "Not stated"}
+                      {" · Credibility: "}{source.credibility_score != null ? `${source.credibility_score.toFixed(2)} of 1` : "Not scored"}
+                      {source.page != null && <>{" · Page "}{source.page}</>}
+                      {source.section_heading && <>{" · Section: "}{source.section_heading}</>}
+                    </>
+                  ) : "Source unavailable"}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      )}
+
       <CitationDrawer
         claim={openClaim}
         citation={openClaim ? byClaim.get(openClaim.key) ?? null : null}
