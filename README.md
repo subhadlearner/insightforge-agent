@@ -145,6 +145,19 @@ Alerts remain T12; the Baseline is never treated as just a previous Report point
 
 ## Report export and public links (T15)
 
+T15 adds these HTTP routes:
+
+| Route | Purpose |
+|---|---|
+| `GET /watchlist/{item_id}/diffs` | owner-scoped persisted Diff history |
+| `GET /watchlist/{item_id}/diffs/{run_id}` | one persisted Diff |
+| `GET /alerts`, `GET /alerts/{alert_id}`, `PATCH /alerts/{alert_id}` | owner-scoped durable Alerts and read state |
+| `GET /reports/{report_id}/export.md` | owner-scoped verified Markdown download |
+| `GET /reports/{report_id}/export.pdf` | owner-scoped Chromium PDF download |
+| `POST /reports/{report_id}/shares` | create a signed public Report link |
+| `DELETE /reports/{report_id}/shares/{share_id}` | revoke one public link |
+| `GET /share/{token}` | token-scoped public Report projection; no persona required |
+
 The Watchlist UI is at `/watchlist`; a Watchlist Item links to its persisted Diff history,
 and `/alerts` shows durable material-change Alerts with links to the new and previous
 establishing Reports.
