@@ -41,7 +41,9 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   const stream = await pdf.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  expect(Buffer.concat(chunks).subarray(0, 5).toString()).toBe("%PDF-");
+  const pdfBytes = Buffer.concat(chunks);
+  expect(pdfBytes.subarray(0, 5).toString()).toBe("%PDF-");
+  expect(pdfBytes.length).toBeGreaterThan(1000);
 
   await page.getByRole("button", { name: "Create share link" }).click();
   const publicLink = page.getByText("Public link:").locator("..").getByRole("link");
