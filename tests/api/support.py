@@ -109,10 +109,13 @@ class App:
     """One process: a Runtime over the files in `tmp_path`, served by a TestClient."""
 
     def __init__(self, tmp_path, gate: Gate | None = None, now=None, deps_overrides=None,
-                 **settings_kw) -> None:
+                 pdf_renderer=None, **settings_kw) -> None:
         self.gate = gate or Gate(fakes.FixtureSearch())
-        self.runtime = Runtime.build(settings(tmp_path, **settings_kw),
-                                     scripted_deps(self.gate, now, **(deps_overrides or {})))
+        self.runtime = Runtime.build(
+            settings(tmp_path, **settings_kw),
+            scripted_deps(self.gate, now, **(deps_overrides or {})),
+            pdf_renderer=pdf_renderer,
+        )
         self.client = TestClient(create_app(self.runtime))
 
     def __enter__(self) -> "App":
