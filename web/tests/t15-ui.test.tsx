@@ -47,6 +47,7 @@ const dashboard: api.WatchlistDashboard = {
 };
 
 beforeEach(() => {
+  m.listShares.mockResolvedValue([]);
   m.listWatchlists.mockResolvedValue([dashboard]);
   m.getWatchlist.mockResolvedValue(dashboard);
   m.listDiffs.mockResolvedValue([{
@@ -143,6 +144,21 @@ describe("T15 Report actions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Revoke share link" }));
     expect(await screen.findByText(/can no longer be opened/)).toBeInTheDocument();
     expect(m.revokeShare).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers multiple shares on mount and revokes only the selected link", async () => {
+    m.listShares.mockResolvedValue([
+      { share_id: "s1", path: "/share/first", expires_at: "2030-03-08T09:00:00Z" },
+      { share_id: "s2", path: "/share/second", expires_at: "2030-03-08T09:00:00Z" },
+    ]);
+    m.revokeShare.mockResolvedValue(undefined);
+    render(<ReportActions reportId="rep_2" />);
+    expect(await screen.findByRole("link", { name: /share\/first/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /share\/second/ })).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole("button", { name: "Revoke share link" })[0]);
+    expect(m.revokeShare).toHaveBeenCalledWith("rep_2", "s1");
+    expect(screen.queryByRole("link", { name: /share\/first/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /share\/second/ })).toBeInTheDocument();
   });
 });
 
