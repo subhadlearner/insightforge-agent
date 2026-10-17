@@ -3,10 +3,14 @@
 // Which persona the browser is researching as. The signed HttpOnly cookie set by
 // POST /api/session is the only authority: this context reads it back through GET
 // /api/session and never stores the persona anywhere else. Persona selection is not
-// authentication.
+// authentication, but everything on the page belongs to one User: switching from one persona
+// to another is a hard boundary, a full load of the start page, so no Brief, attached PDF,
+// Run stream or Report of the previous persona survives. Choosing a first persona (none was
+// selected) keeps the page, since nothing on it belonged to anyone yet.
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { getPersonas, getSession, selectPersona, type Persona } from "@/lib/api";
+import { hardNavigate } from "@/lib/navigation";
 
 type Status = "loading" | "ready" | "error";
 
@@ -50,13 +54,20 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
   }, [attempt]);
 
   const select = useCallback(async (personaId: string) => {
+    let selected: Persona;
     try {
-      setCurrent(await selectPersona(personaId));
-      setError(null);
+      selected = await selectPersona(personaId);
     } catch (e) {
       setError((e as Error).message);
+      return;
     }
-  }, []);
+    if (current && current.id !== selected.id) {
+      hardNavigate("/");
+      return;
+    }
+    setCurrent(selected);
+    setError(null);
+  }, [current]);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
 

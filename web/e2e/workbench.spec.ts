@@ -187,3 +187,55 @@ test("an estimate is shown, yet the backend can still refuse the Run with 422", 
   await expect(page.locator(".notice--error")).toContainText("This Brief can't be researched as submitted");
   await expect(page).toHaveURL(/\/$/);
 });
+
+// --- switching persona is a hard boundary --------------------------------------------------
+
+const PDF = { name: "deck.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.7\n%stub\n") };
+
+test("switching persona on the start page drops the Brief and attached PDFs", async ({ page }) => {
+  await choosePersona(page, "alice");
+  await page.getByLabel("Brief", { exact: true }).fill("Alice's unfinished Brief");
+  await page.getByLabel("Documents", { exact: true }).setInputFiles(PDF);
+  const documents = page.getByRole("checkbox", { name: /^Your documents/ });
+  await expect(documents).toBeChecked();
+  await expect(documents).toBeDisabled(); // held on while a PDF is attached
+  await expect(page.getByText("deck.pdf")).toBeVisible();
+
+  await page.getByLabel("Researching as").selectOption("bob");
+  await expect(page.getByLabel("Researching as")).toHaveValue("bob");
+  await expect(page.getByLabel("Brief", { exact: true })).toHaveValue("");
+  await expect(page.getByText("deck.pdf")).toHaveCount(0);
+  await expect(documents).not.toBeChecked(); // Bob's default
+});
+
+test("switching persona during an active Run leaves the Run and stops following it", async ({ page, request }) => {
+  const streams: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/research/status")) streams.push(r.url());
+  });
+  await choosePersona(page, "alice");
+  await control(request, "gate/close");
+  await submitBrief(page, BRIEF);
+  await expectCurrentStep(page, "Researching");
+
+  await page.getByLabel("Researching as").selectOption("bob");
+  await page.waitForURL((url) => url.pathname === "/");
+  await expect(page.getByLabel("Researching as")).toHaveValue("bob");
+  await expect(page.getByRole("list", { name: "Run progress" })).toHaveCount(0);
+  const after = streams.length;
+  await page.waitForTimeout(5_000); // longer than a stream's lifetime: no reconnect follows
+  expect(streams.length).toBe(after);
+});
+
+test("switching persona on a Report page leaves that Report", async ({ page }) => {
+  await choosePersona(page, "alice");
+  await submitBrief(page, BRIEF);
+  await page.getByRole("link", { name: "Read the Report" }).click({ timeout: 60_000 });
+  await page.waitForURL(/\/reports\/rep_/);
+  await expect(page.locator(".claim").first()).toBeVisible();
+
+  await page.getByLabel("Researching as").selectOption("carol");
+  await page.waitForURL((url) => url.pathname === "/");
+  await expect(page.getByLabel("Researching as")).toHaveValue("carol");
+  await expect(page.locator(".claim")).toHaveCount(0);
+});

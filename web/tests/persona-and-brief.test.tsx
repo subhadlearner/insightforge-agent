@@ -8,6 +8,7 @@ import { PersonaProvider } from "@/components/persona-context";
 import { routerMock } from "./setup";
 
 vi.mock("@/lib/api", async (orig) => (await import("./mock-api")).mockApi(orig));
+vi.mock("@/lib/navigation", () => ({ hardNavigate: vi.fn() }));
 
 const m = vi.mocked(api);
 const PERSONAS: api.Persona[] = [
@@ -45,7 +46,8 @@ describe("persona picker", () => {
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Alice Analyst", "Bob Strategist"]);
   });
 
-  it("selects through POST /session and shows the new persona", async () => {
+  it("selects a first persona through POST /session and shows it", async () => {
+    m.getSession.mockResolvedValue(null);
     m.selectPersona.mockResolvedValue(PERSONAS[0]);
     renderDesk();
     await userEvent.selectOptions(await screen.findByLabelText("Researching as"), "alice");
@@ -85,8 +87,9 @@ describe("Brief form", () => {
     await screen.findByLabelText("Researching as");
     await userEvent.click(screen.getByRole("checkbox", { name: /Earlier Reports/ }));
     await userEvent.upload(screen.getByLabelText("Documents"), [pdf("a.pdf"), pdf("b.pdf")]);
+    // Attaching PDFs holds Your documents on (persona-boundary.test.tsx covers the lock).
     await waitFor(() => expect(m.estimateRuntime).toHaveBeenLastCalledWith(
-      { web: true, documents: false, memory: false }, 2));
+      { web: true, documents: true, memory: false }, 2));
     expect(await screen.findByTestId("estimate-value")).toHaveTextContent("about 2 min 15 sec");
     expect(screen.getByText(/not a promise/)).toBeInTheDocument();
     expect(arrayBuffer).not.toHaveBeenCalled();

@@ -297,6 +297,9 @@ a {
   margin-top: 0.25rem;
   accent-color: var(--verdigris);
 }
+.source:has(input:disabled) {
+  cursor: default;
+}
 .source__text {
   display: grid;
 }

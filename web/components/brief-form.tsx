@@ -44,6 +44,10 @@ export function BriefForm() {
   const [files, setFiles] = useState<File[]>([]);
   const [submission, setSubmission] = useState<Submission>({ kind: "idle" });
   const submitting = submission.kind === "submitting";
+  // Attached PDFs are only read when Your documents is on, so while any are attached it is
+  // held on. The checkbox, the estimate and the submission all use this one value; removing
+  // the last PDF returns to the User's own choice.
+  const effective: SourceToggles = files.length ? { ...toggles, documents: true } : toggles;
 
   // A different persona brings its own default sources; the same persona keeps the User's
   // edits (keyed by ID, not by the identity of the persona object).
@@ -59,7 +63,7 @@ export function BriefForm() {
     try {
       // Encoded once, here; never retried automatically (a retry could start a second Run).
       const documents = await encodeDocuments(files);
-      const accepted = await submitRun(brief.trim(), toggles, documents);
+      const accepted = await submitRun(brief.trim(), effective, documents);
       router.push(`/runs/${encodeURIComponent(accepted.run_id)}`);
     } catch (error) {
       setSubmission({ kind: "rejected", ...describe(error) });
@@ -83,12 +87,16 @@ export function BriefForm() {
           placeholder="How did BYD's battery EV pricing compare with Tesla's in Europe during 2025?"
           onChange={(e) => setBrief(e.target.value)}
         />
-        <SourceTogglesField value={toggles} onChange={setToggles} />
+        <SourceTogglesField
+          value={effective}
+          onChange={setToggles}
+          locked={files.length ? { documents: "On while PDFs are attached. Remove them to turn this off." } : {}}
+        />
         <PdfPicker files={files} onChange={setFiles} disabled={submitting} />
       </div>
 
       <aside className="desk__side" aria-label="Before you submit">
-        <RuntimeEstimate toggles={toggles} documentCount={files.length} enabled={Boolean(current)} />
+        <RuntimeEstimate toggles={effective} documentCount={files.length} enabled={Boolean(current)} />
         <button type="submit" className="button button--primary" disabled={submitting || !current || !brief.trim()}>
           {submitting ? "Starting research…" : "Start research"}
         </button>

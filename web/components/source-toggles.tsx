@@ -8,9 +8,10 @@ const LABELS: Record<SourceType, { name: string; hint: string }> = {
   memory: { name: "Earlier Reports", hint: "Use your previous Reports as background." },
 };
 
-export function SourceTogglesField({ value, onChange }: {
+export function SourceTogglesField({ value, onChange, locked = {} }: {
   value: SourceToggles;
   onChange: (next: SourceToggles) => void;
+  locked?: Partial<Record<SourceType, string>>; // held on, with the reason shown
 }) {
   return (
     <fieldset className="field sources">
@@ -21,11 +22,12 @@ export function SourceTogglesField({ value, onChange }: {
             <input
               type="checkbox"
               checked={Boolean(value[type])}
+              disabled={Boolean(locked[type])}
               onChange={(e) => onChange({ ...value, [type]: e.target.checked })}
             />
             <span className="source__text">
               <span className="source__name">{LABELS[type].name}</span>
-              <span className="source__hint">{LABELS[type].hint}</span>
+              <span className="source__hint">{locked[type] ?? LABELS[type].hint}</span>
             </span>
           </label>
         ))}
