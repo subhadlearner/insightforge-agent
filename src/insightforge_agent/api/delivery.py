@@ -101,6 +101,18 @@ def delivery_router(
             share_id=record.id, path=f"/share/{token}", expires_at=record.expires_at,
         )
 
+    @router.get("/reports/{report_id}/shares", response_model=list[ShareCreated])
+    def active_shares(report_id: str, user_id: str = Depends(current_user_id)):
+        owned(user_id, report_id)
+        return [
+            ShareCreated(
+                share_id=record.id,
+                path=f"/share/{tokens.issue(record)}",
+                expires_at=record.expires_at,
+            )
+            for record in shares.list_for_report(user_id, report_id, now())
+        ]
+
     @router.delete("/reports/{report_id}/shares/{share_id}", status_code=204)
     def revoke_share(report_id: str, share_id: str, user_id: str = Depends(current_user_id)):
         owned(user_id, report_id)
