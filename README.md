@@ -154,6 +154,7 @@ T15 adds these HTTP routes:
 | `GET /alerts`, `GET /alerts/{alert_id}`, `PATCH /alerts/{alert_id}` | owner-scoped durable Alerts and read state |
 | `GET /reports/{report_id}/export.md` | owner-scoped verified Markdown download |
 | `GET /reports/{report_id}/export.pdf` | owner-scoped Chromium PDF download |
+| `GET /reports/{report_id}/shares` | list the current owner’s active, unexpired, non-revoked links for this Report |
 | `POST /reports/{report_id}/shares` | create a signed public Report link |
 | `DELETE /reports/{report_id}/shares/{share_id}` | revoke one public link |
 | `GET /share/{token}` | token-scoped public Report projection; no persona required |
