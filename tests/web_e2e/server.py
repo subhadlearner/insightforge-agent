@@ -179,7 +179,15 @@ def build(tmp: Path, sse_seconds: float):
             outcome="changed", key=current.key, finding=current, previous=old,
         )
         state = EstablishedFinding(
-            finding=current, not_reconfirmed=3, unconfirmed=True,
+            finding=current, not_reconfirmed=0, unconfirmed=False,
+        )
+        # A separate established negative Finding was not reconfirmed in three successes.
+        unconfirmed_finding = old.model_copy(update={
+            "key": "model_3|feature|china", "predicate": "feature",
+            "object": "Autopilot", "object_key": "autopilot", "polarity": "negated",
+        })
+        unconfirmed_state = EstablishedFinding(
+            finding=unconfirmed_finding, not_reconfirmed=3, unconfirmed=True,
         )
         alert = Alert(
             id="al_t15_2", owner_id=owner, watchlist_item_id=item_id,
@@ -209,6 +217,10 @@ def build(tmp: Path, sse_seconds: float):
             repos._db.execute(
                 "INSERT INTO watchlist_findings VALUES (?,?,?,?)",
                 (owner, item_id, current.key, state.model_dump_json()),
+            )
+            repos._db.execute(
+                "INSERT INTO watchlist_findings VALUES (?,?,?,?)",
+                (owner, item_id, unconfirmed_finding.key, unconfirmed_state.model_dump_json()),
             )
             repos._db.execute(
                 "INSERT INTO watchlist_diffs "
