@@ -22,6 +22,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <a className="skip-link" href="#main">Skip to content</a>
           <header className="masthead">
             <Link href="/" className="wordmark">InsightForge</Link>
+            <nav className="masthead__nav" aria-label="Research navigation">
+              <Link href="/watchlist">Watchlist</Link>
+              <Link href="/alerts">Alerts</Link>
+            </nav>
             <PersonaPicker />
           </header>
           <main id="main" className="page">{children}</main>
