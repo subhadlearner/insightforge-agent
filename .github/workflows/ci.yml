@@ -28,3 +28,33 @@ jobs:
         run: uv run pytest -m scripted
       - name: Everything else offline (live and integration tests are excluded)
         run: uv run pytest -m "not baseline and not replay and not scripted and not live and not integration"
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Frontend unit and component tests
+        working-directory: web
+        run: npm test
+      - name: TypeScript
+        working-directory: web
+        run: npm run typecheck
+      - name: Production build
+        working-directory: web
+        run: npm run build
+      - name: Install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Browser E2E
+        working-directory: web
+        run: npm run test:e2e
