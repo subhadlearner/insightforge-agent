@@ -16,6 +16,13 @@ def test_loads_from_environment(monkeypatch):
     assert s.search_providers == ["tavily", "serpapi"]
 
 
+def test_pdf_web_origin_defaults_to_next_dev_host(monkeypatch):
+    monkeypatch.delenv("WEB_ORIGIN", raising=False)
+    settings = Settings(llm_provider="fake", search_providers=["fake"], _env_file=None)
+    assert settings.web_origin == "http://localhost:3000"
+    assert Settings.model_fields["web_origin"].default == "http://localhost:3000"
+
+
 def test_loads_from_dotenv(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text("LLM_PROVIDER=groq\nGROQ_API_KEY=k\nTAVILY_API_KEY=t\n")
     assert Settings().llm_provider == "groq"
