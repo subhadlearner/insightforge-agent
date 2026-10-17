@@ -23,8 +23,8 @@ test("T15 Watchlist -> Diff -> Alert -> export -> public share -> revoke", async
   await expect(page.locator(".diff-entry--material").getByText(/As of .* \(derived from source observation date\)/)).toHaveCount(2);
   await expect(page.getByText(/Changed on/)).toHaveCount(0);
   await expect(page.getByText(/Change detected on/)).toHaveCount(0);
-  await expect(page.getByText("Previously established provenance:")).toBeVisible();
-  await expect(page.getByText("This Run provenance:")).toBeVisible();
+  await expect(page.locator(".diff-entry--material").getByText("Previously established provenance:")).toBeVisible();
+  await expect(page.locator(".diff-entry--material").getByText("This Run provenance:")).toBeVisible();
 
   await page.goto("/alerts");
   await expect(page.getByText(/Change detected on/)).toBeVisible();
