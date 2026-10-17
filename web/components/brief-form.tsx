@@ -89,7 +89,7 @@ export function BriefForm() {
         />
         <SourceTogglesField
           value={effective}
-          onChange={setToggles}
+          onToggle={(type, on) => setToggles((t) => ({ ...t, [type]: on }))}
           locked={files.length ? { documents: "On while PDFs are attached. Remove them to turn this off." } : {}}
         />
         <PdfPicker files={files} onChange={setFiles} disabled={submitting} />

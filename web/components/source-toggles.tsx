@@ -8,9 +8,11 @@ const LABELS: Record<SourceType, { name: string; hint: string }> = {
   memory: { name: "Earlier Reports", hint: "Use your previous Reports as background." },
 };
 
-export function SourceTogglesField({ value, onChange, locked = {} }: {
+/** Reports only the source that changed, never the whole shown set: a source held on by
+ *  `locked` is displayed as on without that ever being written back as the User's choice. */
+export function SourceTogglesField({ value, onToggle, locked = {} }: {
   value: SourceToggles;
-  onChange: (next: SourceToggles) => void;
+  onToggle: (type: SourceType, on: boolean) => void;
   locked?: Partial<Record<SourceType, string>>; // held on, with the reason shown
 }) {
   return (
@@ -23,7 +25,7 @@ export function SourceTogglesField({ value, onChange, locked = {} }: {
               type="checkbox"
               checked={Boolean(value[type])}
               disabled={Boolean(locked[type])}
-              onChange={(e) => onChange({ ...value, [type]: e.target.checked })}
+              onChange={(e) => onToggle(type, e.target.checked)}
             />
             <span className="source__text">
               <span className="source__name">{LABELS[type].name}</span>

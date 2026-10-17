@@ -49,6 +49,20 @@ describe("switching persona is a hard boundary", () => {
     expect(screen.getByLabelText("Researching as")).toHaveValue("alice");
   });
 
+  it.each(["/reports/rep_x", "/runs/run_x"])(
+    "choosing a first persona on %s reloads that page, so it loads as the new persona", async (path) => {
+      window.history.pushState({}, "", path);
+      try {
+        m.getSession.mockResolvedValue(null);
+        m.selectPersona.mockResolvedValue(BOB);
+        render(<PersonaProvider><PersonaPicker /></PersonaProvider>);
+        await userEvent.selectOptions(await screen.findByLabelText("Researching as"), "bob");
+        await waitFor(() => expect(navigation.hardNavigate).toHaveBeenCalledWith(path));
+      } finally {
+        window.history.pushState({}, "", "/");
+      }
+    });
+
   it("choosing a first persona keeps the page (nothing belonged to anyone yet)", async () => {
     m.getSession.mockResolvedValue(null);
     m.selectPersona.mockResolvedValue(BOB);
@@ -84,6 +98,28 @@ describe("attached PDFs are never silently ignored", () => {
     await waitFor(() => expect(m.estimateRuntime).toHaveBeenLastCalledWith(
       { web: true, documents: false, memory: true }, 0));
   });
+
+  it.each([
+    ["off", BOB, false],
+    ["on", ALICE, true],
+  ])("keeps the User's Documents choice (%s) when another source changes while a PDF is attached",
+    async (_label, persona, documentsBefore) => {
+      m.getSession.mockResolvedValue(persona);
+      renderDesk();
+      await screen.findByLabelText("Researching as");
+      const documents = screen.getByRole("checkbox", { name: /Your documents/ });
+      await waitFor(() => expect((documents as HTMLInputElement).checked).toBe(documentsBefore));
+
+      await userEvent.upload(screen.getByLabelText("Documents"), [pdf("deck.pdf")]);
+      expect(documents).toBeChecked();
+      await userEvent.click(screen.getByRole("checkbox", { name: /Web/ }));
+      await userEvent.click(screen.getByRole("checkbox", { name: /Earlier Reports/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Remove deck.pdf" }));
+
+      expect((documents as HTMLInputElement).checked).toBe(documentsBefore);
+      expect(screen.getByRole("checkbox", { name: /Web/ })).not.toBeChecked();
+      expect(screen.getByRole("checkbox", { name: /Earlier Reports/ })).not.toBeChecked();
+    });
 
   it("submits the PDFs with Your documents on", async () => {
     m.submitRun.mockReturnValue(new Promise(() => {}));

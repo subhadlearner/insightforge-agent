@@ -239,3 +239,28 @@ test("switching persona on a Report page leaves that Report", async ({ page }) =
   await expect(page.getByLabel("Researching as")).toHaveValue("carol");
   await expect(page.locator(".claim")).toHaveCount(0);
 });
+
+test("choosing a first persona on a Report deep link reloads that Report as the persona", async ({ browser, request }) => {
+  // A Report of Alice's, found (or made) through the API with its own cookie jar.
+  expect((await request.post("/api/session", { data: { persona_id: "alice" } })).ok()).toBeTruthy();
+  let reports = await (await request.get("/api/reports")).json();
+  if (reports.length === 0) {
+    const run = await (await request.post("/api/research/run", { data: { brief: BRIEF, source_toggles: { web: true } } })).json();
+    await expect.poll(async () => {
+      reports = await (await request.get("/api/reports")).json();
+      return reports.some((r: { run_id: string }) => r.run_id === run.run_id);
+    }, { timeout: 60_000 }).toBe(true);
+  }
+  const reportId: string = reports[0].id;
+
+  const fresh = await browser.newContext(); // no persona cookie
+  const page = await fresh.newPage();
+  await page.goto(`/reports/${reportId}`);
+  await expect(page.getByRole("heading", { name: "The Report could not be shown" })).toBeVisible();
+
+  await page.getByLabel("Researching as").selectOption("alice");
+  await page.waitForURL((url) => url.pathname === `/reports/${reportId}`);
+  await expect(page.locator(".claim").first()).toBeVisible();
+  await expect(page.getByLabel("Researching as")).toHaveValue("alice");
+  await fresh.close();
+});

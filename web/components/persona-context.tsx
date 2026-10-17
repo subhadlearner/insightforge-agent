@@ -6,7 +6,9 @@
 // authentication, but everything on the page belongs to one User: switching from one persona
 // to another is a hard boundary, a full load of the start page, so no Brief, attached PDF,
 // Run stream or Report of the previous persona survives. Choosing a first persona (none was
-// selected) keeps the page, since nothing on it belonged to anyone yet.
+// selected) keeps the start page, so a Brief drafted before choosing is not lost; on any
+// other page (a Run or Report opened by link) it reloads that page, which then loads as the
+// chosen persona instead of staying on the "select a persona first" error.
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { getPersonas, getSession, selectPersona, type Persona } from "@/lib/api";
@@ -63,6 +65,10 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
     }
     if (current && current.id !== selected.id) {
       hardNavigate("/");
+      return;
+    }
+    if (!current && window.location.pathname !== "/") {
+      hardNavigate(window.location.pathname + window.location.search);
       return;
     }
     setCurrent(selected);
