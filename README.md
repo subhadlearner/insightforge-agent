@@ -7,7 +7,7 @@ material changes are surfaced as **Alerts**.
 > **The persona picker is identity selection for the demo. It is not authentication and must
 > not be treated as a security boundary.** Anyone who can reach the API can select any persona
 > in `users.yml`. The session cookie is signed (HMAC with `SESSION_SECRET`) and HttpOnly only so
-> that a browser cannot switch persona by editing it; there are no passwords and no accounts.
+> that a browser cannot switch persona by editing it; there are no passwords and no sign-up.
 
 Vocabulary is defined in [`CONTEXT.md`](CONTEXT.md), the design in
 [`docs/design.md`](docs/design.md), and hard-to-reverse decisions in [`docs/adr/`](docs/adr/).
@@ -56,7 +56,8 @@ INGESTING -> PLANNING -> RESEARCHING -> EXTRACTING -> SYNTHESIZING -> WRITING ->
 5. **SYNTHESIZING**: de-duplicated **Evidence items**. Each one is validated against its
    Passages and given a Confidence, then ranked and cut to a token budget.
 6. **WRITING**: the Writer drafts the Report. Every **Claim** cites an Evidence item, or a
-   Historical item for a **Historical Claim**.
+   Historical item (the earlier Claim a **Historical Claim** rests on, with its original
+   Passages).
 7. **FACT_CHECKING**: a seeded 20% sample of Claims (at least 5) is re-checked against
    re-fetched or stored Passages. Each sampled Claim is `verified`, `unverified` (marked
    `[UNVERIFIED]`) or `unchecked`.
@@ -68,8 +69,10 @@ Also implemented: web research and uploaded-PDF research (T7), memory of earlier
 Historical Claims (T8), clarification with a durable timeout (T9), the HTTP API and live
 progress stream (T10), Watchlist Items on a schedule (T11), Findings, Baselines, Diffs, Alerts
 and an optional Slack-format webhook (T12), a retention sweep (T13), the Next.js workbench
-(T14), Markdown/PDF export and revocable public Share links (T15), and the evaluation harness
-(T16).
+(T14), Markdown/PDF export and revocable Share links (T15), and the evaluation harness
+(T16). Status: implemented and covered by the offline suite with scripted models; only the
+happy path, planning, extraction and synthesis, and Fact-Checker cases have been run on a real
+model (see the last section).
 
 ## Architecture
 
@@ -131,7 +134,7 @@ How the pieces connect:
 | Tool | Version | Needed for |
 |---|---|---|
 | Git | any | cloning |
-| [uv](https://docs.astral.sh/uv/) | 0.12.x (the build backend needs `uv_build>=0.12.5`) | Python environment; installs Python 3.12 from `.python-version` if missing |
+| [uv](https://docs.astral.sh/uv/) | a recent release (verified with 0.12.5) | Python environment; installs Python 3.12 from `.python-version` if missing |
 | Node.js and npm | Node 20.9 or later (CI uses 24) | the web UI and browser tests |
 | Docker | any recent | optional: a persistent Qdrant server (`docker compose`) |
 | Chromium for Playwright | installed by `npx playwright install chromium` | PDF export and browser tests |
@@ -298,7 +301,7 @@ one shown to be no longer true) raises one **Alert** per Run. A Finding that is 
 is Not reconfirmed and raises no Alert. If the persona has a `webhook_url`, the Alert is also
 POSTed as Slack incoming-webhook JSON.
 
-### Diffs, Alerts, export and public links (T15)
+### Diffs, Alerts, export and Share links (T15)
 
 | Route | Purpose |
 |---|---|
@@ -308,15 +311,15 @@ POSTed as Slack incoming-webhook JSON.
 | `GET /reports/{report_id}/export.md` | owner-scoped verified Markdown download |
 | `GET /reports/{report_id}/export.pdf` | owner-scoped Chromium PDF download |
 | `GET /reports/{report_id}/shares` | list the current owner’s active, unexpired, non-revoked links for this Report |
-| `POST /reports/{report_id}/shares` | create a signed public Report link |
-| `DELETE /reports/{report_id}/shares/{share_id}` | revoke one public link |
+| `POST /reports/{report_id}/shares` | create a signed Share link |
+| `DELETE /reports/{report_id}/shares/{share_id}` | revoke one Share link |
 | `GET /share/{token}` | token-scoped public Report projection; no persona required |
 
 The Watchlist UI is at `/watchlist`; a Watchlist Item links to its persisted Diff history,
 and `/alerts` shows durable material-change Alerts with links to the new and previous
 establishing Reports.
 
-Report actions provide Markdown and PDF downloads plus a revocable public link. Markdown uses
+Report actions provide Markdown and PDF downloads plus a revocable Share link. Markdown uses
 the fact-checked Report and preserves `[UNVERIFIED]` markings. PDF does not maintain a second
 Report template: the API launches Playwright headless Chromium through
 `web/scripts/render-pdf.mjs`, signs the owner's persona cookie for that browser context, and
@@ -354,13 +357,14 @@ required `next dev` hostname).
 `pytest -m live` alone is not enough: live tests also need `INSIGHTFORGE_ALLOW_LIVE_TESTS=1`,
 and skip without it.
 
-Results on a fresh clone of `main` at `22dad4d` (2026-10-18, Windows 11; details and caveats in
-[`docs/t17-verification.md`](docs/t17-verification.md)):
+Results on a fresh clone of `main` at `22dad4d` (2026-10-18, Windows 11). The uv, model and
+Chromium caches were already warm, so cold downloads were not exercised. Details and caveats
+are in [`docs/t17-verification.md`](docs/t17-verification.md):
 
 | Check | Result |
 |---|---|
 | `uv run pytest` | 1,887 passed, 26 deselected (7 min 10 s) |
-| `uv run pytest -m integration` | 19 passed (local model cache already warm) |
+| `uv run pytest -m integration` | 19 passed, **only because the local model cache was already warm**; CI has no cache and skips all 19 |
 | `uv run lint-imports` | 5 kept, 0 broken |
 | `uv run insightforge-agent demo` | exit 0, every expectation PASS |
 | `npm test` / `typecheck` / `build` | 102 passed / clean / built |
@@ -380,14 +384,14 @@ at a time.
 
 | Boundary | Why it limits context growth | Status and evidence |
 |---|---|---|
-| **Store by reference.** Sources, Observations and Passages live in SQLite (PDF chunks also in Qdrant) behind `SourceStore`. Graph state and checkpoints carry IDs and short structured values, never page bodies | A 20,000-character page costs the graph nothing. Only a stage that needs the text loads it | CI-tested: `tests/pipeline/test_happy_path.py::test_graph_state_carries_no_source_body` and `::test_no_source_body_in_any_checkpoint_or_intermediate_state` (a sentinel in a 23k-character page never appears in state or in either checkpoint) |
+| **Store by reference.** Sources, Observations and Passages live in SQLite (PDF chunks also in Qdrant) behind `SourceStore`. Graph state and checkpoints carry IDs and short structured values, never page bodies | A 20,000-character page costs the graph nothing. Only a stage that needs the text loads it | CI-tested: `tests/pipeline/test_happy_path.py::test_graph_state_carries_no_source_body` and `tests/pipeline/test_happy_path.py::test_no_source_body_in_any_checkpoint_or_intermediate_state` (a sentinel in a 23k-character page never appears in state or in either checkpoint) |
 | **Researchers see summaries, not pages.** The fetch tool writes each Source's one-line summary in its own bounded call. The Researcher sees only `{source_id, title, summary}` | Five full articles per search would otherwise sit in the Researcher's context ([design rationale Q18](docs/design-rationale.md)) | CI-tested: `tests/pipeline/test_isolation.py::test_each_researcher_receives_only_its_own_subtask` |
-| **Isolated Researchers.** Each Researcher is a DeepAgents subagent with its own `tools=` and only its Sub-task's task description. It does not see the Brief, the plan or its peers. Only its final message returns to the Planner | The Planner's thread grows by one short result per Sub-task, not by every search and fetch | CI-tested: same test, plus `::test_the_researcher_subagent_has_its_own_tools_and_is_not_forked`. Isolation on a real model was checked in the T1 spike (`docs/design.md` section 12) |
+| **Isolated Researchers.** Each Researcher is a DeepAgents subagent with its own `tools=` and only its Sub-task's task description. It does not see the Brief, the plan or its peers. Only its final message returns to the Planner | The Planner's thread grows by one short result per Sub-task, not by every search and fetch | CI-tested: same test, plus `tests/pipeline/test_isolation.py::test_the_researcher_subagent_has_its_own_tools_and_is_not_forked`. Isolation on a real model was checked in the T1 spike (`docs/design.md` section 12) |
 | **Planner memory is three Run summaries.** The Planner gets the last 3 Run summaries for the same Watchlist Item, or for the same User's one-shot Runs. Each summary is bounded (Brief 500 characters, 6 themes, 12 entities, 6 gaps). It never sees transcripts, earlier Reports or Passage text | Memory stays constant in size however many Runs a User has made | CI-tested: `tests/pipeline/test_t8_memory.py::test_the_planner_reads_exactly_the_newest_three_summaries_and_no_transcript`. The Run log records `run_summaries_loaded` with count and IDs only |
 | **Bounded Passage batches.** Extraction (one Source at a time), Synthesis (one Sub-task at a time) and the Fact-Checker read Passage text in batches under `PASSAGE_TOKEN_CAP` (default 3,000 estimated tokens, measured on the rendered batch). An oversized Passage is read in windows, never truncated | The cost of one call does not grow with page or document length | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_budget` (captures the payloads); `tests/pipeline/test_t5_review.py::test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synthesis` |
-| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context, and never sees Passage text. When the bundle is over budget, whole lowest-ranked items are cut (never truncated mid-item), and each cut is logged as an `evidence_cut` event with its reason, Confidence and rank | The Writer's input is bounded however much research succeeded | CI-tested: `::test_bundle_respects_the_budget_and_every_cut_is_logged`. Note: design §4 calls this "compressed". The implementation drops whole items and does not summarise them. Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
+| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context, and never sees Passage text. When the bundle is over budget, whole lowest-ranked items are cut (never truncated mid-item), and each cut is logged as an `evidence_cut` event with its reason, Confidence and rank | The Writer's input is bounded however much research succeeded | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`. Note: design §4 calls this "compressed". The implementation drops whole items and does not summarise them. Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
 | **Historical context stays apart.** Claims from earlier Reports enter as Historical items with their original Report, date and Passages, never as current Evidence items. They never establish or confirm a Finding | Old material cannot pose as current evidence, and its provenance stays checkable | CI-tested: `tests/pipeline/test_t8_memory.py::test_memory_findings_become_historical_claims_with_original_lineage`, `tests/pipeline/test_t8_historical_checks.py` |
-| **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway spend | CI-tested: `::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner and Writer calls are not counted yet |
+| **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway spend | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner and Writer calls are not counted yet |
 
 ### Run-log compaction: what is and is not proven
 
@@ -403,9 +407,10 @@ each compaction". The T17 audit checked this at three levels:
 Why compaction is not expected in normal Runs: the boundaries above keep the Planner thread
 small. Besides the DeepAgents system prompt, its thread holds the Brief with at most three Run
 summaries, the plan, one canonical `task` call and one short result per Sub-task (at most 6),
-and any correction or repair messages. The largest Planner request on record is 8,172 tokens: a
-repair request that Groq's free tier rejected (design §12). That is about 5% of the
-170,000-token trigger and about 7% of Groq's. Compaction is therefore a backstop that the context boundaries are
+and any correction or repair messages. The only Planner request size on record is 8,172 tokens: a
+repair request that Groq's free tier rejected (design §12). That one measurement is about 5%
+of the 170,000-token trigger and about 7% of Groq's. Thread sizes on other Runs have not been
+measured, so this is an expectation, not a proof. Compaction is therefore a backstop that the context boundaries are
 designed never to reach.
 
 > **Open T17 acceptance blocker.** Criterion 2 ("Run-log compaction evidence") is **not met**.
@@ -493,7 +498,7 @@ evaluation has been run yet. That is T18.**
   differently written names are the same entity, or that a paraphrase means the same thing.
   Confidence reflects source count and credibility, not truth.
 - **Fact-checking is a sample.** It checks 20% of Claims (at least 5). A `verified` Claim had a
-  supporting span above the 0.85 similarity threshold, containing the Claim's figures, that the
+  supporting span at or above the 0.85 similarity threshold, containing the Claim's figures, that the
   light model judged SUPPORTED. Unsampled Claims are not checked, and `[UNVERIFIED]` means only
   that the check found no support.
 - **Data handling.** Everything is stored locally: SQLite files (`*.db`, git-ignored), Qdrant,
@@ -502,7 +507,7 @@ evaluation has been run yet. That is T18.**
   deleted, and there is no delete endpoint. Brief text and Passage text are sent to the
   configured chat provider. Do not upload documents you cannot share with that provider.
 - **Not production.** The app is one process on one node: no Postgres, no worker queue, no
-  accounts, no multi-process deployment. Search uses Tavily only (other listed providers are
+  sign-up or credentials, no multi-process deployment. Search uses Tavily only (other listed providers are
   skipped). Hardening observations are tracked in issue #49 (T20).
 
 ## Anthropic verification results (T18): pending
