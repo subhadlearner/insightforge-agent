@@ -9,13 +9,14 @@ function findingText(f: Finding | null | undefined) {
   return `${f.subject} · ${f.predicate} · ${f.object}${f.scope ? ` · ${f.scope}` : ""}`;
 }
 
-function FindingMeta({ finding }: { finding: Finding | null | undefined }) {
+function FindingMeta({ finding, label }: { finding: Finding | null | undefined; label: string }) {
   if (!finding) return null;
   return (
     <div className="diff__meta">
+      <strong>{label} provenance:</strong>{" "}
       <span>
         {finding.derived_from
-          ? `Observed on ${finding.as_of_period} (As-of derived from source observation date)`
+          ? `Change detected on ${finding.as_of_period} (As-of derived from source observation date)`
           : `As of ${finding.as_of_period}`}
       </span>
       {" · "}
@@ -91,7 +92,8 @@ export function WatchlistDiffView({ itemId }: { itemId: string }) {
                   <h3>{entry.outcome.replaceAll("_", " ")}{material ? " · material change" : ""}</h3>
                   {entry.previous && <p><strong>Previous:</strong> {findingText(entry.previous)}</p>}
                   <p><strong>Current:</strong> {findingText(entry.finding)}</p>
-                  <FindingMeta finding={entry.finding ?? entry.previous} />
+                  <>{entry.previous && <FindingMeta finding={entry.previous} label="Previous" />}
+                  {entry.finding && <FindingMeta finding={entry.finding} label="Current" />}</>
                   {entry.unconfirmed && <p><strong>Unconfirmed:</strong> absence is not deletion; the established Finding remains.</p>}
                   {entry.reason && <p>{entry.reason}</p>}
                 </section>
