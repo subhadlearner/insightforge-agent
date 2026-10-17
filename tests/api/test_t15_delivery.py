@@ -184,7 +184,9 @@ def test_share_tamper_expiry_and_owner_scope_are_refused(tmp_path):
         data = app.client.post(f"/reports/{report.id}/shares").json()
         token = data["path"].split("/share/", 1)[1]
 
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        head, payload, signature = token.split(".")
+        changed = ("A" if signature[0] != "A" else "B") + signature[1:]
+        tampered = ".".join((head, payload, changed))
         app.client.cookies.clear()
         assert app.client.get(f"/share/{tampered}").status_code == 404
 
@@ -197,3 +199,20 @@ def test_share_tamper_expiry_and_owner_scope_are_refused(tmp_path):
         assert app.client.delete(
             f"/reports/rep_bob/shares/{data['share_id']}"
         ).status_code == 404
+
+
+def test_revoking_one_share_does_not_revoke_another(tmp_path):
+    with App(tmp_path, now=lambda: T0, pdf_renderer=FakePdf()) as app:
+        report = add_report(app)
+        app.login("alice")
+        first = app.client.post(f"/reports/{report.id}/shares").json()
+        second = app.client.post(f"/reports/{report.id}/shares").json()
+        assert first["share_id"] != second["share_id"]
+
+        assert app.client.delete(
+            f"/reports/{report.id}/shares/{first['share_id']}"
+        ).status_code == 204
+
+        app.client.cookies.clear()
+        assert app.client.get(first["path"]).status_code == 404
+        assert app.client.get(second["path"]).status_code == 200
