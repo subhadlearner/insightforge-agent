@@ -47,8 +47,9 @@ def test_dashboard_diff_and_alert_reads_are_owner_scoped_and_do_not_recompute(tm
         assert alerts.status_code == 200
         [alert] = alerts.json()
         assert alert["id"] == stored_alert.id
-        assert alert["report_id"] == f"rep_{second.id}"
-        assert alert["changes"][0]["previous_report_id"] == f"rep_{first.id}"
+        report_of = {r["run_id"]: r["id"] for r in app.client.get("/reports").json()}
+        assert alert["report_id"] == report_of[second.id]
+        assert alert["changes"][0]["previous_report_id"] == report_of[first.id]
         assert alert["changes"][0]["when"].startswith("Change detected on ")
         assert app.runtime.repos.diffs.alerts("alice") == alerts_before
 
