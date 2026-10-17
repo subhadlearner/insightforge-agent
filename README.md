@@ -175,7 +175,8 @@ cd web
 npx playwright install chromium
 ```
 
-`WEB_ORIGIN` tells the API where Next is running. Public links are HS256 JWT bearer
+`WEB_ORIGIN` tells the API where Next is running and defaults to `http://localhost:3000`
+(to match the required `next dev` hostname). Public links are HS256 JWT bearer
 capabilities with a unique durable share ID, Report identity and expiry; the default lifetime is
 7 days. Revocation is stored in SQLite and survives restart. Set `SHARE_JWT_SECRET` to isolate
 the public-link signing key; when omitted or blank this demo deliberately falls back to the
