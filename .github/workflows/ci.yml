@@ -61,6 +61,10 @@ jobs:
           INSIGHTFORGE_API_ORIGIN=http://127.0.0.1:8201 npm run api:types
           cd ..
           if ! git diff --quiet -- web/lib/api-schema.d.ts; then
+            cp web/lib/api-schema.d.ts /tmp/api-schema.d.ts
+            git fetch origin feature/t15-watchlist-export-share
+            git checkout -B t15-schema origin/feature/t15-watchlist-export-share
+            cp /tmp/api-schema.d.ts web/lib/api-schema.d.ts
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add web/lib/api-schema.d.ts
