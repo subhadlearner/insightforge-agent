@@ -87,6 +87,8 @@ describe("Report viewer", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("BYD and Tesla");
     expect(await screen.findByTestId("citations-unavailable")).toHaveTextContent(
       "Supporting evidence is unavailable because this Report's stored citation provenance could not be resolved.");
+    expect(document.querySelector(".report__print-sources")).toHaveAttribute("data-print-sources-state", "failed");
+    expect(document.querySelector(".report__print-sources")).toHaveTextContent("Sources unavailable because this Report\'s stored citation provenance could not be resolved.");
     const markers = screen.getAllByRole("button", { name: /Source unavailable for claim/ });
     expect(markers).toHaveLength(3);
     markers.forEach((b) => expect(b).toBeDisabled());
