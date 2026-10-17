@@ -34,9 +34,10 @@ def test_dashboard_diff_and_alert_reads_are_owner_scoped_and_do_not_recompute(tm
         assert listed.status_code == 200
         [diff] = listed.json()
         assert diff["run_id"] == second.id
-        assert diff["entries"][0]["finding"]["derived_from"] == "observation_date"
-        assert diff["entries"][0]["finding"]["provenance"]["report_id"] == diff["report_id"]
-        assert diff["entries"][0]["outcome"] == "changed"
+        assert diff["entries"][0]["entry"]["finding"]["derived_from"] == "observation_date"
+        assert diff["entries"][0]["entry"]["finding"]["provenance"]["report_id"] == diff["report_id"]
+        assert diff["entries"][0]["entry"]["outcome"] == "changed"
+        assert diff["entries"][0]["material"] is True
 
         single = app.client.get(f"/watchlist/{item.id}/diffs/{second.id}")
         assert single.status_code == 200 and single.json() == diff
