@@ -86,8 +86,9 @@ describe("T15 Watchlist and Diff UI", () => {
   it("uses explicit materiality and honest derived-period wording", async () => {
     render(<WatchlistDiffView itemId="wl_1" />);
     expect(await screen.findByText(/changed · material change/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/Change detected on 2030-03-01 \(As-of derived from source observation date\)/)).toHaveLength(2);
+    expect(screen.getAllByText("As of 2030-03-01 (derived from source observation date)")).toHaveLength(2);
     expect(screen.queryByText(/Changed on 2030-03-01/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Change detected on 2030-03-01/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Report" })[1]).toHaveAttribute("href", "/reports/rep_1");
     expect(screen.getAllByRole("link", { name: "Report" })[2]).toHaveAttribute("href", "/reports/rep_2");
     expect(screen.getByText("Previous provenance:")).toBeInTheDocument();
