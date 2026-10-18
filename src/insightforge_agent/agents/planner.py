@@ -66,15 +66,19 @@ class ApprovedDispatchGuard(AgentMiddleware):
 
     `approved` maps Sub-task id to its query and is read at call time, so it is empty outside
     the RESEARCH and REPAIR phases and nothing can be dispatched then. A refused call never
-    reaches a Researcher; the Planner gets a REJECTED reply and `on_reject` logs it."""
+    reaches a Researcher; the Planner gets a REJECTED reply and `on_reject` logs it. An
+    accepted call is passed to `on_accept` just before its Researcher runs, so only a dispatch
+    that really runs is ever reported as started."""
 
     def __init__(self, approved: Callable[[], dict[str, str]],
                  on_reject: Callable[[str, str, str], None],
-                 agent_for: Callable[[str], str] = lambda _sid: RESEARCHER) -> None:
+                 agent_for: Callable[[str], str] = lambda _sid: RESEARCHER,
+                 on_accept: Callable[[str], None] | None = None) -> None:
         super().__init__()
         self._approved = approved
         self._on_reject = on_reject
         self._agent_for = agent_for  # the one subagent an approved Sub-task may go to
+        self._on_accept = on_accept
 
     def wrap_tool_call(self, request, handler):
         call = request.tool_call
@@ -92,6 +96,8 @@ class ApprovedDispatchGuard(AgentMiddleware):
         elif call["args"].get("subagent_type") != (agent := self._agent_for(sid)):
             reason = f"{sid} is not dispatched to the {agent} agent"
         else:
+            if self._on_accept is not None:
+                self._on_accept(sid)
             return handler(request)
         self._on_reject(sid or "", reason, description[:500])
         return ToolMessage(
