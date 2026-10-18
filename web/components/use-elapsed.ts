@@ -3,7 +3,9 @@
 // A Run's elapsed time, measured from its stored `created_at` (GET /api/research/{id}/timing), so
 // time queued and time waiting for an answer count, and a reload shows the same figure. The
 // server's clock is read with it, so a browser clock that is off does not skew the count.
-// It stops at the Run's last terminal event (`endedAt`), which retention keeps.
+// It stops at the time the Run's last terminal event was recorded (`endedAt`, kept by retention).
+// That event is written just before the terminal state is stored, so the total can precede the
+// exact terminal transition by that one write, and is never later than it.
 
 import { useEffect, useState } from "react";
 import { getRunTiming } from "@/lib/api";

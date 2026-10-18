@@ -392,10 +392,11 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 problems = plan_violations(plan, allowed)
         if plan is None or problems:
             raise RunFailed("; ".join(problems))
+        # The rows and their event in one write: the Run page shows as queued exactly the
+        # Sub-tasks of the stored plan.
         deps.repos.subtasks.save_plan(owner, run_id, [
-            SubTaskRecord(run_id=run_id, subtask=t) for t in plan.sub_tasks])
-        # After the rows: a Sub-task the Run page shows as queued is always in the stored plan.
-        deps.log(owner, run_id, PLAN_ACCEPTED, sub_tasks=plan_listing(plan))
+            SubTaskRecord(run_id=run_id, subtask=t) for t in plan.sub_tasks],
+            event=deps.event(owner, run_id, PLAN_ACCEPTED, sub_tasks=plan_listing(plan)))
         limitations = []
         if clarification is not None and clarification["resolution"] == "timed_out":
             limitations.append(timeout_limitation(clarification["question"],
@@ -488,12 +489,14 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 "historical": historical.context.model_dump(mode="json")}
 
     def settle_subtask(owner: str, run_id: str, sid: str, ok: bool) -> None:
-        """Store the validated outcome, then log it: the event never claims an outcome that is
-        not stored. A crash between the two leaves the Run to the startup sweep (FAILED), and
-        the page shows that Sub-task as not completed."""
+        """Store the validated outcome and its event in one write, so a crash leaves both or
+        neither: the Run page never shows as not completed an outcome that is stored, nor an
+        outcome that is not."""
         status = SubTaskStatus.SUCCEEDED if ok else SubTaskStatus.FAILED
-        deps.repos.subtasks.set_status(owner, run_id, sid, status)
-        deps.log(owner, run_id, SUBTASK_FINISHED, subtask_id=sid, outcome=status.value.lower())
+        deps.repos.subtasks.set_status(
+            owner, run_id, sid, status,
+            event=deps.event(owner, run_id, SUBTASK_FINISHED, subtask_id=sid,
+                             outcome=status.value.lower()))
 
     def memory_background(state: State, all_outcomes):
         """Historical items for the references each memory Sub-task named that its own

@@ -593,6 +593,7 @@ a {
 .subtask__id {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere; /* an id may be any length */
 }
 .subtask__aspect {
   color: var(--graphite);

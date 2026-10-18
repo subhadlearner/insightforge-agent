@@ -2,11 +2,11 @@
 
 Three Run-log events, each written from an authoritative point and never inferred:
 
-- `plan_accepted`: the accepted plan, appended only after its Sub-task rows are stored.
+- `plan_accepted`: the accepted plan, stored in one write with its Sub-task rows.
 - `subtask_started`: a dispatch the ApprovedDispatchGuard let through, just before the
   Researcher runs it. A refused dispatch never has one.
-- `subtask_finished`: the outcome `collect` validated and stored, appended after the stored
-  status. A Researcher's reply alone is never an outcome; a Run that stops first has none."""
+- `subtask_finished`: the outcome `collect` validated, stored in one write with the status.
+  A Researcher's reply alone is never an outcome; a Run that stops first has none."""
 
 import copy
 
@@ -55,18 +55,17 @@ def watch_appends(deps, check) -> None:
 
 # --- Queued: the accepted, persisted plan --------------------------------------------------
 
-def test_the_accepted_plan_is_logged_once_after_its_subtask_rows_are_stored(make_deps):
+def test_the_accepted_plan_is_logged_once_with_exactly_its_stored_subtasks(make_deps):
+    """Stored in one write with the plan's rows (tests/stores/test_t20_subtask_atomic.py)."""
     deps = make_deps()
-    stored_at_event: list = []
-    watch_appends(deps, lambda e: e.type == "plan_accepted" and stored_at_event.append(
-        [(r.subtask.id, r.status) for r in deps.repos.subtasks.list(e.owner_id, e.run_id)]))
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     assert run.state == RunState.COMPLETE
     (plan,) = of_type(deps, run, "plan_accepted")
     assert plan == {"sub_tasks": [
         {"id": sid, "aspect": name, "query": fakes.QUERIES[sid], "source_type": "web"}
         for sid, name in (("s1", "Sales"), ("s2", "Pricing"), ("s3", "Batteries"))]}
-    assert stored_at_event == [[(s, SubTaskStatus.PENDING) for s in ("s1", "s2", "s3")]]
+    assert [t["id"] for t in plan["sub_tasks"]] == \
+        [r.subtask.id for r in deps.repos.subtasks.list("alice", run.id)]
     types = [e.type if e.type != "stage" else e.payload["state"] for e in events(deps, run)]
     assert types.index("plan_accepted") < types.index("RESEARCHING")
 
@@ -141,26 +140,18 @@ def test_a_dispatch_to_the_wrong_subagent_is_never_started(make_deps):
 
 # --- Done and Failed: the outcome collect validated ----------------------------------------
 
-def test_each_outcome_is_logged_after_its_status_is_stored_and_matches_it(make_deps):
+def test_each_logged_outcome_matches_its_stored_status(make_deps):
+    """Stored in one write with the status (tests/stores/test_t20_subtask_atomic.py)."""
     plan = copy.deepcopy(fakes.PLAN_ARGS)
     plan["plan"]["sub_tasks"][2]["query"] = "FAIL-ME"
     deps = make_deps(planner_model=planner_script(plan, dispatch={**fakes.QUERIES,
                                                                   "s3": "FAIL-ME"}))
-    stored_at_event: dict[str, SubTaskStatus] = {}
-
-    def check(e):
-        if e.type == "subtask_finished":
-            (record,) = [r for r in deps.repos.subtasks.list(e.owner_id, e.run_id)
-                         if r.subtask.id == e.payload["subtask_id"]]
-            stored_at_event[e.payload["subtask_id"]] = record.status
-
-    watch_appends(deps, check)
     run = run_brief(deps, "alice", Brief(text=BRIEF))
     assert run.state == RunState.COMPLETE
     outcomes = {p["subtask_id"]: p["outcome"] for p in of_type(deps, run, "subtask_finished")}
     assert outcomes == {"s1": "succeeded", "s2": "succeeded", "s3": "failed"}
-    assert stored_at_event == {"s1": SubTaskStatus.SUCCEEDED, "s2": SubTaskStatus.SUCCEEDED,
-                               "s3": SubTaskStatus.FAILED}
+    assert {r.subtask.id: r.status for r in deps.repos.subtasks.list("alice", run.id)} == {
+        "s1": SubTaskStatus.SUCCEEDED, "s2": SubTaskStatus.SUCCEEDED, "s3": SubTaskStatus.FAILED}
     finished = [e.seq for e in events(deps, run) if e.type == "subtask_finished"]
     extracting = [e.seq for e in events(deps, run) if e.type == "stage"
                   and e.payload["state"] == "EXTRACTING"]

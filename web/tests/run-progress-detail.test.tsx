@@ -79,6 +79,16 @@ describe("Sub-tasks on the Run page", () => {
     expect(screen.getByTestId("run-failed")).toBeInTheDocument();
   });
 
+  it("lists a plan whose Sub-task id is longer than 40 characters", () => {
+    const long = `s_${"x".repeat(43)}`;
+    render(<RunView runId="run_1" />);
+    source().emit(1, "plan_accepted", { sub_tasks: [...PLAN.sub_tasks, { id: long, aspect: "Outlook", query: "outlook 2026", source_type: "web" }] });
+    source().emit(2, "subtask_started", { subtask_id: long, phase: "research" });
+    expect(status(long)).toBe("Running");
+    expect(screen.queryByTestId("subtasks-unavailable")).not.toBeInTheDocument();
+    expect(screen.getByTestId("subtask-count")).toHaveTextContent("Sub-tasks: 0 of 4 finished");
+  });
+
   it("follows a repair round on the same Sub-task", () => {
     render(<RunView runId="run_1" />);
     researching();

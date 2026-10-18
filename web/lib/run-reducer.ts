@@ -52,7 +52,7 @@ export interface RunProgress {
   plan: SubTaskProgress[] | null; // null until a plan is accepted (or for a Run whose detail is gone)
   activity: ActivityEntry[];
   activityTotal: number;
-  endedAt: string | null; // the time of the Run's last terminal event, which retention keeps
+  endedAt: string | null; // when the last terminal event was recorded (just before the terminal state)
 }
 
 export type RunAction =

@@ -18,7 +18,10 @@ export interface ActivityEntry {
   tone: ActivityTone;
 }
 
-const SUBTASK_ID = /^[A-Za-z0-9_]{1,40}$/;
+// The same rule as the backend's SUBTASK_ID_PATTERN (domain/plan.py): one or more ASCII
+// letters, digits or underscores, with no length limit. A stricter rule here would drop a plan
+// the backend accepted and ran.
+const SUBTASK_ID = /^[A-Za-z0-9_]+$/;
 
 /** A Sub-task id as the pipeline accepts them, or null for anything else. */
 export function subTaskId(value: unknown): string | null {

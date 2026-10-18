@@ -239,9 +239,21 @@ class SqliteRunRepository(_Base):
         return [self._row(r) for r in rows]
 
 
+def _insert_event(db: sqlite3.Connection, event: RunEvent) -> RunEvent:
+    """Append one Run-log event on `db`, inside whatever transaction the caller holds."""
+    cur = db.execute(
+        "INSERT INTO run_events (owner_id, run_id, type, payload, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (event.owner_id, event.run_id, event.type, json.dumps(event.payload),
+         event.created_at.isoformat()),
+    )
+    return event.model_copy(update={"seq": cur.lastrowid})
+
+
 class SqliteSubTaskRepository(_Base):
-    def save_plan(self, owner_id: str, run_id: str, records: list[SubTaskRecord]) -> None:
-        with self._db:
+    def save_plan(self, owner_id: str, run_id: str, records: list[SubTaskRecord],
+                  event: RunEvent | None = None) -> None:
+        with self._db:  # one transaction: the plan and its event, or neither
             self._db.execute(
                 "DELETE FROM subtasks WHERE owner_id=? AND run_id=?", (owner_id, run_id)
             )
@@ -250,6 +262,8 @@ class SqliteSubTaskRepository(_Base):
                 [(owner_id, run_id, i, r.subtask.model_dump_json(), r.status.value, r.subtask.id)
                  for i, r in enumerate(records)],
             )
+            if event is not None:
+                _insert_event(self._db, event)
 
     def list(self, owner_id: str, run_id: str) -> list[SubTaskRecord]:
         rows = self._db.execute(
@@ -263,15 +277,18 @@ class SqliteSubTaskRepository(_Base):
         ]
 
     def set_status(
-        self, owner_id: str, run_id: str, subtask_id: str, status: SubTaskStatus
+        self, owner_id: str, run_id: str, subtask_id: str, status: SubTaskStatus,
+        event: RunEvent | None = None,
     ) -> None:
-        with self._db:
+        with self._db:  # one transaction: the outcome and its event, or neither
             cur = self._db.execute(
                 "UPDATE subtasks SET status=? WHERE owner_id=? AND run_id=? AND subtask_id=?",
                 (status.value, owner_id, run_id, subtask_id),
             )
-        if cur.rowcount == 0:
-            raise NotFoundError(f"sub-task {subtask_id}")
+            if cur.rowcount == 0:
+                raise NotFoundError(f"sub-task {subtask_id}")
+            if event is not None:
+                _insert_event(self._db, event)
 
 
 class SqliteSourceRepository(_Base):
@@ -430,13 +447,7 @@ class SqliteReportRepository(_Base):
 class SqliteRunEventRepository(_Base):
     def append(self, event: RunEvent) -> RunEvent:
         with self._db:
-            cur = self._db.execute(
-                "INSERT INTO run_events (owner_id, run_id, type, payload, created_at) "
-                "VALUES (?,?,?,?,?)",
-                (event.owner_id, event.run_id, event.type, json.dumps(event.payload),
-                 event.created_at.isoformat()),
-            )
-        return event.model_copy(update={"seq": cur.lastrowid})
+            return _insert_event(self._db, event)
 
     def read_after(
         self, owner_id: str, run_id: str, after_seq: int = 0, limit: int = 500

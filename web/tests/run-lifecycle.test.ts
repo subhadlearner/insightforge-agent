@@ -98,6 +98,17 @@ describe("Sub-task lifecycle", () => {
     expect(s.plan).toEqual(before.plan);
   });
 
+  it("accepts any id the backend accepts, however long (SUBTASK_ID_PATTERN has no length cap)", () => {
+    const long = `s_${"x".repeat(43)}`; // 45 characters, valid for domain/plan.py
+    const s = run(event("plan_accepted", { sub_tasks: [
+      { id: long, aspect: "Sales", query: "q", source_type: "web" },
+      { id: "s2", aspect: "Pricing", query: "q2", source_type: "web" },
+    ] }), started(long), finished(long, "succeeded"));
+    expect(s.plan?.map((t) => t.id)).toEqual([long, "s2"]);
+    expect(labels(s)[long]).toBe("Done");
+    expect(s.activity.map((a) => a.text)).toContain(`Sub-task ${long} (Sales) done`);
+  });
+
   it("replays and duplicates change nothing (dedupe by persisted seq)", () => {
     const actions = [stage("PLANNING", 5), plan(), started("s1", "research"), finished("s1", "succeeded")];
     const once = run(...actions);
