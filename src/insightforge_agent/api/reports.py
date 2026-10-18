@@ -9,9 +9,10 @@ in draft order, resolved from the Report's persisted provenance by
 the Passage it inherited; never a Fact-Checker re-fetch). Provenance that does not resolve is
 500, never a partial or invented list. There is no general Source or Passage endpoint.
 
-`section_confidence` is each section's Confidence, derived on every read from the Evidence
-bundle stored with the Report (`domain.contracts.section_confidence`): None for a section of
-Historical background only, and an empty list for a body too malformed to derive it from."""
+`section_confidence` is each section's label, derived on every read from the Evidence bundle
+and Historical context stored with the Report (`domain.contracts.section_confidence`):
+HIGH/MEDIUM/LOW, BACKGROUND for Historical background only, None for a section whose label
+cannot be resolved, and an empty list for a body too malformed to derive any from."""
 
 import logging
 from collections.abc import Callable
@@ -23,8 +24,9 @@ from pydantic import BaseModel, ValidationError
 
 from insightforge_agent.domain.contracts import (
     Citation,
-    Confidence,
     EvidenceBundle,
+    HistoricalContext,
+    SectionLabel,
     VerifiedReport,
     section_confidence,
 )
@@ -50,17 +52,18 @@ class ReportOut(BaseModel):
     run_id: str
     created_at: datetime
     body: dict[str, Any]
-    section_confidence: list[Confidence | None]
+    section_confidence: list[SectionLabel | None]
 
 
-def confidence_of(report: Report) -> list[Confidence | None]:
+def confidence_of(report: Report) -> list[SectionLabel | None]:
     """Per section of the fact-checked draft the viewer shows; [] for a malformed body."""
     try:
         draft = VerifiedReport.model_validate(report.body["verified"]).draft
         bundle = EvidenceBundle.model_validate(report.body["evidence"])
+        historical = HistoricalContext.model_validate(report.body.get("historical") or {})
     except (KeyError, TypeError, ValidationError):
         return []
-    return section_confidence(draft, bundle)
+    return section_confidence(draft, bundle, historical)
 
 
 def _title(report: Report) -> str:

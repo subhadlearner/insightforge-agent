@@ -933,7 +933,7 @@ export interface components {
             /** Heading */
             heading: string;
             /** Confidence */
-            confidence?: ("HIGH" | "MEDIUM" | "LOW") | null;
+            confidence?: ("HIGH" | "MEDIUM" | "LOW" | "BACKGROUND") | null;
             /** Claims */
             claims: components["schemas"]["PublicClaim"][];
         };
@@ -982,7 +982,7 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Section Confidence */
-            section_confidence: (("HIGH" | "MEDIUM" | "LOW") | null)[];
+            section_confidence: (("HIGH" | "MEDIUM" | "LOW" | "BACKGROUND") | null)[];
         };
         /** Run */
         Run: {

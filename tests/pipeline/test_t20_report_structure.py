@@ -21,6 +21,7 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.pipeline.errors import RunFailed
 from insightforge_agent.pipeline.write import (
+    NO_SUMMARY,
     SUMMARY_MAX_WORDS,
     fit_summary,
     place_claims,
@@ -142,7 +143,8 @@ def test_historical_claims_and_unknown_ids_are_left_for_the_rules_to_judge(make_
     deps = make_deps(writer_model=model)
     draft = write(deps, HistoricalContext(items=[HIST]))
     assert headings(draft)[-1] == ("Earlier outlook", ["hist_1"])
-    assert section_confidence(draft, BUNDLE) == ["HIGH", "MEDIUM", "LOW", None]
+    assert section_confidence(draft, BUNDLE, HistoricalContext(items=[HIST])) == [
+        "HIGH", "MEDIUM", "LOW", "BACKGROUND"]
 
     misplaced = ReportDraft(title="T", sections=[ReportSection(heading="Sales", claims=[
         Claim(text=hist["text"], evidence_id="hist_1", historical=True),
@@ -160,6 +162,19 @@ def test_an_omitted_evidence_section_is_retried(make_deps):
     assert [s.heading for s in draft.sections] == ["Sales", "Pricing", "Batteries"]
     retry = str(model.seen[1][-1].content)
     assert "the evidence section headed 'Batteries' has no claims" in retry and "ev_3" in retry
+
+
+def test_a_missing_section_of_several_items_is_filled_with_one_best_ranked_claim(make_deps):
+    second = "LFP cells cost 60 dollars per kWh in 2024."
+    bundle = BUNDLE.model_copy(update={"sections": [*BUNDLE.sections[:2], EvidenceSection(
+        aspect_id="a3", heading="Batteries", confidence="LOW",
+        items=[item("ev_3", "a3", CELLS, "LOW", entity="LFP"),
+               item("ev_5", "a3", second, "LOW", entity="LFP")])]})
+    deps = make_deps(writer_model=writer(*[reply(ALL_PLACED[:2])] * 3))
+    draft = write_report(deps, "alice", "run_1", "EV market", bundle, [])
+    (batteries,) = [s for s in draft.sections if s.heading == "Batteries"]
+    assert [(c.text, c.evidence_id) for c in batteries.claims] == [(CELLS, "ev_3")]
+    assert sum(len(s.claims) for s in draft.sections) == 3  # one Claim added, not two
 
 
 def test_a_section_still_omitted_after_retries_is_filled_from_its_evidence(make_deps):
@@ -274,6 +289,7 @@ DRAFT = ReportDraft(title="T", sections=[
     ([SALES] * 22, " ".join([SALES] * 21), "sentences"),
     ([" ".join(["BYD"] * 151) + "."], f"{SALES} {PRICE}", "claims"),
     ([], f"{SALES} {PRICE}", "claims"),
+    (["", "  "], f"{SALES} {PRICE}", "claims"),
 ])
 def test_fit_summary_keeps_whole_supported_text_within_the_limit(sentences, expected, how):
     summary, shortened = fit_summary(sentences, DRAFT)
@@ -281,14 +297,22 @@ def test_fit_summary_keeps_whole_supported_text_within_the_limit(sentences, expe
     assert len(summary.split()) <= SUMMARY_MAX_WORDS
 
 
-def test_fit_summary_cuts_at_a_word_only_when_nothing_whole_fits():
-    long_claim = " ".join(["BYD"] * 200) + "."
+def test_nothing_is_ever_cut_mid_claim_a_finding_free_sentence_stands_in():
+    long_claim = " ".join(["BYD"] * 200) + " did not grow."  # cut, it would lose "not"
     draft = ReportDraft(title="T", sections=[ReportSection(heading="Sales", claims=[
         Claim(text=long_claim, evidence_id="ev_1")])])
-    summary, shortened = fit_summary([long_claim], draft)
-    assert shortened == "truncated" and summary.endswith(" …")
-    assert len(summary.split()) == SUMMARY_MAX_WORDS
-    assert summary.split()[:-1] == long_claim.split()[:SUMMARY_MAX_WORDS - 1]  # no new words
+    assert fit_summary([long_claim], draft) == (NO_SUMMARY, "placeholder")
+    assert len(NO_SUMMARY.split()) <= SUMMARY_MAX_WORDS
+    assert unsupported_summary_sentences(NO_SUMMARY, BUNDLE)  # it is no finding: never grounded
+
+
+def test_empty_claim_texts_never_yield_an_empty_summary(make_deps):
+    blank = [("Sales", [claim("", "ev_1")]), ("Pricing", [claim(" ", "ev_2")]),
+             ("Batteries", [claim("", "ev_3")])]
+    deps = make_deps(writer_model=writer(*[reply(blank, summary="")] * 3))
+    draft = write(deps)
+    assert draft.summary == NO_SUMMARY
+    assert logged(deps, "writer_repaired")[0]["summary_shortened"] == "placeholder"
 
 
 def test_a_background_only_report_summary_falls_back_to_its_historical_claims():
@@ -328,10 +352,60 @@ def test_invented_names_and_numbers_are_flagged(sentence, why):
     assert reason == why
 
 
-def test_a_summary_may_use_historical_background():
-    sentence = "BYD planned a plant in Hungary."
-    assert unsupported_summary_sentences(sentence, BUNDLE)  # not current evidence
-    assert unsupported_summary_sentences(sentence, BUNDLE, HistoricalContext(items=[HIST])) == []
+HISTORY = HistoricalContext(items=[HIST])
+UNDATED = "BYD planned a plant in Hungary."
+DATED = "BYD planned a plant in Hungary (reported 2026-01-05)."
+
+
+def test_undated_earlier_report_background_is_not_a_current_conclusion():
+    ((_, why),) = unsupported_summary_sentences(UNDATED, BUNDLE, HISTORY)
+    assert why == "undated background"
+    problems = summary_problems(ReportDraft(title="T", summary=UNDATED, sections=[]),
+                                BUNDLE, HISTORY)
+    assert problems == [f"summary sentence {UNDATED!r} presents earlier-Report background as "
+                        "current; show its report date inline as (reported YYYY-MM-DD), as its "
+                        "historical claim does"]
+
+
+@pytest.mark.parametrize("sentence", [
+    DATED, "As reported on 2026-01-05, BYD planned a plant in Hungary.",
+    # mixed: a current finding and dated background in one sentence
+    "BYD sold 4.27 million vehicles in 2025 and planned a plant in Hungary (reported 2026-01-05).",
+])
+def test_dated_background_may_appear_in_the_summary(sentence):
+    assert unsupported_summary_sentences(sentence, BUNDLE, HISTORY) == []
+
+
+def test_background_dated_with_the_wrong_report_is_not_supported():
+    wrong = "BYD planned a plant in Hungary (reported 2025-01-05)."
+    ((_, why),) = unsupported_summary_sentences(wrong, BUNDLE, HISTORY)
+    # An unrecognised date is no annotation: it is substance, and its figures are unsupported.
+    assert why == "values ['01', '05'] and names ['Hungary']"
+
+
+def test_without_historical_context_background_names_are_simply_unsupported():
+    ((_, why),) = unsupported_summary_sentences(UNDATED, BUNDLE)
+    assert why == "names ['Hungary']"
+
+
+def test_a_mixed_summary_keeps_current_and_dated_sentences_and_drops_undated_background(make_deps):
+    hist = claim(DATED, "hist_1", True)
+    summary = f"{SALES} {UNDATED} {DATED}"
+    model = writer(*[reply([*ALL_PLACED, ("Earlier outlook", [hist])], summary=summary)] * 3)
+    deps = make_deps(writer_model=model)
+    draft = write(deps, HISTORY)
+    assert draft.summary == f"{SALES} {DATED}"
+    assert logged(deps, "writer_repaired")[0]["removed_summary_sentences"] == [UNDATED]
+
+
+def test_a_background_only_report_keeps_its_summary_dated(make_deps):
+    hist = claim(DATED, "hist_1", True)
+    empty = EvidenceBundle(sections=[])
+    for summary, expected in [(UNDATED, DATED), (DATED, DATED)]:
+        deps = make_deps(writer_model=writer(
+            *[reply([("Earlier outlook", [hist])], summary=summary)] * 3))
+        draft = write_report(deps, "alice", "run_1", "EV market", empty, [], HISTORY)
+        assert draft.summary == expected  # rebuilt from the dated Historical Claim
 
 
 # --- Confidence, derived on read -----------------------------------------------------------
@@ -342,3 +416,15 @@ def test_a_legacy_report_with_claims_under_an_invented_heading_still_gets_a_labe
                                                   Claim(text=PRICE, evidence_id="ev_2")]),
         ReportSection(heading="Empty", claims=[])])
     assert section_confidence(legacy, BUNDLE) == ["MEDIUM", None]
+
+
+def test_an_unresolved_reference_is_never_labelled_background():
+    draft = ReportDraft(title="T", sections=[
+        ReportSection(heading="Sales", claims=[Claim(text=SALES, evidence_id="ev_gone")]),
+        ReportSection(heading="Mixed", claims=[Claim(text=SALES, evidence_id="ev_1"),
+                                               Claim(text=SALES, evidence_id="ev_gone")]),
+        ReportSection(heading="Outlook", claims=[
+            Claim(text=DATED, evidence_id="hist_gone", historical=True)]),
+        ReportSection(heading="Earlier outlook", claims=[
+            Claim(text=DATED, evidence_id="hist_1", historical=True)])])
+    assert section_confidence(draft, BUNDLE, HISTORY) == [None, None, None, "BACKGROUND"]

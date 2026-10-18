@@ -183,7 +183,9 @@ test("the Report's inline citations open the drawer with the API's exact Source 
     await expect(page.getByRole("heading", { level: 2, name: "Executive Summary" })).toBeVisible();
     const labels = page.getByTestId("section-confidence");
     await expect(labels).toHaveText(report.section_confidence.map((c: string | null) =>
-      c ? `Confidence: ${c}` : "Background from earlier Reports · no current Confidence"));
+      c === null ? "Confidence unavailable"
+        : c === "BACKGROUND" ? "Background from earlier Reports · no current Confidence"
+        : `Confidence: ${c}`));
     await expect(page.locator('[data-claim="0:0"] .claim__source')).toHaveText(inline);
   }
   await page.emulateMedia({ media: "screen" });

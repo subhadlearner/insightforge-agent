@@ -35,9 +35,16 @@ function CitationsNotice({ state }: { state: CitationsState }) {
 }
 
 /** The label under a section heading. Historical background has no current Confidence, so
- *  it is labelled as background rather than given one. */
-function ConfidenceLabel({ confidence }: { confidence: SectionConfidence }) {
+ *  it is labelled as background rather than given one; an unresolved label says so. */
+export function ConfidenceLabel({ confidence }: { confidence: SectionConfidence }) {
   if (confidence === null) return null;
+  if (confidence === "unresolved") {
+    return (
+      <p className="confidence confidence--unresolved" data-testid="section-confidence">
+        Confidence unavailable
+      </p>
+    );
+  }
   if (confidence === "background") {
     return (
       <p className="confidence confidence--background" data-testid="section-confidence">

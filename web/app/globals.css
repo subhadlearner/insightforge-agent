@@ -685,9 +685,13 @@ a {
   color: var(--crimson);
   background: var(--crimson-wash);
 }
-.confidence--background {
+.confidence--background,
+.confidence--unresolved {
   color: var(--graphite);
   background: var(--paper);
+}
+.confidence--unresolved {
+  border-style: dashed;
 }
 .report__gaps {
   padding-top: 1.25rem;

@@ -219,20 +219,35 @@ class ReportDraft(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
-def section_confidence(draft: ReportDraft, bundle: EvidenceBundle) -> list[Confidence | None]:
-    """Each Report section's Confidence, derived when the Report is read from the Evidence
-    bundle stored with it, so Reports written before it existed get labels too.
+# A section's label: its Confidence, or BACKGROUND for Historical background only.
+SectionLabel = Literal["HIGH", "MEDIUM", "LOW", "BACKGROUND"]
 
-    A section takes the Confidence of the Evidence sections its current Claims cite; when they
-    cite several (only possible in a Report written before Claims were filed by section), the
-    lowest. A section with no current Claim (Historical background only) has no current
-    Confidence: None, never an invented label."""
+
+def section_confidence(draft: ReportDraft, bundle: EvidenceBundle,
+                       historical: HistoricalContext | None = None) -> list[SectionLabel | None]:
+    """Each Report section's label, derived when the Report is read from the Evidence bundle
+    and Historical context stored with it, so Reports written before it existed get labels too.
+
+    A section whose current Claims all cite bundle items takes the Confidence of the Evidence
+    sections they cite; when they cite several (only possible in a Report written before Claims
+    were filed by section), the lowest. A section of Historical Claims only, each citing a
+    Historical item, is BACKGROUND: it has no current Confidence. Anything else (a Claim citing
+    an id the stored records do not hold, or no Claims at all) is None, unresolved, never
+    shown as background and never given an invented label."""
     of_item = {i.id: s.confidence for s in bundle.sections for i in s.items}
-    out: list[Confidence | None] = []
+    background = (historical or HistoricalContext()).by_id()
+    out: list[SectionLabel | None] = []
     for section in draft.sections:
-        found = [of_item[c.evidence_id] for c in section.claims
-                 if not c.historical and c.evidence_id in of_item]
-        out.append(min(found, key=CONFIDENCE_ORDER.__getitem__) if found else None)
+        current = [c for c in section.claims if not c.historical]
+        past = [c for c in section.claims if c.historical]
+        if (not section.claims or any(c.evidence_id not in of_item for c in current)
+                or any(c.evidence_id not in background for c in past)):
+            out.append(None)
+        elif current:
+            out.append(min((of_item[c.evidence_id] for c in current),
+                           key=CONFIDENCE_ORDER.__getitem__))
+        else:
+            out.append("BACKGROUND")
     return out
 
 

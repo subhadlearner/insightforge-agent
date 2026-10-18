@@ -11,13 +11,15 @@ Claims listed as a constraint, up to `writer_retries` times.
 Placement and coverage (T20 S1.1). A current Claim is filed under its Evidence item's section
 heading in code, never by asking the Writer again, and every Evidence section must keep at least
 one Claim. The Executive Summary is held to `SUMMARY_MAX_WORDS` and to a lexical grounding check:
-each number in it must appear in some Evidence or Historical statement, and each name in that
-material or the Brief. The check is lexical; it does not establish that the evidence entails the
-summary. When retries run out on a draft whose Claims pass, the draft is repaired in code
-instead of failing the Run: an uncovered section is filled with its items' own statements, an
-unsupported summary sentence is removed (an emptied summary is rebuilt from the Claims), and an
-over-long summary is shortened in code to whole sentences or whole Claims (`fit_summary`), so a
-published summary never exceeds the limit. Claim-rule violations still fail the Run."""
+each number in it must appear in an Evidence statement, and each name in the Evidence or the
+Brief. Earlier-Report background may appear only in a sentence showing its report date, as a
+Historical Claim does. The check is lexical; it does not establish that the evidence entails
+the summary. When retries run out on a draft whose Claims pass, the draft is repaired in code
+instead of failing the Run: an uncovered section gets one Claim stating its best-ranked item,
+unsupported summary sentences are removed, and the rest is fitted to the limit from whole
+sentences or whole Claims, never part of one, else replaced by a sentence that states no
+finding (`fit_summary`). A published summary is never empty and never over the limit.
+Claim-rule violations still fail the Run."""
 
 import re
 
@@ -54,8 +56,9 @@ its own with that heading. Every heading in the historical background needs at l
 historical claim; you need not use every historical item. Never present historical
 background as a current fact, and never set "historical": true on a bundle item.
 Summary: an executive summary of at most 150 words. Every number and name in it must appear
-in the evidence bundle or the historical background; do not add totals, rates or names the
-evidence does not state."""
+in the evidence bundle; do not add totals, rates or names the evidence does not state. A
+summary sentence drawing on the historical background must show that item's report date
+inline exactly as "(reported YYYY-MM-DD)", as its historical claim does."""
 
 SUMMARY_MAX_WORDS = 150
 
@@ -213,46 +216,76 @@ _SUMMARY_OPENERS = _OPENERS | {
 }
 
 
-def _summary_vocabulary(bundle: EvidenceBundle, historical: HistoricalContext,
-                        brief: str) -> tuple[set[str], set[str]]:
-    """The numbers and the words a summary may use: those of every Evidence and Historical
-    statement, and for words also their entities and headings and the Brief."""
-    statements = [i.statement for s in bundle.sections for i in s.items]
-    statements += [h.statement for h in historical.items]
-    labels = [i.entity for s in bundle.sections for i in s.items]
-    labels += [s.heading for s in bundle.sections]
-    labels += [h.entity for h in historical.items] + [h.heading for h in historical.items]
+def _vocabulary(statements: list[str], labels: list[str]) -> tuple[set[str], set[str]]:
+    """The numbers of `statements`, and the words of `statements` and `labels`."""
     numbers: set[str] = set()
     words: set[str] = set()
     for t in statements:
         numbers |= numbers_in(t)
         words |= _words(t)
-    for t in labels + [brief]:
+    for t in labels:
         words |= _words(t)
     return numbers, words
+
+
+def _unsupported(sentence: str, numbers: set[str], words: set[str]) -> list[str]:
+    """The numbers and names of `sentence` that the vocabulary does not contain."""
+    reasons = []
+    extra = numbers_in(sentence) - numbers
+    if extra:
+        reasons.append(f"values {sorted(extra)}")
+    openers = {w for w in _opening_names(sentence) if w.casefold() not in _SUMMARY_OPENERS}
+    names = sorted(n for n in named_entities_in(sentence) | openers if n.casefold() not in words)
+    if names:
+        reasons.append(f"names {names}")
+    return reasons
 
 
 def _summary_sentences(summary: str) -> list[str]:
     return [t for t in _SENTENCE_SPLIT.split(summary.strip()) if t]
 
 
+UNDATED_BACKGROUND = "undated background"
+
+
 def unsupported_summary_sentences(summary: str, bundle: EvidenceBundle,
                                   historical: HistoricalContext | None = None,
                                   brief: str = "") -> list[tuple[str, str]]:
-    """Each summary sentence holding a number or a name the evidence does not contain, with
-    the reason. Lexical only: a sentence that passes is not thereby shown to be entailed."""
-    numbers, words = _summary_vocabulary(bundle, historical or HistoricalContext(), brief)
+    """Each summary sentence holding a number or a name the material it may draw on does not
+    contain, with the reason. Lexical only: a sentence that passes is not thereby shown to be
+    entailed.
+
+    An undated sentence is current, so it may use only the Evidence bundle (statements,
+    entities, headings) and the Brief. Background from earlier Reports keeps its T8 rule: a
+    sentence may also use the Historical items of one report date only when it shows that
+    date in a recognised annotation, `(reported YYYY-MM-DD)` or a leading `As reported on
+    YYYY-MM-DD, `, and is checked without the annotation, as a Historical Claim is. An undated
+    sentence that the background alone would support has the reason `UNDATED_BACKGROUND`."""
+    historical = historical or HistoricalContext()
+    labels = [i.entity for s in bundle.sections for i in s.items]
+    labels += [s.heading for s in bundle.sections] + [h.heading for h in historical.items]
+    numbers, words = _vocabulary([i.statement for s in bundle.sections for i in s.items],
+                                 [*labels, brief])
+    by_date: dict = {}
+    for h in historical.items:
+        by_date.setdefault(h.report_date, []).append(h)
     out = []
     for sentence in _summary_sentences(summary):
-        reasons = []
-        extra = numbers_in(sentence) - numbers
-        if extra:
-            reasons.append(f"values {sorted(extra)}")
-        openers = {w for w in _opening_names(sentence) if w.casefold() not in _SUMMARY_OPENERS}
-        names = sorted(n for n in named_entities_in(sentence) | openers
-                       if n.casefold() not in words)
-        if names:
-            reasons.append(f"names {names}")
+        reasons = _unsupported(sentence, numbers, words)
+        if not reasons:
+            continue
+        dated = next(((day, stripped) for day in by_date
+                      if (stripped := strip_report_date(sentence, day)) is not None), None)
+        if dated is not None:
+            day, stripped = dated
+            past_n, past_w = _vocabulary([h.statement for h in by_date[day]],
+                                         [h.entity for h in by_date[day]])
+            reasons = _unsupported(stripped, numbers | past_n, words | past_w)
+        elif historical.items:
+            past_n, past_w = _vocabulary([h.statement for h in historical.items],
+                                         [h.entity for h in historical.items])
+            if not _unsupported(sentence, numbers | past_n, words | past_w):
+                reasons = [UNDATED_BACKGROUND]
         if reasons:
             out.append((sentence, " and ".join(reasons)))
     return out
@@ -268,7 +301,10 @@ def summary_problems(draft: ReportDraft, bundle: EvidenceBundle,
     if not draft.summary.strip():
         return [f"the summary is empty; write an executive summary of at most "
                 f"{SUMMARY_MAX_WORDS} words"]
-    problems = [f"summary sentence {sentence!r} has {why} not in the evidence"
+    problems = [f"summary sentence {sentence!r} presents earlier-Report background as current; "
+                "show its report date inline as (reported YYYY-MM-DD), as its historical claim "
+                "does" if why == UNDATED_BACKGROUND else
+                f"summary sentence {sentence!r} has {why} not in the evidence"
                 for sentence, why in unsupported_summary_sentences(
                     draft.summary, bundle, historical, brief)]
     words = summary_words(draft.summary)
@@ -279,15 +315,23 @@ def summary_problems(draft: ReportDraft, bundle: EvidenceBundle,
 
 
 def _fill_uncovered(draft: ReportDraft, bundle: EvidenceBundle) -> tuple[ReportDraft, list[str]]:
-    """Give each uncovered Evidence section one Claim per item, stating the item verbatim."""
+    """Give each uncovered Evidence section one Claim, stating its first item verbatim: the
+    bundle keeps a section's items best-ranked first. One is enough for coverage and adds as
+    few Claims, and so Fact-Checker samples, as possible."""
     cited = {c.evidence_id for s in draft.sections for c in s.claims if not c.historical}
     missing = [s for s in bundle.sections if not cited & {i.id for i in s.items}]
     if not missing:
         return draft, []
     extra = [ReportSection(heading=s.heading, claims=[
-        Claim(text=i.statement, evidence_id=i.id) for i in s.items]) for s in missing]
+        Claim(text=s.items[0].statement, evidence_id=s.items[0].id)]) for s in missing]
     grown, _ = place_claims(draft.model_copy(update={"sections": draft.sections + extra}), bundle)
     return grown, [s.heading for s in missing]
+
+
+# Published only when no supported sentence and no whole Claim fits the word limit. It states
+# no finding, so it cannot misstate one, and sends the reader to the cited sections.
+NO_SUMMARY = ("No summary fitted the 150-word limit; the findings are set out in the "
+              "sections below.")
 
 
 def _leading_within_limit(sentences: list[str]) -> list[str]:
@@ -301,11 +345,13 @@ def _leading_within_limit(sentences: list[str]) -> list[str]:
 
 
 def _claim_texts(draft: ReportDraft) -> list[str]:
-    """Current Claims, the first of each section first, then Historical Claims (dated as
-    written), which a Report of Historical background only has alone."""
-    current = [[c.text for c in s.claims if not c.historical] for s in draft.sections]
+    """Non-empty current Claims, the first of each section first, then Historical Claims,
+    which carry their report date as written and are all a Report of background only has."""
+    current = [[c.text for c in s.claims if not c.historical and c.text.strip()]
+               for s in draft.sections]
     ordered = [cs[0] for cs in current if cs] + [t for cs in current for t in cs[1:]]
-    return ordered + [c.text for s in draft.sections for c in s.claims if c.historical]
+    return ordered + [c.text for s in draft.sections for c in s.claims
+                      if c.historical and c.text.strip()]
 
 
 def _claims_within_limit(draft: ReportDraft) -> list[str]:
@@ -319,25 +365,25 @@ def _claims_within_limit(draft: ReportDraft) -> list[str]:
 
 
 def fit_summary(sentences: list[str], draft: ReportDraft) -> tuple[str, str | None]:
-    """A summary of at most `SUMMARY_MAX_WORDS` from supported `sentences`, adding no words of
-    its own, and how it was shortened: None (it fitted), "sentences" (leading whole sentences),
-    "claims" (no sentence fitted, so whole Claims), or "truncated" (nothing whole
-    fits: the first sentence, or else the first Claim, cut at a word with a closing "…")."""
-    if summary_words(" ".join(sentences)) <= SUMMARY_MAX_WORDS and sentences:
+    """A non-empty summary of at most `SUMMARY_MAX_WORDS`, built only from whole supported
+    `sentences` or whole Claims, never part of one, and how it was made: None (the sentences
+    fitted), "sentences" (leading whole sentences), "claims" (no sentence fitted, so whole
+    Claims) or "placeholder" (nothing whole fits: `NO_SUMMARY`, which states no finding)."""
+    sentences = [t for t in sentences if t.strip()]
+    if sentences and summary_words(" ".join(sentences)) <= SUMMARY_MAX_WORDS:
         return " ".join(sentences), None
     if kept := _leading_within_limit(sentences):
         return " ".join(kept), "sentences"
     if claims := _claims_within_limit(draft):
         return " ".join(claims), "claims"
-    first = sentences[0] if sentences else next(iter(_claim_texts(draft)), "")
-    return " ".join([*first.split()[:SUMMARY_MAX_WORDS - 1], "…"]), "truncated"
+    return NO_SUMMARY, "placeholder"
 
 
 def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
             historical: HistoricalContext, brief: str) -> ReportDraft:
     """A draft whose Claims pass, made publishable in code once retries are spent. The
-    published summary never exceeds `SUMMARY_MAX_WORDS` and holds only supported sentences or
-    Claims (or a word-boundary cut of one)."""
+    published summary is non-empty, at most `SUMMARY_MAX_WORDS`, and holds only whole
+    supported sentences, whole Claims or `NO_SUMMARY`."""
     draft, filled = _fill_uncovered(draft, bundle)
     unsupported = unsupported_summary_sentences(draft.summary, bundle, historical, brief)
     dropped = {sentence for sentence, _ in unsupported}
@@ -348,7 +394,7 @@ def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: 
              removed_summary_sentences=sorted(dropped), summary_rebuilt=not supported,
              summary_shortened=shortened, summary_words=summary_words(summary))
     if (violations(draft, bundle, historical) or coverage_problems(draft, bundle)
-            or summary_words(summary) > SUMMARY_MAX_WORDS):
+            or not summary.strip() or summary_words(summary) > SUMMARY_MAX_WORDS):
         raise RunFailed("the Writer's draft could not be repaired")
     return draft
 

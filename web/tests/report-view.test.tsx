@@ -114,6 +114,16 @@ describe("Report viewer", () => {
     expect(label).not.toHaveTextContent(/HIGH|MEDIUM|LOW/);
   });
 
+  it("says Confidence is unavailable for an unresolved section, never that it is background", async () => {
+    m.getReport.mockResolvedValue({ ...reportOut(), section_confidence: ["HIGH", null] });
+    render(<ReportView reportId="rep_1" />);
+    const pricing = (await screen.findByRole("heading", { name: "Pricing" })).closest("section")!;
+    const label = within(pricing).getByTestId("section-confidence");
+    expect(label).toHaveTextContent("Confidence unavailable");
+    expect(label).toHaveClass("confidence--unresolved");
+    expect(label).not.toHaveTextContent(/Background|HIGH|MEDIUM|LOW/);
+  });
+
   it("shows no label at all when Confidence could not be derived", async () => {
     m.getReport.mockResolvedValue({ ...reportOut(), section_confidence: [] });
     render(<ReportView reportId="rep_1" />);

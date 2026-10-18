@@ -40,7 +40,7 @@ def test_the_report_carries_each_sections_confidence_derived_on_read(tmp_path):
         report = with_background_section(app, add_report(app))
         app.login("alice")
         out = app.client.get(f"/reports/{report.id}").json()
-        assert out["section_confidence"] == ["HIGH", None]
+        assert out["section_confidence"] == ["HIGH", "BACKGROUND"]
         assert "section_confidence" not in out["body"]  # derived, never stored
 
 
@@ -80,5 +80,17 @@ def test_the_shared_projection_carries_confidence_and_no_passage_text(tmp_path):
         path = app.client.post(f"/reports/{report.id}/shares").json()["path"]
         public = app.client.get(path).json()
         assert [(s["heading"], s["confidence"]) for s in public["sections"]] == [
-            ("Pricing", "HIGH"), ("Outlook", None)]
+            ("Pricing", "HIGH"), ("Outlook", "BACKGROUND")]
         assert "CONFIDENTIAL PDF EXCERPT" not in str(public)
+
+
+def test_a_section_whose_background_does_not_resolve_is_unresolved_not_background(tmp_path):
+    with App(tmp_path, now=lambda: T0, pdf_renderer=FakePdf()) as app:
+        report = with_background_section(app, add_report(app))
+        body = dict(report.body)
+        body["historical"] = {"items": body["historical"]["items"][:1]}  # hist_outlook gone
+        app.runtime.repos.reports.add(Report(id="rep_three", owner_id="alice",
+                                             run_id="run_three", created_at=T0, body=body))
+        app.login("alice")
+        out = app.client.get("/reports/rep_three").json()
+        assert out["section_confidence"] == ["HIGH", None]

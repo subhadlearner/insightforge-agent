@@ -2,7 +2,8 @@
 
 Both exports show the Executive Summary under its own heading and each section's Confidence,
 derived from the stored Evidence bundle (`section_confidence`); a section of Historical
-background only is labelled as such, never given a current Confidence. A Markdown Claim ends
+background only is labelled as such, never given a current Confidence, and a section whose
+label cannot be resolved says so. A Markdown Claim ends
 with its Source inline as `[Source: domain, date, credibility: score]` (T20 S11.7)."""
 
 import json
@@ -16,10 +17,10 @@ import jwt
 from pydantic import BaseModel, ValidationError
 
 from insightforge_agent.domain.contracts import (
-    Confidence,
     EvidenceBundle,
     HistoricalContext,
     ReportDraft,
+    SectionLabel,
     VerifiedReport,
     section_confidence,
 )
@@ -140,7 +141,7 @@ class PublicClaim(BaseModel):
 
 class PublicSection(BaseModel):
     heading: str
-    confidence: Confidence | None = None  # None: Historical background only
+    confidence: SectionLabel | None = None  # BACKGROUND: Historical only; None: unresolved
     claims: list[PublicClaim]
 
 
@@ -181,7 +182,7 @@ def _parts(report: Report):
     refs = {i.id: i.primary for s in evidence.sections for i in s.items}
     refs.update({i.id: i.primary for i in historical.items})
     dates = {i.id: i.report_date.isoformat() for i in historical.items}
-    return verified, refs, dates, section_confidence(verified.draft, evidence)
+    return verified, refs, dates, section_confidence(verified.draft, evidence, historical)
 
 
 def _claim_sources(
@@ -208,10 +209,13 @@ def _claim_sources(
 
 
 BACKGROUND_ONLY = "Background from earlier Reports only; no current Confidence"
+UNRESOLVED = "Confidence unavailable"
 
 
-def confidence_label(confidence: Confidence | None) -> str:
-    return f"Confidence: {confidence}" if confidence else BACKGROUND_ONLY
+def confidence_label(label: SectionLabel | None) -> str:
+    if label is None:
+        return UNRESOLVED
+    return BACKGROUND_ONLY if label == "BACKGROUND" else f"Confidence: {label}"
 
 
 def inline_source(source: Source) -> str:

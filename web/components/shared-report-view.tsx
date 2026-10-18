@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { getSharedReport, type PublicReport } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { sectionLabel } from "@/lib/report";
+import { ConfidenceLabel } from "./report-viewer";
 
 export function SharedReportView({ token }: { token: string }) {
   const [report, setReport] = useState<PublicReport | null>(null);
@@ -37,15 +39,7 @@ export function SharedReportView({ token }: { token: string }) {
       {report.sections.map((section, si) => (
         <section className="report__section" key={section.heading + si}>
           <h2 className="report__heading">{section.heading}</h2>
-          {section.confidence ? (
-            <p className={`confidence confidence--${section.confidence.toLowerCase()}`} data-testid="section-confidence">
-              Confidence: <strong>{section.confidence}</strong>
-            </p>
-          ) : (
-            <p className="confidence confidence--background" data-testid="section-confidence">
-              Background from earlier Reports · no current Confidence
-            </p>
-          )}
+          <ConfidenceLabel confidence={sectionLabel(section.confidence)} />
           {section.claims.map((claim, ci) => (
             <p className={`claim${claim.historical ? " claim--historical" : ""}`} key={ci}>
               {claim.historical && <span className="claim__background">Background from an earlier Report{claim.historical_date ? ` of ${formatDate(claim.historical_date)}` : ""}: </span>}

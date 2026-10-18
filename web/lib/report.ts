@@ -6,7 +6,8 @@
 // Claim's text ends with " [UNVERIFIED]". `body.draft` (before fact-checking) is never read,
 // so the mark cannot be lost. Citations come from GET /reports/{id}/citations only.
 // Section Confidence comes from `section_confidence`, which the API derives from the Report's
-// stored Evidence on every read: null there means Historical background only.
+// stored records on every read: BACKGROUND means Historical background only, null means the
+// section's label could not be resolved.
 
 import type { Citation, ReportOut } from "./api";
 
@@ -32,9 +33,16 @@ export interface ParsedClaim {
 
 export type Confidence = "HIGH" | "MEDIUM" | "LOW";
 
-/** A section's Confidence; "background" for Historical background only (no current
- *  Confidence); null when the API could not derive it, so no label is shown at all. */
-export type SectionConfidence = Confidence | "background" | null;
+/** A section's label: its Confidence; "background" for Historical background only (no
+ *  current Confidence); "unresolved" when the API could not resolve this section's label;
+ *  null when the API derived no labels for the Report at all, so none is shown. */
+export type SectionConfidence = Confidence | "background" | "unresolved" | null;
+
+/** The API's label for one section, as the viewer shows it. */
+export function sectionLabel(label: Confidence | "BACKGROUND" | null | undefined): SectionConfidence {
+  if (label === "BACKGROUND") return "background";
+  return label ?? "unresolved";
+}
 
 export interface ParsedSection {
   heading: string;
@@ -118,7 +126,7 @@ export function parseReport(out: ReportOut): ParsedReport {
     const section = record(rawSection, `section ${si + 1}`);
     return {
       heading: text(section.heading, `section ${si + 1} heading`),
-      confidence: labels ? labels[si] ?? "background" : null,
+      confidence: labels ? sectionLabel(labels[si]) : null,
       claims: list(section.claims, `section ${si + 1} claims`).map((rawClaim, ci): ParsedClaim => {
         const claim = record(rawClaim, `claim ${si + 1}.${ci + 1}`);
         const claimText = text(claim.text, `claim ${si + 1}.${ci + 1} text`);

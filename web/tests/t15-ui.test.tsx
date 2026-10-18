@@ -185,7 +185,7 @@ describe("T15 public share", () => {
       fact_check: { sampled: 1, verified: 1, unverified: 0, unchecked: 0 },
       sections: [
         { heading: "Pricing", confidence: "MEDIUM", claims: [{ text: "Model 3 costs 29,000 dollars.", historical: false }] },
-        { heading: "Outlook", confidence: null, claims: [{ text: "Earlier outlook.", historical: true, historical_date: "2029-06-30" }] },
+        { heading: "Outlook", confidence: "BACKGROUND", claims: [{ text: "Earlier outlook.", historical: true, historical_date: "2029-06-30" }] },
       ],
       web_sources: [{ id: "src_1", title: "Price page", url: "https://example.test/price", credibility_score: 0.8 }],
     });

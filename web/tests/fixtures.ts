@@ -33,7 +33,7 @@ export function reportOut(overrides: Partial<Record<string, unknown>> = {}): Rep
     id: "rep_1",
     run_id: "run_1",
     created_at: "2030-03-01T09:00:00Z",
-    section_confidence: ["HIGH", null],
+    section_confidence: ["HIGH", "BACKGROUND"],
     body: {
       brief: "How did BYD and Tesla compete in 2025?",
       draft: rawDraft,
