@@ -12,6 +12,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
+from insightforge_agent.agents.compaction import PLANNER, CompactionRecorder, ContextCompaction
 from insightforge_agent.domain.plan import (
     RESEARCHER,
     SubTaskPlan,
@@ -98,13 +99,21 @@ class ApprovedDispatchGuard(AgentMiddleware):
 
 
 def build_planner(*, model: BaseChatModel, subagents: list[dict], checkpointer,
-                  guard: ApprovedDispatchGuard):
+                  guard: ApprovedDispatchGuard,
+                  on_compaction: Callable[[ContextCompaction], None] | None = None):
+    """`on_compaction` receives every context compaction of the Planner's thread and of each
+    subagent dispatch, attributed to the agent that compacted."""
+    recorders = [] if on_compaction is None else [CompactionRecorder(PLANNER, on_compaction)]
+    if on_compaction is not None:
+        subagents = [{**s, "middleware": [*s.get("middleware", []),
+                                          CompactionRecorder(s["name"], on_compaction)]}
+                     for s in subagents]
     return create_deep_agent(
         model=model,
         system_prompt=PLANNER_PROMPT,
         subagents=subagents,
         tools=[submit_plan, ask_clarification],
-        middleware=[TodoListMiddleware(), guard],
+        middleware=[TodoListMiddleware(), guard, *recorders],
         checkpointer=checkpointer,
     )
 

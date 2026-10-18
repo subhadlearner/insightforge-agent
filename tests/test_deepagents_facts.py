@@ -17,3 +17,15 @@ def test_write_todos_is_not_on_by_default():
 
 def test_write_todos_available_when_middleware_passed_explicitly():
     assert "write_todos" in _tools(middleware=[TodoListMiddleware()])
+
+
+def test_the_summarization_event_contract_the_compaction_recorder_reads():
+    # agents/compaction.py reads this state key and these fields (issue #60). The key is
+    # private to deepagents, so an upgrade that renames or reshapes it must fail here rather
+    # than silently stop the Run log recording compactions. The end-to-end proof that the
+    # real middleware fills it is tests/pipeline/test_compaction_events.py.
+    from deepagents.middleware.summarization import SUMMARIZATION_EVENT_KEY, SummarizationEvent
+
+    assert SUMMARIZATION_EVENT_KEY == "_summarization_event"
+    assert set(SummarizationEvent.__annotations__) == {"cutoff_index", "summary_message",
+                                                        "file_path"}

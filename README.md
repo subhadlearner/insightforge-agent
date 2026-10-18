@@ -399,15 +399,44 @@ at a time.
 
 ### Run-log compaction: what is and is not proven
 
-The design (§4) says DeepAgents compacts history automatically, and it requires the Run log
-to record each compaction (now marked pending there). The T17 audit checked this at three
-levels:
+DeepAgents compacts an agent's history automatically, and each compaction is recorded in the
+Run log as a `context_compacted` event (issue #60). The evidence comes at three levels:
 
 | Level | Status | Evidence |
 |---|---|---|
-| (a) Compaction middleware configured | **Implemented (by the library).** `agents/planner.build_planner` calls `deepagents.create_deep_agent`. In the installed `deepagents` 0.7.23, that always appends `SummarizationMiddleware` to the Planner's stack and to each subagent's (`deepagents/graph.py`). If the chat model publishes a context-window profile, compaction triggers at 85% of it. Otherwise it triggers at 170,000 tokens and keeps the last 6 messages. For the default Planner models that means: Anthropic `claude-haiku-5-5`, no profile, so 170,000 tokens; Gemini `gemini-3.5-flash`, 85% of 1,048,576; Groq `openai/gpt-oss-120b`, 85% of 131,072 | Read from the installed library source, and the profiles were read offline from the configured models; [`docs/t17-verification.md`](docs/t17-verification.md) |
-| (b) A test that compaction is recorded | **Absent.** No test exercises compaction, and no InsightForge code reads the middleware's `_summarization_event` state or writes a compaction event to `run_events` | `grep` for `compaction`, `SummarizationMiddleware` and `_summarization_event` in `src/` and `tests/` finds nothing |
-| (c) An actual Run whose log shows a compaction | **Not observed. Not yet verified.** No committed live-run record mentions compaction. Because of (b), a real compaction would not appear in the Run log even if it happened | `docs/live-runs/` (T3 to T5) |
+| (a) Compaction middleware configured | **Implemented (by the library).** `agents/planner.build_planner` calls `deepagents.create_deep_agent`. In the installed `deepagents` 0.7.23, that always appends `SummarizationMiddleware` to the Planner's stack and to each subagent's. If the chat model publishes a context-window profile, compaction triggers at 85% of it. Otherwise it triggers at 170,000 tokens and keeps the last 6 messages. For the default Planner models that means: Anthropic `claude-haiku-5-5`, no profile, so 170,000 tokens; Gemini `gemini-3.5-flash`, 85% of 1,048,576; Groq `openai/gpt-oss-120b`, 85% of 131,072. InsightForge does not change these thresholds | Read from the installed library source, and the profiles were read offline from the configured models; [`docs/t17-verification.md`](docs/t17-verification.md) |
+| (b) Each compaction recorded in the Run log, and tested | **Implemented and CI-tested (forced, offline).** `agents/compaction.CompactionRecorder` runs after the summarization middleware on the Planner and on every subagent, and reports each completed compaction. `pipeline/graph.py` writes it once per `compaction_id` to `run_events`. The tests make the **real** middleware compact by giving scripted models a small context-window profile, which is how deepagents sets its own trigger. No event is faked | `tests/pipeline/test_compaction_events.py`: Planner compactions, a later compaction recorded and none twice, a restart on the same checkpoint, Researcher attribution per Sub-task, durability in a reopened SQLite file, and nothing recorded at the normal thresholds. `tests/test_deepagents_facts.py` pins the library state contract the recorder reads |
+| (c) A real Run on a live model whose log shows a compaction | **Not observed. Not yet verified.** No live Run has been made since the recorder was added, and none is expected to reach the trigger (below) | `docs/live-runs/` (T3 to T5, all before issue #60) |
+
+Persisted Run log from the forced offline scenario. The Planner has a 12,000-token profile and
+padded replies, and the Run includes a repair round. This was read back from the SQLite file
+on a new connection, with stage and repair events kept and the rest elided:
+
+```
+run_id=run_054b8140ac9e state=COMPLETE planner_model_calls=6 summary_calls=2
+seq=1  stage              {"state": "PLANNING"}
+seq=3  stage              {"state": "RESEARCHING"}
+seq=4  context_compacted  {"agent": "planner", "compaction_id": "cmp_ceeef4d09d5dbeb3", "cutoff_index": 4, "history_file": "/conversation_history/session_a0d5dc685e224ced89d4d6354dd707ca.md", "messages_in_conversation": 6, "subtask_id": null, "summary_chars": 331}
+seq=9  repair             {"missing": ["s3"]}
+seq=10 context_compacted  {"agent": "planner", "compaction_id": "cmp_2c92b3c8633a77ae", "cutoff_index": 10, "history_file": "/conversation_history/session_a0d5dc685e224ced89d4d6354dd707ca.md", "messages_in_conversation": 12, "subtask_id": null, "summary_chars": 331}
+seq=13 stage              {"state": "EXTRACTING"}
+...
+seq=38 stage              {"state": "COMPLETE"}
+```
+
+How to read an event:
+
+- `cutoff_index` counts the conversation's messages compacted so far.
+- `messages_in_conversation` is the conversation's full history. The middleware summarises
+  only what the model is sent, and the stored messages stay intact.
+- `history_file` is where deepagents offloaded the compacted messages. It is a path in the
+  agent's checkpointed file state, not a file on disk.
+- `subtask_id` names the Sub-task a subagent was dispatched for.
+- The event carries no message text.
+
+Reproduce it with `uv run pytest tests/pipeline/test_compaction_events.py`. The excerpt is the
+same flow as `test_each_later_compaction_is_recorded_and_none_twice`, run on SQLite files.
+Run and compaction IDs differ per run.
 
 Why compaction is not expected in normal Runs: the boundaries above keep the Planner thread
 small. Besides the DeepAgents system prompt, its thread holds the Brief with at most three Run
@@ -415,14 +444,21 @@ summaries, the plan, one canonical `task` call and one short result per Sub-task
 and any correction or repair messages. The only Planner request size on record is 8,172 tokens: a
 repair request that Groq's free tier rejected (design §12). That one measurement is about 5%
 of the 170,000-token trigger and about 7% of Groq's. Thread sizes on other Runs have not been
-measured, so this is an expectation, not a proof. Compaction is therefore a backstop that the context boundaries are
-designed never to reach.
+measured, so this is an expectation, not a proof. Compaction is a backstop that the context
+boundaries are designed never to reach. The forced scenario above pads the replies and shrinks
+the window precisely because a real Run would not get there.
 
-> **Open T17 acceptance blocker.** Criterion 2 ("Run-log compaction evidence") is **not met**.
-> Meeting it needs a production change outside this documentation ticket: record a
-> `context_compacted` Run-log event when the Planner's `_summarization_event` changes, plus a
-> test. A real compaction would also need either a deliberately long Planner thread or a
-> lowered trigger. Whether to do that, and under which ticket, is the owner's decision.
+Limits:
+
+- The recorder reads deepagents' private `_summarization_event` state key, through the
+  library's exported `SUMMARIZATION_EVENT_KEY`. No public hook reports a completed compaction
+  in 0.7.23. A library upgrade that changes the key or the event's fields fails
+  `tests/test_deepagents_facts.py`.
+- Recording relies on `create_deep_agent` placing caller middleware after its summarization
+  middleware. The integration tests would catch a change there, because no event would be
+  recorded.
+- Retention removes `context_compacted` events with the other detailed events of an expired
+  Run.
 
 ## Evaluation
 

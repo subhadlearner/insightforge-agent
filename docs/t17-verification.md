@@ -60,10 +60,34 @@ Python 3.12.14 (uv-managed), Node 24.20.0, npm 11.19.0, Docker CLI 29.8.2 (daemo
 Conclusion: criterion 2 is **blocked**. Closing it needs production instrumentation and a test,
 then evidence from a Run. That is outside the T17 documentation scope and is left to the owner.
 
+## Issue #60 follow-up: compaction recorded (2026-10-18)
+
+The audit above describes `main` before issue #60. Issue #60 added the recording:
+
+| Question | Finding now | How it was checked |
+|---|---|---|
+| Is a compaction recorded in the Run log? | Yes. `agents/compaction.CompactionRecorder` (on the Planner and on every subagent) reports each completed compaction, and `pipeline/graph.record_compaction` appends one `context_compacted` event per `compaction_id` to `run_events` | `tests/pipeline/test_compaction_events.py` |
+| How is the compaction made in the test? | By the real `SummarizationMiddleware`: the scripted models carry `profile={"max_input_tokens": 12000}`, so deepagents' own trigger is 85% of that, and the padded replies cross it. The middleware calls the model for the summary (the tests count those calls) and stores its event; the recorder reads it. No event is constructed by the tests | Same file; a mutation that removed the once-per-`compaction_id` check failed two of its tests |
+| Is it durable and correctly attributed? | Yes, offline: read back from a reopened SQLite file; Planner events have `agent: planner` and no Sub-task; Researcher events name `researcher` and their own Sub-task; a restarted process on the same checkpoint records only new compactions | Same file |
+| Do production thresholds change? | No. The ordinary fakes (no profile) record nothing | `test_without_a_small_context_window_nothing_is_compacted_or_recorded` |
+| Has a real Run on a live model been compacted? | Not observed. No live Run was made (no paid calls) | — |
+
+Persisted Run-log excerpt from the forced scenario (a scratch script, not committed, ran the
+`test_each_later_compaction_is_recorded_and_none_twice` flow on SQLite files and read them back
+on a new connection). It is reproduced in the README. Two Planner compactions are `seq=4`
+(`cutoff_index` 4) and `seq=10` (`cutoff_index` 10, after the repair round), out of 6 Planner
+model calls and 2 summary calls.
+
+Compatibility risk: the recorder depends on deepagents' private state key
+`_summarization_event` (read through the exported `SUMMARIZATION_EVENT_KEY`) and its
+`SummarizationEvent` fields. It also depends on `create_deep_agent` placing caller middleware
+after its summarization middleware. `tests/test_deepagents_facts.py` pins the first. The
+integration tests catch the second.
+
 ## Reconciliations made visible in the README
 
-- Design §4 said the Run log records each compaction. Not implemented (above); §4 now marks
-  it pending.
+- Design §4 said the Run log records each compaction. Not implemented at the T17 audit;
+  implemented by issue #60 (above), and §4 now describes it.
 - Design §4 said Evidence overflow is "compressed". The implementation cuts whole
   lowest-ranked items and logs each one as `evidence_cut` (T5 notes). Nothing is summarised;
   §4 now says so.
