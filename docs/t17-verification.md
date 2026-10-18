@@ -27,6 +27,7 @@ Python 3.12.14 (uv-managed), Node 24.20.0, npm 11.19.0, Docker CLI 29.8.2 (daemo
 | API startup | `serve --port 8765` with `SESSION_SECRET`, placeholder `GOOGLE_API_KEY`/`TAVILY_API_KEY`, `QDRANT_URL=:memory:` and scratch SQLite paths | started; `GET /personas` 200 (3 personas); `GET /reports` without cookie 401; `POST /session` 200 with an HttpOnly cookie; `GET /reports` 200 `[]`; `POST /research/estimate` 200 (75 s for web). No Run submitted |
 | Startup refusal | `serve` without `SESSION_SECRET` | `ValueError: SESSION_SECRET is required to sign the persona cookie` |
 | Startup refusal | `serve` with no search key | `Search provider 'tavily' skipped: no credentials`, then a `Settings` validation error |
+| Startup refusal | `serve` with only a placeholder `SERPAPI_API_KEY` (added after PR review) | `Search provider 'serpapi' is not implemented yet; skipped`, then `SearchError: no implemented search provider is usable`, exit 1 (`Runtime.build` → `build_deps` → `agents/web.build_search`) |
 
 ### Caveats: what this record does not show
 
@@ -61,10 +62,13 @@ then evidence from a Run. That is outside the T17 documentation scope and is lef
 
 ## Reconciliations made visible in the README
 
-- Design §4 says the Run log records each compaction. Not implemented (above).
-- Design §4 says Evidence overflow is "compressed". The implementation cuts whole
-  lowest-ranked items and logs each one as `evidence_cut` (T5 notes). Nothing is summarised.
-- `SEARCH_PROVIDERS` accepts `serpapi` and `brave`, and a key for either passes the startup
-  check. Only Tavily is implemented; the others are skipped at search time (T3 notes,
-  `agents/web.py`).
+- Design §4 said the Run log records each compaction. Not implemented (above); §4 now marks
+  it pending.
+- Design §4 said Evidence overflow is "compressed". The implementation cuts whole
+  lowest-ranked items and logs each one as `evidence_cut` (T5 notes). Nothing is summarised;
+  §4 now says so.
+- `SEARCH_PROVIDERS` accepts `serpapi` and `brave`, but only Tavily is implemented. A SerpAPI
+  or Brave key passes the `Settings` credential check, then `build_search` skips the provider
+  and raises `SearchError` when no Tavily key is set, so the API does not start (T3 notes,
+  `agents/web.py`). The first README draft got this wrong; corrected after PR review.
 - CI runs the integration step without a model cache, so those tests skip there.

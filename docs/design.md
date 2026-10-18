@@ -76,9 +76,9 @@ Graph state carries IDs and small structured values only, never Source bodies or
 
 - **Per-call cap.** Every model call that reads Passage text is limited by a configurable token cap. A batch over the cap is split, never silently truncated. This cap and the Evidence bundle budget are separate limits, and each has its own test. A test captures model-call payloads and asserts that they respect the cap.
 - **Isolation.** Researcher subagents are defined with their own `tools=` and receive only their Sub-task. Never use fork mode. A researcher model never sees a Source body: the fetch tool writes the one-line summary in its own bounded call, and the researcher sees only `{source_id, title, summary}`.
-- **Budget.** The Evidence bundle respects a token budget (default 6,000). Overflow is compressed, never truncated, and each cut is logged with its reason and the item's Confidence.
+- **Budget.** The Evidence bundle respects a token budget (default 6,000). Overflow is cut by whole items, lowest-ranked first, never truncated mid-item and never summarised, and each cut is logged (`evidence_cut`) with its reason, the item's Confidence and its rank (T5 notes).
 - **Memory.** At start the Planner reads the last 3 Run summaries for the same Watchlist Item, or for the same User on one-shot Runs. It never reads transcripts.
-- **Compaction.** DeepAgents compacts history automatically. There is no `summarization=True` flag, and the Run log records each compaction so the README's context-blowout evidence can be produced. *Status (T17 audit, 2026-10-18): the middleware is present, but nothing records a compaction in `run_events` yet, and no test covers it; see `docs/t17-verification.md`.*
+- **Compaction.** DeepAgents compacts history automatically. There is no `summarization=True` flag. **Pending:** the Run log does not record compactions yet. Recording each one in `run_events` (so the README's context-blowout evidence can be produced) and a test for it are still to be built; until then no Run log can show a compaction (T17 audit, `docs/t17-verification.md`).
 - **Planner todos.** `write_todos` tracks Sub-task completion. Whether `TodoListMiddleware` has to be passed explicitly is checked at build time (section 12).
 
 ## 5. Agents

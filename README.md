@@ -169,12 +169,13 @@ depends on what you run:
 | Mode | Needs | Network | Cost |
 |---|---|---|---|
 | Offline: tests, import contracts, `demo`, browser E2E | nothing in `.env` | package and browser downloads only. Tests fail on any outbound connection | none |
-| API and UI, no Runs | `SESSION_SECRET` (32+ characters), one chat-provider key, one search key (the app checks these exist at startup, without calling them) | none at startup | none |
-| Real Runs and Watchlists | a real key for `LLM_PROVIDER` (`gemini` by default, `groq`, or `anthropic`) and `TAVILY_API_KEY`. Tavily is the only implemented search provider: a SerpAPI or Brave key passes the startup check, but those providers are skipped at search time | provider, search and fetched web pages | provider and search usage; Gemini/Groq free tiers are rate-limited |
+| API and UI, no Runs | `SESSION_SECRET` (32+ characters), the key for `LLM_PROVIDER`, and `TAVILY_API_KEY`. Startup checks that they are set, without calling either service. **A Tavily key is required even if you never submit a Run:** SerpAPI and Brave are not implemented, so a SerpAPI or Brave key alone stops the API at startup with `SearchError: no implemented search provider is usable` | none at startup | none |
+| Real Runs and Watchlists | a real key for `LLM_PROVIDER` (`gemini` by default, `groq`, or `anthropic`) and a real `TAVILY_API_KEY` (Tavily is the only implemented search provider) | provider, search and fetched web pages | provider and search usage; Gemini/Groq free tiers are rate-limited |
 | `eval` and `pytest -m live` | the above, plus the explicit opt-ins described below | as above | real, possibly paid calls |
 
 The app refuses to start without `SESSION_SECRET`, without the key for the chosen
-`LLM_PROVIDER`, or when no listed search provider has credentials. `.env.example` documents
+`LLM_PROVIDER`, when no listed search provider has credentials, or when Tavily is not among
+the usable ones (the others are listed in `SEARCH_PROVIDERS` but not implemented). `.env.example` documents
 every setting.
 
 ## Running it
@@ -332,7 +333,8 @@ required `next dev` hostname).
 | Symptom | Cause and fix |
 |---|---|
 | `ValueError: SESSION_SECRET is required to sign the persona cookie` | Set `SESSION_SECRET` in `.env` (at least 32 characters) |
-| `Search provider 'tavily' skipped: no credentials`, then a `Settings` validation error | No listed search provider has a key. Set `TAVILY_API_KEY` or change `SEARCH_PROVIDERS` |
+| `Search provider 'tavily' skipped: no credentials`, then a `Settings` validation error | No listed search provider has a key. Set `TAVILY_API_KEY` |
+| `SearchError: no implemented search provider is usable` | Only a SerpAPI or Brave key is set, or `tavily` is missing from `SEARCH_PROVIDERS`. Set `TAVILY_API_KEY` and keep `tavily` in the list |
 | `failed to connect to the docker API` | Docker is not running. Start it, or set `QDRANT_URL=:memory:` for a throwaway in-process Qdrant |
 | The UI loads without styles or scripts | You opened `127.0.0.1:3000`. Use `http://localhost:3000` |
 | PDF export fails | Run `npx playwright install chromium` in `web/`, and keep the Next app running at `WEB_ORIGIN` |
@@ -354,6 +356,8 @@ required `next dev` hostname).
 | Browser E2E (Playwright) | `npm run test:e2e` in `web/` | `npx playwright install chromium` and `uv`. Starts `tests/web_e2e/server.py` (the real app, scripted models, no keys) and `next start` itself | yes |
 | Generated API types are current | `npm run api:types` in `web/` against a running API, then `git diff` | a running API | yes |
 
+In PowerShell, set the variable first: `$env:INSIGHTFORGE_ALLOW_LIVE_TESTS = "1"; uv run pytest -m live`
+(it stays set for that session; `Remove-Item Env:INSIGHTFORGE_ALLOW_LIVE_TESTS` clears it).
 `pytest -m live` alone is not enough: live tests also need `INSIGHTFORGE_ALLOW_LIVE_TESTS=1`,
 and skip without it.
 
@@ -389,14 +393,15 @@ at a time.
 | **Isolated Researchers.** Each Researcher is a DeepAgents subagent with its own `tools=` and only its Sub-task's task description. It does not see the Brief, the plan or its peers. Only its final message returns to the Planner | The Planner's thread grows by one short result per Sub-task, not by every search and fetch | CI-tested: same test, plus `tests/pipeline/test_isolation.py::test_the_researcher_subagent_has_its_own_tools_and_is_not_forked`. Isolation on a real model was checked in the T1 spike (`docs/design.md` section 12) |
 | **Planner memory is three Run summaries.** The Planner gets the last 3 Run summaries for the same Watchlist Item, or for the same User's one-shot Runs. Each summary is bounded (Brief 500 characters, 6 themes, 12 entities, 6 gaps). It never sees transcripts, earlier Reports or Passage text | Memory stays constant in size however many Runs a User has made | CI-tested: `tests/pipeline/test_t8_memory.py::test_the_planner_reads_exactly_the_newest_three_summaries_and_no_transcript`. The Run log records `run_summaries_loaded` with count and IDs only |
 | **Bounded Passage batches.** Extraction (one Source at a time), Synthesis (one Sub-task at a time) and the Fact-Checker read Passage text in batches under `PASSAGE_TOKEN_CAP` (default 3,000 estimated tokens, measured on the rendered batch). An oversized Passage is read in windows, never truncated | The cost of one call does not grow with page or document length | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_budget` (captures the payloads); `tests/pipeline/test_t5_review.py::test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synthesis` |
-| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context, and never sees Passage text. When the bundle is over budget, whole lowest-ranked items are cut (never truncated mid-item), and each cut is logged as an `evidence_cut` event with its reason, Confidence and rank | The Writer's input is bounded however much research succeeded | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`. Note: design §4 calls this "compressed". The implementation drops whole items and does not summarise them. Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
+| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context, and never sees Passage text. When the bundle is over budget, whole lowest-ranked items are cut (never truncated mid-item), and each cut is logged as an `evidence_cut` event with its reason, Confidence and rank | The Writer's input is bounded however much research succeeded | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`. Nothing is summarised: the implementation drops whole items (design §4 was corrected to say so). Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
 | **Historical context stays apart.** Claims from earlier Reports enter as Historical items with their original Report, date and Passages, never as current Evidence items. They never establish or confirm a Finding | Old material cannot pose as current evidence, and its provenance stays checkable | CI-tested: `tests/pipeline/test_t8_memory.py::test_memory_findings_become_historical_claims_with_original_lineage`, `tests/pipeline/test_t8_historical_checks.py` |
 | **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway spend | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner and Writer calls are not counted yet |
 
 ### Run-log compaction: what is and is not proven
 
-The design (§4) says DeepAgents compacts history automatically and that "the Run log records
-each compaction". The T17 audit checked this at three levels:
+The design (§4) says DeepAgents compacts history automatically, and it requires the Run log
+to record each compaction (now marked pending there). The T17 audit checked this at three
+levels:
 
 | Level | Status | Evidence |
 |---|---|---|
