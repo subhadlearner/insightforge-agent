@@ -11,6 +11,14 @@ export function formatEstimate(seconds: number): string {
   return rest === 0 ? `about ${minutes} min` : `about ${minutes} min ${rest} sec`;
 }
 
+/** "42 sec", "4 min 12 sec", "1 h 3 min": a measured duration (not an estimate). */
+export function formatElapsed(milliseconds: number): string {
+  const s = Math.max(0, Math.floor(milliseconds / 1000));
+  if (s < 60) return `${s} sec`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60} sec`;
+  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+}
+
 /** "14:05" until the deadline, or null once it has passed (the server decides what then). */
 export function formatCountdown(deadline: string, now: number): string | null {
   const left = Math.floor((Date.parse(deadline) - now) / 1000);

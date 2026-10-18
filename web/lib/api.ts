@@ -11,6 +11,7 @@ type Schemas = components["schemas"];
 export type Persona = Schemas["PersonaOut"];
 export type RuntimeEstimate = Schemas["RuntimeEstimateOut"];
 export type RunAccepted = Schemas["RunAccepted"];
+export type RunTiming = Schemas["RunTimingOut"];
 export type DocumentIn = Schemas["DocumentIn"];
 export type ClarificationOut = Schemas["ClarificationOut"];
 export type ReportListItem = Schemas["ReportListItem"];
@@ -113,6 +114,10 @@ export const estimateRuntime = (sourceToggles: SourceToggles, documentCount: num
 export const submitRun = (brief: string, sourceToggles: SourceToggles, documents: DocumentIn[]) =>
   request<RunAccepted>("POST", "/research/run",
     { brief, source_toggles: sourceToggles, documents });
+
+/** The stored Run.created_at and the server's clock now, for the Run's elapsed time. */
+export const getRunTiming = (runId: string) =>
+  request<RunTiming>("GET", `/research/runs/${encodeURIComponent(runId)}`);
 
 export const getClarification = (runId: string) =>
   request<ClarificationOut>("GET", `/research/${encodeURIComponent(runId)}/clarification`);
