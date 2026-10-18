@@ -306,13 +306,25 @@ def test_nothing_is_ever_cut_mid_claim_a_finding_free_sentence_stands_in():
     assert unsupported_summary_sentences(NO_SUMMARY, BUNDLE)  # it is no finding: never grounded
 
 
-def test_empty_claim_texts_never_yield_an_empty_summary(make_deps):
-    blank = [("Sales", [claim("", "ev_1")]), ("Pricing", [claim(" ", "ev_2")]),
-             ("Batteries", [claim("", "ev_3")])]
-    deps = make_deps(writer_model=writer(*[reply(blank, summary="")] * 3))
+BLANK = [("Sales", [claim("", "ev_1")]), ("Pricing", [claim(" 	", "ev_2")]),
+         ("Batteries", [claim(CELLS, "ev_3")])]
+
+
+def test_a_blank_claim_is_a_violation_even_with_a_valid_evidence_id(make_deps):
+    model = writer(reply(BLANK), reply(ALL_PLACED))
+    deps = make_deps(writer_model=model)
     draft = write(deps)
-    assert draft.summary == NO_SUMMARY
-    assert logged(deps, "writer_repaired")[0]["summary_shortened"] == "placeholder"
+    assert [c.text for s in draft.sections for c in s.claims] == [SALES, PRICE, CELLS]
+    retry = str(model.seen[1][-1].content)
+    assert "the claim citing 'ev_1' under 'Sales' has no text" in retry
+    assert "the claim citing 'ev_2' under 'Pricing' has no text" in retry
+
+
+def test_blank_claims_never_cover_a_section_or_reach_repair(make_deps):
+    deps = make_deps(writer_model=writer(*[reply(BLANK, summary="")] * 3))
+    with pytest.raises(RunFailed):  # never an empty substantive Report
+        write(deps)
+    assert logged(deps, "writer_repaired") == []
 
 
 def test_a_background_only_report_summary_falls_back_to_its_historical_claims():

@@ -115,6 +115,10 @@ def violations(draft: ReportDraft, bundle: EvidenceBundle,
         problems.append("the report has no claims")
     for section in draft.sections:
         for c in section.claims:
+            if not c.text.strip():
+                problems.append(f"the claim citing {c.evidence_id!r} under {section.heading!r} "
+                                "has no text; state what the item says")
+                continue
             if c.historical:
                 h = background.get(c.evidence_id)
                 if h is None:
@@ -345,13 +349,12 @@ def _leading_within_limit(sentences: list[str]) -> list[str]:
 
 
 def _claim_texts(draft: ReportDraft) -> list[str]:
-    """Non-empty current Claims, the first of each section first, then Historical Claims,
+    """Current Claims, the first of each section first, then Historical Claims,
     which carry their report date as written and are all a Report of background only has."""
-    current = [[c.text for c in s.claims if not c.historical and c.text.strip()]
-               for s in draft.sections]
+    current = [[c.text for c in s.claims if not c.historical] for s in draft.sections]
     ordered = [cs[0] for cs in current if cs] + [t for cs in current for t in cs[1:]]
     return ordered + [c.text for s in draft.sections for c in s.claims
-                      if c.historical and c.text.strip()]
+                      if c.historical]
 
 
 def _claims_within_limit(draft: ReportDraft) -> list[str]:
