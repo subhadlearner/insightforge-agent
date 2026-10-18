@@ -1,4 +1,4 @@
-"""T20 B6: `GET /research/runs/{run_id}` gives the Run page what its elapsed time is measured
+"""T20 B6: `GET /research/{run_id}/timing` gives the Run page what its elapsed time is measured
 from: the stored `Run.created_at` (so queueing and clarification count) and the server's clock
 now (so a browser clock that is off does not skew it). Read only, and the owner's alone."""
 
@@ -22,7 +22,7 @@ def test_the_owner_gets_the_stored_creation_time_and_the_server_clock(tmp_path):
     with App(tmp_path, now=clock) as app:
         run_id = completed_run(app)
         clock.at = T0 + timedelta(minutes=7)
-        response = app.client.get(f"/research/runs/{run_id}")
+        response = app.client.get(f"/research/{run_id}/timing")
         assert response.status_code == 200
         body = response.json()
         stored = app.run(run_id)
@@ -36,8 +36,8 @@ def test_another_users_run_and_an_unknown_run_are_the_same_404(tmp_path):
     with App(tmp_path) as app:
         run_id = completed_run(app, "bob")
         app.login("alice")
-        foreign = app.client.get(f"/research/runs/{run_id}")
-        unknown = app.client.get("/research/runs/run_nope")
+        foreign = app.client.get(f"/research/{run_id}/timing")
+        unknown = app.client.get("/research/run_nope/timing")
         assert foreign.status_code == unknown.status_code == 404
         assert foreign.json()["detail"].replace(run_id, "X") == \
             unknown.json()["detail"].replace("run_nope", "X")
@@ -48,8 +48,8 @@ def test_it_needs_a_persona_and_creates_nothing(tmp_path):
         run_id = completed_run(app)
         runs = app.runtime.repos.runs.list_for_owner("alice")
         for _ in range(3):  # a reload asks again; no Run is ever submitted by it
-            assert app.client.get(f"/research/runs/{run_id}").status_code == 200
+            assert app.client.get(f"/research/{run_id}/timing").status_code == 200
         assert app.runtime.repos.runs.list_for_owner("alice") == runs
         assert app.run(run_id).state == RunState.COMPLETE
         app.client.cookies.clear()
-        assert app.client.get(f"/research/runs/{run_id}").status_code == 401
+        assert app.client.get(f"/research/{run_id}/timing").status_code == 401

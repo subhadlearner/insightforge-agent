@@ -15,8 +15,21 @@ export interface TocEntry {
 }
 
 function slug(text: string): string {
-  return text.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase()
+  return text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
     .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/** The contents of a Report: Executive Summary when present, each rendered section, Gaps &
+ *  limitations when present and, on a public share, Web Sources. `anchors` are the sections'. */
+export function reportContents(report: { summary: string | null | undefined; headings: readonly string[]; gaps: number; webSources?: boolean }): { anchors: string[]; entries: TocEntry[] } {
+  const anchors = sectionAnchors(report.headings);
+  const entries: TocEntry[] = [
+    ...(report.summary ? [{ id: SUMMARY_ANCHOR, label: "Executive Summary" }] : []),
+    ...report.headings.map((label, i) => ({ id: anchors[i], label })),
+    ...(report.gaps > 0 ? [{ id: GAPS_ANCHOR, label: "Gaps & limitations" }] : []),
+    ...(report.webSources ? [{ id: WEB_SOURCES_ANCHOR, label: "Web Sources" }] : []),
+  ];
+  return { anchors, entries };
 }
 
 /** One anchor per heading, in order: readable, unique and stable. */

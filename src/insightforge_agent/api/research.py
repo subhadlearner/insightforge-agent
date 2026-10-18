@@ -24,7 +24,7 @@ and queueing it: that Run is already FAILED when the 503 is sent.
 - An unknown Run and another User's Run are the same 404, checked before the cursor.
   Disconnecting only stops the stream; the Run carries on in the RunExecutor.
 
-`GET /research/runs/{run_id}` is what the Run page measures elapsed time from: the stored
+`GET /research/{run_id}/timing` is what the Run page measures elapsed time from: the stored
 `created_at` (so time queued and waiting for an answer counts) and the server's clock `now`
 (so a browser clock that is off does not skew it). Read only; another User's Run is the same 404
 as an unknown one. The page stops the clock at the Run's last terminal event, which retention
@@ -53,7 +53,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from insightforge_agent.domain.contracts import Brief, effective_source_toggles
 from insightforge_agent.domain.documents import MAX_DOCUMENTS, Upload
 from insightforge_agent.domain.errors import NotFoundError, SubmissionRejected
-from insightforge_agent.domain.models import TERMINAL_STATES, RunEvent, User
+from insightforge_agent.domain.models import TERMINAL_STATES, RunEvent, RunState, User
 from insightforge_agent.domain.plan import SourceType
 from insightforge_agent.domain.repositories import RunEventRepository, RunRepository
 from insightforge_agent.domain.runtime_estimate import EstimateCoefficients, estimate_runtime
@@ -90,7 +90,7 @@ class RunAccepted(BaseModel):
 
 class RunTimingOut(BaseModel):
     run_id: str
-    state: str
+    state: RunState
     created_at: datetime  # the stored Run.created_at
     now: datetime  # the server's clock, to correct for the browser's
 
@@ -182,13 +182,13 @@ def research_router(service: ResearchService, current_user: Callable[..., User],
         return RuntimeEstimateOut(
             **asdict(estimate_runtime(coefficients, toggles, body.document_count)))
 
-    @router.get("/runs/{run_id}", response_model=RunTimingOut)
+    @router.get("/{run_id}/timing", response_model=RunTimingOut)
     def timing(run_id: str, user: User = Depends(current_user)):
         try:
             run = runs.get(user.id, run_id)
         except NotFoundError:
             raise HTTPException(404, f"run {run_id} not found") from None
-        return RunTimingOut(run_id=run.id, state=run.state.value, created_at=run.created_at,
+        return RunTimingOut(run_id=run.id, state=run.state, created_at=run.created_at,
                             now=now())
 
     @router.get("/status")

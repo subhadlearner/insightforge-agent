@@ -9,7 +9,7 @@ import { API_ORIGIN, choosePersona, control } from "./support";
 // Reader's search retrieves it, and the Report cites it; the citation drawer must show the exact
 // passage with the page and section Docling found. Only the chat models are scripted
 // (tests/web_e2e/real_documents.py). The backend blocks every outbound connection, and this test
-// asserts none was attempted. Without the cached model files the test is skipped, with the
+// asserts none was attempted, and that the browser requested nothing beyond the local servers. Without the cached model files the test is skipped, with the
 // reason, rather than run against a stand-in.
 
 const PDF = path.join(__dirname, "..", "..", "samples", "documents", "northwind-health-annual-report-2025.pdf");
@@ -24,6 +24,11 @@ test("a real PDF is uploaded, parsed, retrieved, cited, and its passage shown wi
   const caps: Capabilities = await (await request.get(`${API_ORIGIN}/__test__/capabilities`)).json();
   test.skip(!caps.real_documents, `real document research is not wired: ${caps.reason}`);
   await control(request, "gate/open");
+  const external: string[] = []; // every request the browser makes must stay on this machine
+  page.on("request", (r) => {
+    const host = new URL(r.url()).hostname;
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(host) && !r.url().startsWith("data:")) external.push(r.url());
+  });
 
   await choosePersona(page, "alice");
   await page.getByLabel("Brief", { exact: true }).fill(BRIEF);
@@ -90,4 +95,5 @@ test("a real PDF is uploaded, parsed, retrieved, cited, and its passage shown wi
   expect(ingested.payload.chunks).toBeGreaterThan(3);
   const after: Capabilities = await (await request.get(`${API_ORIGIN}/__test__/capabilities`)).json();
   expect(after.blocked_network).toEqual([]);
+  expect(external).toEqual([]);
 });

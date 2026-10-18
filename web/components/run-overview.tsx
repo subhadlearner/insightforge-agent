@@ -6,7 +6,7 @@
 
 import { formatElapsed, STAGE_LABELS } from "@/lib/format";
 import {
-  milestones, subTaskDetail, subTaskLabel, subTaskSummary, type RunProgress,
+  milestones, SUBTASK_LABELS, subTaskDetail, subTaskSummary, subTaskView, type RunProgress,
 } from "@/lib/run-reducer";
 import type { Elapsed } from "./use-elapsed";
 
@@ -77,13 +77,13 @@ export function SubTaskList({ state }: { state: RunProgress }) {
       {detail === "available" && state.plan ? (
         <ol className="subtasks__list">
           {state.plan.map((t) => {
-            const label = subTaskLabel(state, t);
+            const view = subTaskView(state, t);
             return (
-              <li key={t.id} className={`subtask subtask--${label.toLowerCase().replace(/\s+/g, "-")}`} data-testid={`subtask-${t.id}`}>
+              <li key={t.id} className={`subtask subtask--${view}`} data-testid={`subtask-${t.id}`}>
                 <span className="subtask__head">
                   <span className="subtask__id">{t.id}</span>
                   {t.aspect && <span className="subtask__aspect">{t.aspect}</span>}
-                  <span className="subtask__status">{label}</span>
+                  <span className="subtask__status">{SUBTASK_LABELS[view]}</span>
                 </span>
                 {t.query && <span className="subtask__query">{t.query}</span>}
               </li>
@@ -97,7 +97,7 @@ export function SubTaskList({ state }: { state: RunProgress }) {
   );
 }
 
-function clock(at: string): string {
+function timeOfDay(at: string): string {
   const d = new Date(at);
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
@@ -114,7 +114,7 @@ export function ActivityLog({ state }: { state: RunProgress }) {
           <ol className="activity__list">
             {state.activity.map((a) => (
               <li key={a.seq} className={`activity__entry activity__entry--${a.tone}`}>
-                <time className="activity__time" dateTime={a.at}>{clock(a.at)}</time>
+                <time className="activity__time" dateTime={a.at}>{timeOfDay(a.at)}</time>
                 <span className="activity__text">{a.text}</span>
               </li>
             ))}

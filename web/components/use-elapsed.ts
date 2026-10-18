@@ -1,6 +1,6 @@
 "use client";
 
-// A Run's elapsed time, measured from its stored `created_at` (GET /api/research/runs/{id}), so
+// A Run's elapsed time, measured from its stored `created_at` (GET /api/research/{id}/timing), so
 // time queued and time waiting for an answer count, and a reload shows the same figure. The
 // server's clock is read with it, so a browser clock that is off does not skew the count.
 // It stops at the Run's last terminal event (`endedAt`), which retention keeps.

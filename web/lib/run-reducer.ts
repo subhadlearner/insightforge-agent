@@ -34,7 +34,6 @@ export interface SubTaskProgress {
   id: string;
   aspect: string;
   query: string;
-  sourceType: string;
   status: SubTaskStatus;
   repair: boolean; // listed for the repair round
 }
@@ -84,14 +83,13 @@ function parsePlan(value: unknown): SubTaskProgress[] | null {
   const out: SubTaskProgress[] = [];
   for (const t of value) {
     if (typeof t !== "object" || t === null) return null;
-    const { id, aspect, query, source_type } = t as Record<string, unknown>;
+    const { id, aspect, query } = t as Record<string, unknown>;
     const sid = subTaskId(id);
     if (!sid || out.some((o) => o.id === sid)) return null;
     out.push({
       id: sid,
       aspect: typeof aspect === "string" ? aspect : "",
       query: typeof query === "string" ? query : "",
-      sourceType: typeof source_type === "string" ? source_type : "",
       status: "queued",
       repair: false,
     });
@@ -231,15 +229,27 @@ export function subTaskSummary(state: RunProgress): SubTaskSummary {
   return { total: plan.length, finished: done + failed, done, failed };
 }
 
+export type SubTaskView = "queued" | "queued-for-repair" | "running" | "retrying" | "done" | "failed"
+  | "not-completed" | "outcome-unavailable";
+
+export const SUBTASK_LABELS: Record<SubTaskView, string> = {
+  queued: "Queued", "queued-for-repair": "Queued for repair", running: "Running", retrying: "Retrying",
+  done: "Done", failed: "Failed", "not-completed": "Not completed", "outcome-unavailable": "Outcome unavailable",
+};
+
 /** What the page shows for one Sub-task. One without an outcome when the Run ended was not
  *  completed (FAILED) or has no recorded outcome (COMPLETE); it never shows as failed. */
+export function subTaskView(state: RunProgress, t: SubTaskProgress): SubTaskView {
+  if (t.status === "succeeded") return "done";
+  if (t.status === "failed") return "failed";
+  if (state.terminal === "FAILED") return "not-completed";
+  if (state.terminal === "COMPLETE") return "outcome-unavailable";
+  if (t.status === "running") return t.repair ? "retrying" : "running";
+  return t.repair ? "queued-for-repair" : "queued";
+}
+
 export function subTaskLabel(state: RunProgress, t: SubTaskProgress): string {
-  if (t.status === "succeeded") return "Done";
-  if (t.status === "failed") return "Failed";
-  if (state.terminal === "FAILED") return "Not completed";
-  if (state.terminal === "COMPLETE") return "Outcome unavailable";
-  if (t.status === "running") return t.repair ? "Retrying" : "Running";
-  return t.repair ? "Queued for repair" : "Queued";
+  return SUBTASK_LABELS[subTaskView(state, t)];
 }
 
 export type SubTaskDetail = "available" | "pending" | "awaiting-answer" | "never-planned" | "unavailable";

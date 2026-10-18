@@ -74,7 +74,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/research/runs/{run_id}": {
+    "/research/{run_id}/timing": {
         parameters: {
             query?: never;
             header?: never;
@@ -82,7 +82,7 @@ export interface paths {
             cookie?: never;
         };
         /** Timing */
-        get: operations["timing_research_runs__run_id__get"];
+        get: operations["timing_research__run_id__timing_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1048,8 +1048,7 @@ export interface components {
         RunTimingOut: {
             /** Run Id */
             run_id: string;
-            /** State */
-            state: string;
+            state: components["schemas"]["RunState"];
             /**
              * Created At
              * Format: date-time
@@ -1396,7 +1395,7 @@ export interface operations {
             };
         };
     };
-    timing_research_runs__run_id__get: {
+    timing_research__run_id__timing_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -117,7 +117,7 @@ export const submitRun = (brief: string, sourceToggles: SourceToggles, documents
 
 /** The stored Run.created_at and the server's clock now, for the Run's elapsed time. */
 export const getRunTiming = (runId: string) =>
-  request<RunTiming>("GET", `/research/runs/${encodeURIComponent(runId)}`);
+  request<RunTiming>("GET", `/research/${encodeURIComponent(runId)}/timing`);
 
 export const getClarification = (runId: string) =>
   request<ClarificationOut>("GET", `/research/${encodeURIComponent(runId)}/clarification`);

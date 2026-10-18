@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { getSharedReport, type PublicReport } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { sectionLabel } from "@/lib/report";
-import { GAPS_ANCHOR, SUMMARY_ANCHOR, WEB_SOURCES_ANCHOR, sectionAnchors, type TocEntry } from "@/lib/toc";
+import { GAPS_ANCHOR, SUMMARY_ANCHOR, WEB_SOURCES_ANCHOR, reportContents } from "@/lib/toc";
 import { ConfidenceLabel } from "./report-viewer";
 import { ReportToc } from "./report-toc";
 
@@ -20,13 +20,10 @@ export function SharedReportView({ token }: { token: string }) {
   if (error) return <div className="page-status" role="alert"><h1>Shared Report unavailable</h1><p>{error}</p></div>;
   if (!report) return <p className="page-status">Loading shared Report…</p>;
   const fc = report.fact_check;
-  const anchors = sectionAnchors(report.sections.map((s) => s.heading));
-  const contents: TocEntry[] = [
-    ...(report.summary ? [{ id: SUMMARY_ANCHOR, label: "Executive Summary" }] : []),
-    ...report.sections.map((s, i) => ({ id: anchors[i], label: s.heading })),
-    ...(report.gaps.length > 0 ? [{ id: GAPS_ANCHOR, label: "Gaps & limitations" }] : []),
-    { id: WEB_SOURCES_ANCHOR, label: "Web Sources" },
-  ];
+  const { anchors, entries: contents } = reportContents({
+    summary: report.summary, headings: report.sections.map((s) => s.heading), gaps: report.gaps.length,
+    webSources: true,
+  });
   return (
     <div className="report-layout">
       <ReportToc entries={contents} />

@@ -237,7 +237,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
     recorded: set[str] = set()  # compaction_ids this process has seen in the Run log
     approved: dict[str, str] = {}  # Sub-task id -> query the Planner may dispatch right now
     agent_of: dict[str, str] = {}  # Sub-task id -> the subagent its source type needs
-    phase: list[str] = ["research"]  # what an accepted dispatch is part of: research or repair
+    dispatch_round: list[str] = ["research"]  # the round an accepted dispatch belongs to: research or repair
 
     def planner_for(state: State):
         if "planner" not in holder:
@@ -271,7 +271,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                                                       description=text),
                     agent_for=lambda sid: agent_of.get(sid, AGENT_FOR_SOURCE_TYPE["web"]),
                     on_accept=lambda sid: log_locked(owner, run_id, SUBTASK_STARTED,
-                                                     subtask_id=sid, phase=phase[0])),
+                                                     subtask_id=sid, phase=dispatch_round[0])),
                 on_compaction=lambda c: record_compaction(owner, run_id, c),
             )
         return holder["planner"]
@@ -411,7 +411,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
     def researching(state: State) -> State:
         enter(state, RunState.RESEARCHING)
-        phase[0] = "research"
+        dispatch_round[0] = "research"
         approved.clear()
         approved.update({t["id"]: t["query"] for t in state["plan"]["sub_tasks"]})
         listing = listing_of(state, list(approved))
@@ -433,7 +433,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         listing = listing_of(state, state["missing"])
         approved.clear()
         approved.update({i: by_id[i]["query"] for i in state["missing"]})
-        phase[0] = "repair"
+        dispatch_round[0] = "repair"
         deps.log(state["owner_id"], state["run_id"], "repair", missing=state["missing"])
         planner_for(state).invoke({"messages": [HumanMessage(
             f"REPAIR: dispatch only these missing Sub-tasks:\n{listing}\n{DESCRIPTION_RULE}")]}, cfg(state))

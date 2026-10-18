@@ -13,7 +13,7 @@ import {
   attachCitations, inlineSource, UNVERIFIED_MARK,
   type ParsedClaim, type ParsedReport, type SectionConfidence,
 } from "@/lib/report";
-import { GAPS_ANCHOR, SUMMARY_ANCHOR, sectionAnchors, type TocEntry } from "@/lib/toc";
+import { GAPS_ANCHOR, SUMMARY_ANCHOR, reportContents } from "@/lib/toc";
 import { CitationDrawer } from "./citation-drawer";
 import { ReportToc } from "./report-toc";
 
@@ -98,12 +98,9 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
   const [openKey, setOpenKey] = useState<string | null>(null);
   const markers = useRef(new Map<string, HTMLButtonElement>());
   const openClaim = claims.find((c) => c.key === openKey) ?? null;
-  const anchors = sectionAnchors(report.sections.map((s) => s.heading));
-  const contents: TocEntry[] = [
-    ...(report.summary ? [{ id: SUMMARY_ANCHOR, label: "Executive Summary" }] : []),
-    ...report.sections.map((s, i) => ({ id: anchors[i], label: s.heading })),
-    ...(report.gaps.length > 0 ? [{ id: GAPS_ANCHOR, label: "Gaps & limitations" }] : []),
-  ];
+  const { anchors, entries: contents } = reportContents({
+    summary: report.summary, headings: report.sections.map((s) => s.heading), gaps: report.gaps.length,
+  });
 
   function close() {
     const key = openKey;

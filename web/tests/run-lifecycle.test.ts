@@ -37,9 +37,9 @@ describe("Sub-task lifecycle", () => {
 
   it("lists every Sub-task of the accepted plan as queued", () => {
     const s = run(stage("PLANNING"), plan());
-    expect(s.plan?.map((t) => [t.id, t.aspect, t.query, t.sourceType])).toEqual([
-      ["s1", "Sales", "BYD sales 2025", "web"], ["s2", "Pricing", "BYD pricing 2025", "web"],
-      ["s3", "Report", "revenue fiscal 2025", "documents"],
+    expect(s.plan?.map((t) => [t.id, t.aspect, t.query])).toEqual([
+      ["s1", "Sales", "BYD sales 2025"], ["s2", "Pricing", "BYD pricing 2025"],
+      ["s3", "Report", "revenue fiscal 2025"],
     ]);
     expect(labels(s)).toEqual({ s1: "Queued", s2: "Queued", s3: "Queued" });
     expect(subTaskSummary(s)).toEqual({ total: 3, finished: 0, done: 0, failed: 0 });
