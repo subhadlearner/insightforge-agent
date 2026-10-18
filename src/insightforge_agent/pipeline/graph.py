@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+from insightforge_agent.agents.compaction import COMPACTION_EVENT, ContextCompaction
 from insightforge_agent.agents.doc_reader import (
     DOC_SEARCH_EVENT,
     doc_reader_subagent,
@@ -142,6 +143,16 @@ def summaries_from_log(deps: Deps, owner_id: str, run_id: str) -> dict[str, Sour
     return found
 
 
+def logged_compactions(deps: Deps, owner_id: str, run_id: str) -> set[str]:
+    """The `compaction_id`s already in this Run's log."""
+    found: set[str] = set()
+    cursor = 0
+    while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
+        found.update(e.payload["compaction_id"] for e in batch if e.type == COMPACTION_EVENT)
+        cursor = batch[-1].seq
+    return found
+
+
 def returned_by_subtask(deps: Deps, owner_id: str, run_id: str, event_type: str,
                         key: str) -> dict[str, set[str]]:
     """Per Sub-task, the IDs (`key` of each `event_type` event) its own searches returned in
@@ -208,6 +219,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
     `uploads` are the Run's PDFs; their bytes stay here and never enter graph state."""
     # The Researcher tools own one Run's ids, so the Planner is built per Run, on first use.
     holder: dict = {}
+    recorded: set[str] = set()  # compaction_ids this process has seen in the Run log
     approved: dict[str, str] = {}  # Sub-task id -> query the Planner may dispatch right now
     agent_of: dict[str, str] = {}  # Sub-task id -> the subagent its source type needs
 
@@ -242,8 +254,20 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                                                       subtask_id=sid, reason=why,
                                                       description=text),
                     agent_for=lambda sid: agent_of.get(sid, AGENT_FOR_SOURCE_TYPE["web"])),
+                on_compaction=lambda c: record_compaction(owner, run_id, c),
             )
         return holder["planner"]
+
+    def record_compaction(owner: str, run_id: str, compaction: ContextCompaction) -> None:
+        """Logs a compaction once: its event stays in the agent's state for every later model
+        call, and a resumed or restarted Run sees it again. The Run log is read only for an id
+        this process has not seen, so later calls cost nothing."""
+        if compaction.compaction_id in recorded:
+            return
+        with deps.repos.lock:
+            if compaction.compaction_id not in logged_compactions(deps, owner, run_id):
+                deps.log(owner, run_id, COMPACTION_EVENT, **compaction.model_dump())
+            recorded.add(compaction.compaction_id)
 
     def log_locked(owner: str, run_id: str, type_: str, **payload) -> None:
         """A Run-log write from a tool call, which may run beside the Researcher tools."""
