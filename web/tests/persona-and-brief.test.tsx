@@ -76,9 +76,11 @@ describe("Brief form", () => {
   it("starts from the persona's default sources", async () => {
     renderDesk();
     await screen.findByLabelText("Researching as");
-    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Your documents/ })).not.toBeChecked());
+    // Wait for a toggle only Bob's defaults turn on: before they apply, the form shows the
+    // no-persona defaults (Web only), where "Your documents" is already unchecked.
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Earlier Reports/ })).toBeChecked());
     expect(screen.getByRole("checkbox", { name: /Web/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /Earlier Reports/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Your documents/ })).not.toBeChecked();
   });
 
   it("asks for an estimate with the toggles and the number of PDFs, never their contents", async () => {

@@ -79,6 +79,21 @@ class ClarificationService:
         self.resume(owner_id, run_id)
         return True
 
+    def reconcile_overdue(self) -> int:
+        """Time out every Run that still awaits an answer after its stored deadline, whether or
+        not its timeout job exists (scheduling it may have failed). Each goes through
+        `time_out`, so the compare-and-set still decides between it, the job and an answer.
+        Returns how many this call timed out. No model call is made here."""
+        now = self._deps.now()
+        timed_out = 0
+        overdue = [run for run in self._deps.repos.runs.list_unfinished()
+                   if run.state == RunState.AWAITING_CLARIFICATION
+                   and run.clarification is not None and run.clarification.expired(now)]
+        for run in overdue:
+            if self.time_out(run.owner_id, run.id):
+                timed_out += 1
+        return timed_out
+
     def _resolve(self, owner_id: str, run_id: str, *, answer: str | None,
                  now: datetime) -> Run:
         """The one compare-and-set both resolvers share. The resolution is stored in the same

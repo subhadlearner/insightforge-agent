@@ -4,6 +4,10 @@ Work for an item is the ordered queue of its COMPLETE Runs after the initializin
 Diff is unfinished. A persisted APScheduler job (`watchlist-diff:<owner>:<item>`) processes it:
 
 1. The T11 seed is normalised into established Findings first (idempotently), before any Diff.
+   A failed normalisation is retried with a persisted backoff (`SEED_RETRY_DELAYS`: 1, 2, 4,
+   8, 16, 32 minutes, then every 60 minutes, indefinitely), checked before the Finding judge
+   is called, so a duplicate job, a Run's completion or a restart cannot bring it forward.
+   Later Runs wait meanwhile; success clears it (T20 B4, T12-2).
 2. Each Run in order: its current Claims are normalised (the same eligibility as the seed),
    compared with the established state, and the result, the Baseline update and any Alert are
    committed in one transaction (`SqliteDiffRepository.commit`).
@@ -40,6 +44,15 @@ DIFF_RETRY_DELAY = timedelta(minutes=1)
 # How long a started attempt holds its Diff against a second attempt (another connection, or a
 # restart after a crash). Longer than a Diff takes: normalisation plus one bounded judge call.
 DIFF_ATTEMPT_LEASE = timedelta(minutes=10)
+# Waits after the 1st, 2nd, ... failed seed normalisation; the last repeats indefinitely.
+SEED_RETRY_DELAYS = tuple(timedelta(minutes=m) for m in (1, 2, 4, 8, 16, 32, 60))
+
+
+def seed_retry_delay(failures: int) -> timedelta:
+    """The wait after the `failures`-th failure (1 or more)."""
+    if failures < 1:
+        raise ValueError("a seed retry delay follows at least one failure")
+    return SEED_RETRY_DELAYS[min(failures, len(SEED_RETRY_DELAYS)) - 1]
 
 
 def install_diff_handler(handler):
@@ -158,17 +171,37 @@ class DiffService:
 
     def ensure_established(self, owner_id, item_id) -> bool:
         """Normalise the T11 seed into established Findings, exactly once. False when there is
-        no successful Run yet. Raises (and is retried) if normalisation fails."""
+        no successful Run yet, or while a failed normalisation waits for its backoff; the Diff
+        job is then scheduled at the backoff's end."""
         repo = self.deps.repos.diffs
         state = self.deps.repos.watchlists.baseline_state(owner_id, item_id)
         if state != "seed":
             return state == "established"
+        now = self.deps.now()
+        retry_after = repo.seed_retry_after(owner_id, item_id)
+        if retry_after is not None and now < retry_after:
+            self.schedule(owner_id, item_id, retry_after)  # no judge call before then
+            return False
         baseline = self.deps.repos.watchlists.baseline(owner_id, item_id)
-        normalized = normalize_seeds(baseline.seeds, baseline.initializing_run_id,
-                                     self.registry, self.judge)
-        result = establish(normalized.findings, self.registry)
-        if repo.establish(owner_id, item_id, baseline.initializing_run_id, result,
-                          normalized.skipped, self.deps.now()):
+        try:
+            normalized = normalize_seeds(baseline.seeds, baseline.initializing_run_id,
+                                         self.registry, self.judge)
+            result = establish(normalized.findings, self.registry)
+            established = repo.establish(owner_id, item_id, baseline.initializing_run_id,
+                                         result, normalized.skipped, now)
+        except NotFoundError:
+            raise  # the item was deleted
+        except Exception as error:  # noqa: BLE001 - every failure backs off, none is final
+            # The wait runs from the failure, not the attempt's start: a slow judge call must
+            # not leave the retry already due.
+            retry_after = repo.record_seed_failure(
+                owner_id, item_id, f"{type(error).__name__}: {error}", self.deps.now(),
+                seed_retry_delay)
+            logger.warning("Baseline seed normalisation for %s/%s failed; retrying at %s",
+                           owner_id, item_id, retry_after, exc_info=True)
+            self.schedule(owner_id, item_id, retry_after)
+            return False
+        if established:
             logger.info("Baseline established for %s/%s: %s Findings, %s skipped", owner_id,
                         item_id, len(result.updates), len(normalized.skipped))
         return True

@@ -134,8 +134,10 @@ class SqliteWatchlistRepository:
                 "DELETE FROM watchlist_baseline_failures WHERE owner_id=? AND item_id=?",
                 (owner_id, item_id),
             )
-            # T12 established state goes with the seed; the Diff log and Alerts are kept.
-            for table in ("watchlist_findings", "watchlist_baseline_state"):
+            # T12 established state goes with the seed, and so does its normalisation backoff
+            # (T20 B4); the Diff log and Alerts are kept.
+            for table in ("watchlist_findings", "watchlist_baseline_state",
+                          "watchlist_seed_retries"):
                 self._db.execute(
                     f"DELETE FROM {table} WHERE owner_id=? AND item_id=?",
                     (owner_id, item_id),
