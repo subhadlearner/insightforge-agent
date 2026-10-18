@@ -1053,6 +1053,50 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* T20 B6: the Report's table of contents, sticky beside the Report on wide screens. */
+.report-layout {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) minmax(0, var(--measure));
+  gap: clamp(1.5rem, 4vw, 3rem);
+  justify-content: center;
+  align-items: start;
+}
+.report-toc {
+  position: sticky;
+  top: 1.5rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  font-size: var(--step--1);
+}
+.report-toc__title {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--graphite);
+}
+.report-toc__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-left: 2px solid var(--rule);
+}
+.report-toc__list a {
+  display: block;
+  padding: 0.3rem 0 0.3rem 0.75rem;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.report-toc__list a:hover,
+.report-toc__list a:focus-visible {
+  color: var(--verdigris-deep);
+  text-decoration: underline;
+}
+.report__heading {
+  scroll-margin-top: 1.5rem;
+}
+
 /* --- small screens and motion --------------------------------------------------------- */
 
 @media (max-width: 52rem) {
@@ -1070,6 +1114,18 @@ a {
   }
   .report {
     font-size: 1.0625rem;
+  }
+  .report-layout {
+    display: block;
+  }
+  .report-toc {
+    position: static;
+    max-height: none;
+    margin: 0 0 1.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
   }
 }
 
@@ -1182,8 +1238,12 @@ a {
   }
   .masthead,
   .report-actions,
+  .report-toc,
   .skip-link {
     display: none !important;
+  }
+  .report-layout {
+    display: block;
   }
   .page {
     max-width: none;

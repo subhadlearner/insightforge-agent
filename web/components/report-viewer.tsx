@@ -13,7 +13,9 @@ import {
   attachCitations, inlineSource, UNVERIFIED_MARK,
   type ParsedClaim, type ParsedReport, type SectionConfidence,
 } from "@/lib/report";
+import { GAPS_ANCHOR, SUMMARY_ANCHOR, sectionAnchors, type TocEntry } from "@/lib/toc";
 import { CitationDrawer } from "./citation-drawer";
+import { ReportToc } from "./report-toc";
 
 export type CitationsState =
   | { kind: "loading" }
@@ -96,6 +98,12 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
   const [openKey, setOpenKey] = useState<string | null>(null);
   const markers = useRef(new Map<string, HTMLButtonElement>());
   const openClaim = claims.find((c) => c.key === openKey) ?? null;
+  const anchors = sectionAnchors(report.sections.map((s) => s.heading));
+  const contents: TocEntry[] = [
+    ...(report.summary ? [{ id: SUMMARY_ANCHOR, label: "Executive Summary" }] : []),
+    ...report.sections.map((s, i) => ({ id: anchors[i], label: s.heading })),
+    ...(report.gaps.length > 0 ? [{ id: GAPS_ANCHOR, label: "Gaps & limitations" }] : []),
+  ];
 
   function close() {
     const key = openKey;
@@ -133,96 +141,99 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
   }
 
   return (
-    <article className="report">
-      <header className="report__header">
-        <p className="report__meta">
-          Report of {formatDate(report.createdAt) ?? report.createdAt}
-          {report.factCheck && report.factCheck.sampled > 0 && (
-            <> <span aria-hidden="true">/</span> fact-checked {report.factCheck.sampled} claims: {report.factCheck.verified} verified, {report.factCheck.unverified} unverified, {report.factCheck.unchecked} unchecked</>
-          )}
-        </p>
-        <h1 className="report__title">{report.title}</h1>
-        {report.brief && <p className="report__brief"><span className="report__brief-label">Brief</span> {report.brief}</p>}
-      </header>
+    <div className="report-layout">
+      <ReportToc entries={contents} />
+      <article className="report">
+        <header className="report__header">
+          <p className="report__meta">
+            Report of {formatDate(report.createdAt) ?? report.createdAt}
+            {report.factCheck && report.factCheck.sampled > 0 && (
+              <> <span aria-hidden="true">/</span> fact-checked {report.factCheck.sampled} claims: {report.factCheck.verified} verified, {report.factCheck.unverified} unverified, {report.factCheck.unchecked} unchecked</>
+            )}
+          </p>
+          <h1 className="report__title">{report.title}</h1>
+          {report.brief && <p className="report__brief"><span className="report__brief-label">Brief</span> {report.brief}</p>}
+        </header>
 
-      <CitationsNotice state={citations} />
+        <CitationsNotice state={citations} />
 
-      {report.summary && (
-        <section className="report__section" aria-labelledby="executive-summary">
-          <h2 className="report__heading" id="executive-summary">Executive Summary</h2>
-          <p className="report__summary">{report.summary}</p>
-        </section>
-      )}
+        {report.summary && (
+          <section className="report__section" aria-labelledby={SUMMARY_ANCHOR}>
+            <h2 className="report__heading" id={SUMMARY_ANCHOR} tabIndex={-1}>Executive Summary</h2>
+            <p className="report__summary">{report.summary}</p>
+          </section>
+        )}
 
-      {report.sections.map((section) => (
-        <section key={section.heading + section.claims[0]?.key} className="report__section">
-          <h2 className="report__heading">{section.heading}</h2>
-          <ConfidenceLabel confidence={section.confidence} />
-          {section.claims.length === 0 && <p className="report__empty">No claims in this section.</p>}
-          {section.claims.map((claim) => (
-            <p key={claim.key} className={`claim${claim.historical ? " claim--historical" : ""}${claim.unverified ? " claim--unverified" : ""}`} data-claim={claim.key}>
-              {claim.historical && (
-                <span className="claim__background">
-                  Background from an earlier Report{claim.historicalDate ? ` of ${formatDate(claim.historicalDate)}` : ""}:{" "}
-                </span>
-              )}
-              <ClaimText claim={claim} marker={marker(claim)} />
-              {byClaim.has(claim.key) && (
-                <span className="claim__source"> {inlineSource(byClaim.get(claim.key)!)}</span>
-              )}
-            </p>
-          ))}
-        </section>
-      ))}
+        {report.sections.map((section, si) => (
+          <section key={section.heading + section.claims[0]?.key} className="report__section" aria-labelledby={anchors[si]}>
+            <h2 className="report__heading" id={anchors[si]} tabIndex={-1}>{section.heading}</h2>
+            <ConfidenceLabel confidence={section.confidence} />
+            {section.claims.length === 0 && <p className="report__empty">No claims in this section.</p>}
+            {section.claims.map((claim) => (
+              <p key={claim.key} className={`claim${claim.historical ? " claim--historical" : ""}${claim.unverified ? " claim--unverified" : ""}`} data-claim={claim.key}>
+                {claim.historical && (
+                  <span className="claim__background">
+                    Background from an earlier Report{claim.historicalDate ? ` of ${formatDate(claim.historicalDate)}` : ""}:{" "}
+                  </span>
+                )}
+                <ClaimText claim={claim} marker={marker(claim)} />
+                {byClaim.has(claim.key) && (
+                  <span className="claim__source"> {inlineSource(byClaim.get(claim.key)!)}</span>
+                )}
+              </p>
+            ))}
+          </section>
+        ))}
 
-      {report.gaps.length > 0 && (
-        <section className="report__section report__gaps">
-          <h2 className="report__heading">Gaps &amp; limitations</h2>
-          <ul>
-            {report.gaps.map((gap) => <li key={gap}>{gap}</li>)}
-          </ul>
-        </section>
-      )}
+        {report.gaps.length > 0 && (
+          <section className="report__section report__gaps" aria-labelledby={GAPS_ANCHOR}>
+            <h2 className="report__heading" id={GAPS_ANCHOR} tabIndex={-1}>Gaps &amp; limitations</h2>
+            <ul>
+              {report.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+            </ul>
+          </section>
+        )}
 
-      <section className="report__print-sources" aria-label="Print sources"
-        data-print-sources-state={citations.kind}>
-          <h2>Sources</h2>
-          {citations.kind === "failed" ? (
-            <p>
-              {provenanceFailed(citations)
-                ? "Sources unavailable because this Report's stored citation provenance could not be resolved."
-                : `Sources could not be loaded: ${citations.message}`}
-            </p>
-          ) : citations.kind === "loading" ? (
-            <p>Loading Sources…</p>
-          ) : <ol>
-            {claims.map((claim) => {
-              const source = byClaim.get(claim.key);
-              return (
-                <li key={claim.key} value={claim.number}>
-                  <strong>Source {claim.number}:</strong>{" "}
-                  {source ? (
-                    <>
-                      {source.source_title}
-                      {" · Published: "}{formatDate(source.published_at) ?? "Not stated"}
-                      {" · Credibility: "}{source.credibility_score != null ? `${source.credibility_score.toFixed(2)} of 1` : "Not scored"}
-                      {source.page != null && <>{" · Page "}{source.page}</>}
-                      {source.section_heading && <>{" · Section: "}{source.section_heading}</>}
-                    </>
-                  ) : "Source unavailable"}
-                </li>
-              );
-            })}
-          </ol>}
-        </section>
+        <section className="report__print-sources" aria-label="Print sources"
+          data-print-sources-state={citations.kind}>
+            <h2>Sources</h2>
+            {citations.kind === "failed" ? (
+              <p>
+                {provenanceFailed(citations)
+                  ? "Sources unavailable because this Report's stored citation provenance could not be resolved."
+                  : `Sources could not be loaded: ${citations.message}`}
+              </p>
+            ) : citations.kind === "loading" ? (
+              <p>Loading Sources…</p>
+            ) : <ol>
+              {claims.map((claim) => {
+                const source = byClaim.get(claim.key);
+                return (
+                  <li key={claim.key} value={claim.number}>
+                    <strong>Source {claim.number}:</strong>{" "}
+                    {source ? (
+                      <>
+                        {source.source_title}
+                        {" · Published: "}{formatDate(source.published_at) ?? "Not stated"}
+                        {" · Credibility: "}{source.credibility_score != null ? `${source.credibility_score.toFixed(2)} of 1` : "Not scored"}
+                        {source.page != null && <>{" · Page "}{source.page}</>}
+                        {source.section_heading && <>{" · Section: "}{source.section_heading}</>}
+                      </>
+                    ) : "Source unavailable"}
+                  </li>
+                );
+              })}
+            </ol>}
+          </section>
 
-      <CitationDrawer
-        claim={openClaim}
-        citation={openClaim ? byClaim.get(openClaim.key) ?? null : null}
-        total={claims.length}
-        onClose={close}
-        onStep={step}
-      />
-    </article>
+        <CitationDrawer
+          claim={openClaim}
+          citation={openClaim ? byClaim.get(openClaim.key) ?? null : null}
+          total={claims.length}
+          onClose={close}
+          onStep={step}
+        />
+      </article>
+    </div>
   );
 }
