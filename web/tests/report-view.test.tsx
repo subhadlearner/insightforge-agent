@@ -95,6 +95,52 @@ describe("Report viewer", () => {
     markers.forEach((b) => expect(b).toBeDisabled());
   });
 
+  it("shows the Executive Summary under its own heading", async () => {
+    render(<ReportView reportId="rep_1" />);
+    const heading = await screen.findByRole("heading", { level: 2, name: "Executive Summary" });
+    expect(heading.closest("section")).toHaveTextContent("BYD outsold Tesla in battery EVs for the first time.");
+    const order = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(order.slice(0, 3)).toEqual(["Executive Summary", "Sales", "Pricing"]);
+  });
+
+  it("labels each section's Confidence, and Historical-only sections as background", async () => {
+    render(<ReportView reportId="rep_1" />);
+    const sales = (await screen.findByRole("heading", { name: "Sales" })).closest("section")!;
+    expect(within(sales).getByTestId("section-confidence")).toHaveTextContent("Confidence: HIGH");
+    expect(within(sales).getByTestId("section-confidence")).toHaveClass("confidence--high");
+    const pricing = screen.getByRole("heading", { name: "Pricing" }).closest("section")!;
+    const label = within(pricing).getByTestId("section-confidence");
+    expect(label).toHaveTextContent("Background from earlier Reports · no current Confidence");
+    expect(label).not.toHaveTextContent(/HIGH|MEDIUM|LOW/);
+  });
+
+  it("shows no label at all when Confidence could not be derived", async () => {
+    m.getReport.mockResolvedValue({ ...reportOut(), section_confidence: [] });
+    render(<ReportView reportId="rep_1" />);
+    await screen.findByRole("heading", { name: "Sales" });
+    expect(screen.queryByTestId("section-confidence")).not.toBeInTheDocument();
+  });
+
+  it("shows each Claim's Source inline as domain, date and credibility", async () => {
+    render(<ReportView reportId="rep_1" />);
+    await screen.findByRole("button", { name: "View source for claim 1" });
+    expect(document.querySelector('[data-claim="0:0"] .claim__source'))
+      .toHaveTextContent("[Source: byd.example, 2025-03-25, credibility: 0.82]");
+    expect(document.querySelector('[data-claim="0:1"] .claim__source'))
+      .toHaveTextContent("[Source: tesla.example, undated, credibility: 0.71]");
+    // A document has no domain: its title stands in; Passage text is never inlined.
+    const doc = document.querySelector('[data-claim="1:0"] .claim__source');
+    expect(doc).toHaveTextContent("[Source: Seagull price list, 2023-05-01, credibility: 0.40]");
+    expect(doc).not.toHaveTextContent("69,800");
+  });
+
+  it("adds no inline Source while citations load or after they fail", async () => {
+    m.getCitations.mockRejectedValue(new api.ApiError(500, "inconsistent provenance"));
+    render(<ReportView reportId="rep_1" />);
+    await screen.findByTestId("citations-unavailable");
+    expect(document.querySelector(".claim__source")).toBeNull();
+  });
+
   it("shows not found for an unknown or another persona's Report", async () => {
     m.getReport.mockRejectedValue(new api.ApiError(404, "report rep_x not found"));
     render(<ReportView reportId="rep_x" />);

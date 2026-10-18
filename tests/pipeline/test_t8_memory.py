@@ -86,8 +86,8 @@ def planner(tasks) -> ScriptedChat:
 def researchers(extra: dict[str, list[str]] | None = None, name_all: dict | None = None,
                 seen: list | None = None) -> ScriptedChat:
     """Web Researchers behave as in `fakes`. A Memory Researcher searches with its query and
-    names every ref it was given, plus `extra[sid]`; for a Sub-task in `name_all` it names every
-    Claim of that Report instead (an overreach). `seen` records what Memory Researchers saw."""
+    names every ref it was given, plus `extra[sid]`; for a Sub-task in `name_all` it names the
+    given refs instead (every Claim of a Report, see `claim_refs`: an overreach). `seen` records what Memory Researchers saw."""
     extra, name_all = extra or {}, name_all or {}
     web = fakes.researcher()
 
@@ -103,8 +103,7 @@ def researchers(extra: dict[str, list[str]] | None = None, name_all: dict | None
         if isinstance(last, ToolMessage):
             refs = [h["ref"] for h in json.loads(str(last.content))]
             if sid in name_all:
-                report_id, claims = name_all[sid]
-                refs = [f"{report_id}:s0:c{n}" for n in range(claims)]
+                refs = list(name_all[sid])
             refs += extra.get(sid, [])
             if not refs:
                 return AIMessage(content="FAILED: nothing in earlier reports")
@@ -163,7 +162,8 @@ def mem_deps(make_deps):
 
 def prior_run(deps, owner="alice", brief="EV market", item=None, day=0,
               toggles=None) -> Run:
-    """A completed web Run on the fixture pages: 10 Claims in one section, "Findings".
+    """A completed web Run on the fixture pages: 10 Claims, filed by the Writer stage under
+    their Evidence sections ("Sales", "Pricing", "Batteries").
     A Watchlist Run uses its item's standing Brief and source choices."""
     deps.now.t = T0 + timedelta(days=day)
     deps.planner_model = fakes.planner()
@@ -212,6 +212,13 @@ def claims_of(report: Report):
     return [c for s in draft.sections for c in s.claims]
 
 
+def claim_refs(report: Report) -> list[str]:
+    """Every Claim of the Report as a memory reference, `report:s<section>:c<claim>`."""
+    draft = ReportDraft.model_validate(report.body["draft"])
+    return [f"{report.id}:s{si}:c{ci}" for si, s in enumerate(draft.sections)
+            for ci in range(len(s.claims))]
+
+
 def plan_message(model: ScriptedChat) -> str:
     return next(str(m.content) for conv in model.seen for m in conv
                 if isinstance(m, HumanMessage) and str(m.content).startswith("PLAN."))
@@ -223,7 +230,7 @@ def test_a_completed_run_stores_one_bounded_summary(mem_deps):
     deps = mem_deps()
     run = prior_run(deps)
     summary = deps.repos.summaries.get_for_run("alice", run.id)
-    assert summary.brief == "EV market" and summary.themes == ["Findings"]
+    assert summary.brief == "EV market" and summary.themes == ["Sales", "Pricing", "Batteries"]
     assert summary.key_entities == ["BYD"] and summary.memory_indexed
     assert summary.watchlist_item_id is None
 
@@ -383,12 +390,13 @@ def test_resolution_rejects_reports_outside_the_eligible_set_and_other_users(mem
 
 def test_a_memory_subtask_may_use_only_refs_its_own_searches_returned(mem_deps):
     deps = mem_deps()
-    prior = report_of(deps, prior_run(deps)).id
+    prior_report = report_of(deps, prior_run(deps))
+    prior, every_claim = prior_report.id, claim_refs(prior_report)
     tasks = [("m1", "a1", "Sales", MEMORY_QUERIES["m1"], "memory"),
              ("m2", "a2", "Batteries", MEMORY_QUERIES["m2"], "memory"),
              ("s1", "a3", "Market", fakes.QUERIES["s1"], "web")]
     invented = "rep_invented0000:s0:c0"
-    deps.researcher_model = researchers(name_all={"m1": (prior, 10)}, extra={"m2": [invented]})
+    deps.researcher_model = researchers(name_all={"m1": every_claim}, extra={"m2": [invented]})
     run = memory_run(deps, tasks)
     assert run.state == RunState.COMPLETE
     searched: dict[str, set[str]] = {}
@@ -402,7 +410,8 @@ def test_a_memory_subtask_may_use_only_refs_its_own_searches_returned(mem_deps):
     for h in historical.items:
         by_task.setdefault(h.subtask_id, set()).add(h.statement)
     rejected = {e["subtask_id"]: set(e["refs"]) for e in events(deps, run, "memory_refs_rejected")}
-    assert rejected["m1"] == {f"{prior}:s0:c{n}" for n in range(10)} - searched["m1"]
+    assert len(every_claim) == 10
+    assert rejected["m1"] == set(every_claim) - searched["m1"]
     assert rejected["m1"] >= only_m2
     assert rejected["m2"] == {invented}
     assert len(historical.items) == len(searched["m1"] | searched["m2"])
@@ -692,7 +701,10 @@ def test_a_report_with_no_claim_to_index_is_not_memory(mem_deps):
     report = report_of(deps, prior)
     # Every Claim marked unverified: none may be reused, so nothing is indexed.
     verified = dict(report.body["verified"])
-    verified["verdicts"] = [{"section": 0, "claim": n, "verdict": "unverified"} for n in range(10)]
+    verified["verdicts"] = [
+        {"section": si, "claim": ci, "verdict": "unverified"}
+        for si, s in enumerate(report.body["verified"]["draft"]["sections"])
+        for ci in range(len(s["claims"]))]
     deps.repos.runs.add(Run(id="run_bad", owner_id="alice", brief="b", state=RunState.COMPLETE,
                             created_at=T0))
     bad = Report(id="rep_bad", owner_id="alice", run_id="run_bad", created_at=T0,

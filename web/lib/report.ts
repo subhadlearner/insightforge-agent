@@ -5,6 +5,8 @@
 // The viewer shows `body.verified.draft`: the Fact-Checker's copy, in which an unverified
 // Claim's text ends with " [UNVERIFIED]". `body.draft` (before fact-checking) is never read,
 // so the mark cannot be lost. Citations come from GET /reports/{id}/citations only.
+// Section Confidence comes from `section_confidence`, which the API derives from the Report's
+// stored Evidence on every read: null there means Historical background only.
 
 import type { Citation, ReportOut } from "./api";
 
@@ -28,8 +30,15 @@ export interface ParsedClaim {
   historicalDate: string | null; // the date of the Report that first made a Historical Claim
 }
 
+export type Confidence = "HIGH" | "MEDIUM" | "LOW";
+
+/** A section's Confidence; "background" for Historical background only (no current
+ *  Confidence); null when the API could not derive it, so no label is shown at all. */
+export type SectionConfidence = Confidence | "background" | null;
+
 export interface ParsedSection {
   heading: string;
+  confidence: SectionConfidence;
   claims: ParsedClaim[];
 }
 
@@ -100,11 +109,16 @@ export function parseReport(out: ReportOut): ParsedReport {
   const verified = record(body.verified, "the fact-checked Report");
   const draft = record(verified.draft, "the fact-checked draft");
   const dates = historicalDates(body);
+  const rawSections = list(draft.sections, "sections");
+  // Labels are trusted only when there is exactly one per section.
+  const labels = Array.isArray(out.section_confidence) && out.section_confidence.length === rawSections.length
+    ? out.section_confidence : null;
   let number = 0;
-  const sections = list(draft.sections, "sections").map((rawSection, si): ParsedSection => {
+  const sections = rawSections.map((rawSection, si): ParsedSection => {
     const section = record(rawSection, `section ${si + 1}`);
     return {
       heading: text(section.heading, `section ${si + 1} heading`),
+      confidence: labels ? labels[si] ?? "background" : null,
       claims: list(section.claims, `section ${si + 1} claims`).map((rawClaim, ci): ParsedClaim => {
         const claim = record(rawClaim, `claim ${si + 1}.${ci + 1}`);
         const claimText = text(claim.text, `claim ${si + 1}.${ci + 1} text`);
@@ -148,4 +162,13 @@ export function attachCitations(report: ParsedReport, citations: Citation[]): Ma
     if (c && c.evidence_id === claim.evidenceId) out.set(claim.key, c);
   }
   return out;
+}
+
+/** The inline citation text, `[Source: domain, date, credibility: score]`. A document has no
+ *  domain, so its title stands in; a missing date or score is said to be missing. */
+export function inlineSource(c: Citation): string {
+  const where = c.source_domain ?? c.source_title;
+  const date = c.published_at ? c.published_at.slice(0, 10) : "undated";
+  const score = c.credibility_score != null ? c.credibility_score.toFixed(2) : "not scored";
+  return `[Source: ${where}, ${date}, credibility: ${score}]`;
 }

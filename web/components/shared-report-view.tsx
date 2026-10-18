@@ -28,10 +28,24 @@ export function SharedReportView({ token }: { token: string }) {
         <h1 className="report__title">{report.title}</h1>
         {report.brief && <p className="report__brief"><span className="report__brief-label">Brief</span> {report.brief}</p>}
       </header>
-      {report.summary && <p className="report__summary">{report.summary}</p>}
+      {report.summary && (
+        <section className="report__section" aria-labelledby="executive-summary">
+          <h2 className="report__heading" id="executive-summary">Executive Summary</h2>
+          <p className="report__summary">{report.summary}</p>
+        </section>
+      )}
       {report.sections.map((section, si) => (
         <section className="report__section" key={section.heading + si}>
           <h2 className="report__heading">{section.heading}</h2>
+          {section.confidence ? (
+            <p className={`confidence confidence--${section.confidence.toLowerCase()}`} data-testid="section-confidence">
+              Confidence: <strong>{section.confidence}</strong>
+            </p>
+          ) : (
+            <p className="confidence confidence--background" data-testid="section-confidence">
+              Background from earlier Reports · no current Confidence
+            </p>
+          )}
           {section.claims.map((claim, ci) => (
             <p className={`claim${claim.historical ? " claim--historical" : ""}`} key={ci}>
               {claim.historical && <span className="claim__background">Background from an earlier Report{claim.historical_date ? ` of ${formatDate(claim.historical_date)}` : ""}: </span>}

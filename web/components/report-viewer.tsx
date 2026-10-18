@@ -2,12 +2,17 @@
 
 // The Report as a reader sees it: the fact-checked text (lib/report.ts reads
 // body.verified.draft), one numbered marker per Claim that opens its source, the
-// [UNVERIFIED] mark kept as written, and Historical Claims set apart as background.
+// [UNVERIFIED] mark kept as written, and Historical Claims set apart as background. Each
+// section shows its Confidence under its heading, and each Claim its Source inline as
+// [Source: domain, date, credibility: score] once citations load (the drawer has the rest).
 
 import { useRef, useState, type ReactNode } from "react";
 import type { Citation } from "@/lib/api";
 import { formatDate } from "@/lib/format";
-import { attachCitations, UNVERIFIED_MARK, type ParsedClaim, type ParsedReport } from "@/lib/report";
+import {
+  attachCitations, inlineSource, UNVERIFIED_MARK,
+  type ParsedClaim, type ParsedReport, type SectionConfidence,
+} from "@/lib/report";
 import { CitationDrawer } from "./citation-drawer";
 
 export type CitationsState =
@@ -26,6 +31,24 @@ function CitationsNotice({ state }: { state: CitationsState }) {
           : `Supporting evidence could not be loaded: ${state.message}`}
       </p>
     </div>
+  );
+}
+
+/** The label under a section heading. Historical background has no current Confidence, so
+ *  it is labelled as background rather than given one. */
+function ConfidenceLabel({ confidence }: { confidence: SectionConfidence }) {
+  if (confidence === null) return null;
+  if (confidence === "background") {
+    return (
+      <p className="confidence confidence--background" data-testid="section-confidence">
+        Background from earlier Reports · no current Confidence
+      </p>
+    );
+  }
+  return (
+    <p className={`confidence confidence--${confidence.toLowerCase()}`} data-testid="section-confidence">
+      Confidence: <strong>{confidence}</strong>
+    </p>
   );
 }
 
@@ -108,11 +131,17 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
 
       <CitationsNotice state={citations} />
 
-      {report.summary && <p className="report__summary">{report.summary}</p>}
+      {report.summary && (
+        <section className="report__section" aria-labelledby="executive-summary">
+          <h2 className="report__heading" id="executive-summary">Executive Summary</h2>
+          <p className="report__summary">{report.summary}</p>
+        </section>
+      )}
 
       {report.sections.map((section) => (
         <section key={section.heading + section.claims[0]?.key} className="report__section">
           <h2 className="report__heading">{section.heading}</h2>
+          <ConfidenceLabel confidence={section.confidence} />
           {section.claims.length === 0 && <p className="report__empty">No claims in this section.</p>}
           {section.claims.map((claim) => (
             <p key={claim.key} className={`claim${claim.historical ? " claim--historical" : ""}${claim.unverified ? " claim--unverified" : ""}`} data-claim={claim.key}>
@@ -122,6 +151,9 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
                 </span>
               )}
               <ClaimText claim={claim} marker={marker(claim)} />
+              {byClaim.has(claim.key) && (
+                <span className="claim__source"> {inlineSource(byClaim.get(claim.key)!)}</span>
+              )}
             </p>
           ))}
         </section>

@@ -160,6 +160,7 @@ class SourceStore:
             owner_id, self._observations.get(owner_id, ref.observation_id).source_id)
         return Citation(
             section=0, claim=0, evidence_id="", source_id=source.id, source_title=source.title,
+            source_domain=source.domain,
             published_at=source.published_at, credibility_score=source.credibility_score,
             passage=ref, passage_text=passage.text, page=passage.page,
             section_heading=passage.section_heading)

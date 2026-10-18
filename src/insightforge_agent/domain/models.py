@@ -3,6 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -92,6 +93,15 @@ class Source(_Record):
     title: str
     credibility_score: float | None = Field(default=None, ge=0, le=1)
     published_at: datetime | None = None
+
+    @property
+    def domain(self) -> str | None:
+        """A web Source's host name without "www.", as an inline citation shows it; None for
+        an uploaded document, which has no domain."""
+        if self.kind != "web":
+            return None
+        host = urlsplit(self.locator).hostname or ""
+        return host.removeprefix("www.") or None
 
 
 class Observation(_Record):

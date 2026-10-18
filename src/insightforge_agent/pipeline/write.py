@@ -6,12 +6,28 @@ earlier Report's Claim), is marked historical, shows that Report's date in a rec
 annotation, sits in the section of its item's heading and is held to the same number and name
 rules against the earlier statement. Every heading of the Historical context gets at least one
 Historical Claim. Neither kind may pose as the other. Violations are retried with the offending
-Claims listed as a constraint, up to `writer_retries` times."""
+Claims listed as a constraint, up to `writer_retries` times.
+
+Placement and coverage (T20 S1.1). A current Claim is filed under its Evidence item's section
+heading in code, never by asking the Writer again, and every Evidence section must keep at least
+one Claim. The Executive Summary is held to `SUMMARY_MAX_WORDS` and to a lexical grounding check:
+each number in it must appear in some Evidence or Historical statement, and each name in that
+material or the Brief. The check is lexical; it does not establish that the evidence entails the
+summary. When retries run out on a draft whose Claims pass, the draft is repaired in code
+instead of failing the Run: an uncovered section is filled with its items' own statements, an
+unsupported summary sentence is removed (an emptied summary is rebuilt from the Claims), and an
+over-long summary is kept and logged. Claim-rule violations still fail the Run, as before."""
 
 import re
 
 from insightforge_agent.agents.llm_json import BadModelReply, ask_json
-from insightforge_agent.domain.contracts import EvidenceBundle, HistoricalContext, ReportDraft
+from insightforge_agent.domain.contracts import (
+    Claim,
+    EvidenceBundle,
+    HistoricalContext,
+    ReportDraft,
+    ReportSection,
+)
 from insightforge_agent.domain.memory import (
     report_date_text,
     strip_report_date,
@@ -35,7 +51,12 @@ inline exactly as "(reported YYYY-MM-DD)". Put it in the section whose heading i
 item's heading: the bundle section with that heading if there is one, otherwise a section of
 its own with that heading. Every heading in the historical background needs at least one
 historical claim; you need not use every historical item. Never present historical
-background as a current fact, and never set "historical": true on a bundle item."""
+background as a current fact, and never set "historical": true on a bundle item.
+Summary: an executive summary of at most 150 words. Every number and name in it must appear
+in the evidence bundle or the historical background; do not add totals, rates or names the
+evidence does not state."""
+
+SUMMARY_MAX_WORDS = 150
 
 
 # Words that begin a sentence without naming anything. Kept to articles, determiners and
@@ -142,6 +163,165 @@ def render_historical(historical: HistoricalContext) -> str:
         f"{h.as_of_period}) {h.statement}" for h in historical.items)
 
 
+def place_claims(draft: ReportDraft, bundle: EvidenceBundle) -> tuple[ReportDraft, list[dict]]:
+    """File every current Claim under its Evidence item's section heading, keeping the Claims'
+    order. Sections are merged by heading (case and spacing ignored), bundle sections come
+    first in bundle order, and empty sections are dropped. Historical Claims and Claims citing
+    an unknown id stay where the Writer put them, for `violations` to judge. Returns the new
+    draft and one record per Claim moved."""
+    home = {i.id: s.heading for s in bundle.sections for i in s.items}
+    sections: dict[str, ReportSection] = {}
+    for s in bundle.sections:
+        sections.setdefault(_heading_key(s.heading), ReportSection(heading=s.heading, claims=[]))
+    moved = []
+    for section in draft.sections:
+        for c in section.claims:
+            heading = section.heading
+            if not c.historical and c.evidence_id in home:
+                heading = home[c.evidence_id]
+                if _heading_key(heading) != _heading_key(section.heading):
+                    moved.append({"evidence_id": c.evidence_id, "from": section.heading,
+                                  "to": heading})
+            key = _heading_key(heading)
+            sections.setdefault(key, ReportSection(heading=heading, claims=[]))
+            sections[key].claims.append(c)
+    kept = [s for s in sections.values() if s.claims]
+    return draft.model_copy(update={"sections": kept}), moved
+
+
+def coverage_problems(draft: ReportDraft, bundle: EvidenceBundle) -> list[str]:
+    """Evidence sections that no current Claim cites."""
+    cited = {c.evidence_id for s in draft.sections for c in s.claims if not c.historical}
+    return [f"the evidence section headed {s.heading!r} has no claims; add at least one claim "
+            f"citing its items ({', '.join(i.id for i in s.items)})"
+            for s in bundle.sections if not cited & {i.id for i in s.items}]
+
+
+# Capitalised words that open a summary sentence without naming anything, beyond `_OPENERS`.
+# A summary is held to the whole bundle's vocabulary, so a common word that also appears in the
+# evidence passes anyway; this list covers the discourse words that usually do not.
+_SUMMARY_OPENERS = _OPENERS | {
+    "across", "additionally", "after", "against", "all", "also", "although", "among", "as",
+    "at", "both", "but", "by", "collectively", "combined", "consequently", "conversely",
+    "despite", "during", "each", "evidence", "finally", "first", "for", "from", "further",
+    "furthermore", "given", "here", "however", "in", "key", "many", "meanwhile", "moreover",
+    "most", "much", "nevertheless", "no", "not", "notably", "on", "one", "our", "over",
+    "overall", "overview", "second", "several", "since", "some", "still", "such", "summary",
+    "taken", "there", "third", "though", "thus", "to", "together", "under", "we", "where",
+    "while", "with", "within", "yet",
+}
+
+
+def _summary_vocabulary(bundle: EvidenceBundle, historical: HistoricalContext,
+                        brief: str) -> tuple[set[str], set[str]]:
+    """The numbers and the words a summary may use: those of every Evidence and Historical
+    statement, and for words also their entities and headings and the Brief."""
+    statements = [i.statement for s in bundle.sections for i in s.items]
+    statements += [h.statement for h in historical.items]
+    labels = [i.entity for s in bundle.sections for i in s.items]
+    labels += [s.heading for s in bundle.sections]
+    labels += [h.entity for h in historical.items] + [h.heading for h in historical.items]
+    numbers: set[str] = set()
+    words: set[str] = set()
+    for t in statements:
+        numbers |= numbers_in(t)
+        words |= _words(t)
+    for t in labels + [brief]:
+        words |= _words(t)
+    return numbers, words
+
+
+def _summary_sentences(summary: str) -> list[str]:
+    return [t for t in _SENTENCE_SPLIT.split(summary.strip()) if t]
+
+
+def unsupported_summary_sentences(summary: str, bundle: EvidenceBundle,
+                                  historical: HistoricalContext | None = None,
+                                  brief: str = "") -> list[tuple[str, str]]:
+    """Each summary sentence holding a number or a name the evidence does not contain, with
+    the reason. Lexical only: a sentence that passes is not thereby shown to be entailed."""
+    numbers, words = _summary_vocabulary(bundle, historical or HistoricalContext(), brief)
+    out = []
+    for sentence in _summary_sentences(summary):
+        reasons = []
+        extra = numbers_in(sentence) - numbers
+        if extra:
+            reasons.append(f"values {sorted(extra)}")
+        openers = {w for w in _opening_names(sentence) if w.casefold() not in _SUMMARY_OPENERS}
+        names = sorted(n for n in named_entities_in(sentence) | openers
+                       if n.casefold() not in words)
+        if names:
+            reasons.append(f"names {names}")
+        if reasons:
+            out.append((sentence, " and ".join(reasons)))
+    return out
+
+
+def summary_words(summary: str) -> int:
+    return len(summary.split())
+
+
+def summary_problems(draft: ReportDraft, bundle: EvidenceBundle,
+                     historical: HistoricalContext | None = None, brief: str = "") -> list[str]:
+    """An empty summary, unsupported summary sentences, and a summary over the word limit."""
+    if not draft.summary.strip():
+        return [f"the summary is empty; write an executive summary of at most "
+                f"{SUMMARY_MAX_WORDS} words"]
+    problems = [f"summary sentence {sentence!r} has {why} not in the evidence"
+                for sentence, why in unsupported_summary_sentences(
+                    draft.summary, bundle, historical, brief)]
+    words = summary_words(draft.summary)
+    if words > SUMMARY_MAX_WORDS:
+        problems.append(f"the summary has {words} words; it may have at most "
+                        f"{SUMMARY_MAX_WORDS}")
+    return problems
+
+
+def _fill_uncovered(draft: ReportDraft, bundle: EvidenceBundle) -> tuple[ReportDraft, list[str]]:
+    """Give each uncovered Evidence section one Claim per item, stating the item verbatim."""
+    cited = {c.evidence_id for s in draft.sections for c in s.claims if not c.historical}
+    missing = [s for s in bundle.sections if not cited & {i.id for i in s.items}]
+    if not missing:
+        return draft, []
+    extra = [ReportSection(heading=s.heading, claims=[
+        Claim(text=i.statement, evidence_id=i.id) for i in s.items]) for s in missing]
+    grown, _ = place_claims(draft.model_copy(update={"sections": draft.sections + extra}), bundle)
+    return grown, [s.heading for s in missing]
+
+
+def _fallback_summary(draft: ReportDraft) -> str:
+    """Current Claims, the first of each section first, up to the word limit. Each is a Claim
+    that already passed its own grounding check."""
+    current = [[c.text for c in s.claims if not c.historical] for s in draft.sections]
+    ordered = [cs[0] for cs in current if cs] + [t for cs in current for t in cs[1:]]
+    chosen: list[str] = []
+    for text in ordered:
+        if chosen and summary_words(" ".join([*chosen, text])) > SUMMARY_MAX_WORDS:
+            break
+        chosen.append(text)
+    return " ".join(chosen)
+
+
+def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
+            historical: HistoricalContext, brief: str) -> ReportDraft:
+    """A draft whose Claims pass, made publishable in code once retries are spent."""
+    draft, filled = _fill_uncovered(draft, bundle)
+    unsupported = unsupported_summary_sentences(draft.summary, bundle, historical, brief)
+    dropped = {sentence for sentence, _ in unsupported}
+    summary = " ".join(t for t in _summary_sentences(draft.summary) if t not in dropped)
+    rebuilt = not summary
+    if rebuilt:
+        summary = _fallback_summary(draft)
+    draft = draft.model_copy(update={"summary": summary})
+    words = summary_words(summary)
+    deps.log(owner_id, run_id, "writer_repaired", filled_sections=filled,
+             removed_summary_sentences=sorted(dropped), summary_rebuilt=rebuilt,
+             summary_words=words, summary_over_limit=words > SUMMARY_MAX_WORDS)
+    if violations(draft, bundle, historical) or coverage_problems(draft, bundle):
+        raise RunFailed("the Writer's draft could not be repaired")
+    return draft
+
+
 def write_report(
     deps: Deps, owner_id: str, run_id: str, brief: str, bundle: EvidenceBundle, gaps: list[str],
     historical: HistoricalContext | None = None,
@@ -153,12 +333,21 @@ def write_report(
                       + render_historical(historical))
     constraint = ""
     last: list[str] = []
+    usable: ReportDraft | None = None  # the latest draft whose Claims pass, for `_repair`
     for attempt in range(deps.writer_retries + 1):
         user = (f"Brief: {brief}\n\nEvidence bundle:\n{render_bundle(bundle)}{background}"
                 f"{constraint}")
         try:
-            draft = ask_json(deps.writer_model, SYSTEM, user, ReportDraft)
+            draft, moved = place_claims(ask_json(deps.writer_model, SYSTEM, user, ReportDraft),
+                                        bundle)
+            if moved:
+                deps.log(owner_id, run_id, "writer_claims_placed", attempt=attempt + 1,
+                         moved=moved)
             last = violations(draft, bundle, historical)
+            if not last:
+                usable = draft
+            last += coverage_problems(draft, bundle)
+            last += summary_problems(draft, bundle, historical, brief)
         except BadModelReply as e:
             last = [f"the reply was not valid report JSON: {e.brief}"]
         if not last:
@@ -166,4 +355,7 @@ def write_report(
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
         constraint = "\n\nYour previous draft broke these rules. Fix them:\n" + "\n".join(
             f"- {p}" for p in last)
+    if usable is not None:
+        draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief)
+        return draft.model_copy(update={"gaps": gaps})
     raise RunFailed(f"the Writer broke the citation rules after {deps.writer_retries} retries")

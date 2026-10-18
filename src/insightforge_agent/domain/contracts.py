@@ -219,6 +219,23 @@ class ReportDraft(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+def section_confidence(draft: ReportDraft, bundle: EvidenceBundle) -> list[Confidence | None]:
+    """Each Report section's Confidence, derived when the Report is read from the Evidence
+    bundle stored with it, so Reports written before it existed get labels too.
+
+    A section takes the Confidence of the Evidence sections its current Claims cite; when they
+    cite several (only possible in a Report written before Claims were filed by section), the
+    lowest. A section with no current Claim (Historical background only) has no current
+    Confidence: None, never an invented label."""
+    of_item = {i.id: s.confidence for s in bundle.sections for i in s.items}
+    out: list[Confidence | None] = []
+    for section in draft.sections:
+        found = [of_item[c.evidence_id] for c in section.claims
+                 if not c.historical and c.evidence_id in of_item]
+        out.append(min(found, key=CONFIDENCE_ORDER.__getitem__) if found else None)
+    return out
+
+
 class ClaimVerdict(BaseModel):
     """The Fact-Checker's verdict on one sampled Claim, named by its position in the draft.
     `matched` is the new Passage that best matches the Claim; `original` is the Passage the
@@ -255,6 +272,7 @@ class Citation(BaseModel):
     evidence_id: str
     source_id: str
     source_title: str
+    source_domain: str | None = None  # a web Source's host, for the inline citation
     published_at: datetime | None = None
     credibility_score: float | None = None
     passage: PassageRef

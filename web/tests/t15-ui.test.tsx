@@ -183,13 +183,19 @@ describe("T15 public share", () => {
       id: "rep_2", created_at: "2030-03-01T10:00:00Z", brief: "Tesla pricing",
       title: "Pricing update", summary: "Price fell.", gaps: ["Tax data unavailable."],
       fact_check: { sampled: 1, verified: 1, unverified: 0, unchecked: 0 },
-      sections: [{ heading: "Pricing", claims: [{ text: "Model 3 costs 29,000 dollars.", historical: false }] }],
+      sections: [
+        { heading: "Pricing", confidence: "MEDIUM", claims: [{ text: "Model 3 costs 29,000 dollars.", historical: false }] },
+        { heading: "Outlook", confidence: null, claims: [{ text: "Earlier outlook.", historical: true, historical_date: "2029-06-30" }] },
+      ],
       web_sources: [{ id: "src_1", title: "Price page", url: "https://example.test/price", credibility_score: 0.8 }],
     });
     render(<SharedReportView token="token_1" />);
     expect(await screen.findByRole("heading", { name: "Pricing update" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Price page" })).toHaveAttribute("href", "https://example.test/price");
     expect(screen.queryByText(/Run log/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Executive Summary" })).toBeInTheDocument();
+    const labels = screen.getAllByTestId("section-confidence").map((l) => l.textContent);
+    expect(labels).toEqual(["Confidence: MEDIUM", "Background from earlier Reports · no current Confidence"]);
   });
 });
 

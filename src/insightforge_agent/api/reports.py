@@ -7,7 +7,11 @@ one that does not exist. Export, PDF and share links are T15.
 in draft order, resolved from the Report's persisted provenance by
 `pipeline.citations.report_citations` (a Claim's primary Passage, or for a Historical Claim
 the Passage it inherited; never a Fact-Checker re-fetch). Provenance that does not resolve is
-500, never a partial or invented list. There is no general Source or Passage endpoint."""
+500, never a partial or invented list. There is no general Source or Passage endpoint.
+
+`section_confidence` is each section's Confidence, derived on every read from the Evidence
+bundle stored with the Report (`domain.contracts.section_confidence`): None for a section of
+Historical background only, and an empty list for a body too malformed to derive it from."""
 
 import logging
 from collections.abc import Callable
@@ -15,9 +19,15 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from insightforge_agent.domain.contracts import Citation
+from insightforge_agent.domain.contracts import (
+    Citation,
+    Confidence,
+    EvidenceBundle,
+    VerifiedReport,
+    section_confidence,
+)
 from insightforge_agent.domain.errors import NotFoundError, ProvenanceError
 from insightforge_agent.domain.models import Report
 from insightforge_agent.domain.repositories import ReportRepository
@@ -40,6 +50,17 @@ class ReportOut(BaseModel):
     run_id: str
     created_at: datetime
     body: dict[str, Any]
+    section_confidence: list[Confidence | None]
+
+
+def confidence_of(report: Report) -> list[Confidence | None]:
+    """Per section of the fact-checked draft the viewer shows; [] for a malformed body."""
+    try:
+        draft = VerifiedReport.model_validate(report.body["verified"]).draft
+        bundle = EvidenceBundle.model_validate(report.body["evidence"])
+    except (KeyError, TypeError, ValidationError):
+        return []
+    return section_confidence(draft, bundle)
 
 
 def _title(report: Report) -> str:
@@ -66,7 +87,8 @@ def reports_router(reports: ReportRepository, store: SourceStore,
     @router.get("/{report_id}", response_model=ReportOut)
     def get_report(report_id: str, user_id: str = Depends(current_user_id)):
         r = owned(user_id, report_id)
-        return ReportOut(id=r.id, run_id=r.run_id, created_at=r.created_at, body=r.body)
+        return ReportOut(id=r.id, run_id=r.run_id, created_at=r.created_at, body=r.body,
+                         section_confidence=confidence_of(r))
 
     @router.get("/{report_id}/citations", response_model=list[Citation])
     def get_citations(report_id: str, user_id: str = Depends(current_user_id)):

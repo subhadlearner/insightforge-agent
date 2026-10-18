@@ -33,6 +33,7 @@ export function reportOut(overrides: Partial<Record<string, unknown>> = {}): Rep
     id: "rep_1",
     run_id: "run_1",
     created_at: "2030-03-01T09:00:00Z",
+    section_confidence: ["HIGH", null],
     body: {
       brief: "How did BYD and Tesla compete in 2025?",
       draft: rawDraft,
@@ -61,6 +62,7 @@ function citation(section: number, claim: number, evidence_id: string, source_ti
   passage_text: string, credibility_score: number | null, published_at: string | null): Citation {
   return {
     section, claim, evidence_id, source_id: `src_${evidence_id}`, source_title, published_at,
+    source_domain: evidence_id === "hist_r0" ? null : `${source_title.split(" ")[0].toLowerCase()}.example`,
     credibility_score, passage: { observation_id: `obs_${evidence_id}`, index: claim },
     passage_text, page: null, section_heading: null,
   };
