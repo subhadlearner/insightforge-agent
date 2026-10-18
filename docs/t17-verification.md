@@ -72,17 +72,23 @@ The audit above describes `main` before issue #60. Issue #60 added the recording
 | Do production thresholds change? | No. The ordinary fakes (no profile) record nothing | `test_without_a_small_context_window_nothing_is_compacted_or_recorded` |
 | Has a real Run on a live model been compacted? | Not observed. No live Run was made (no paid calls) | — |
 
-Persisted Run-log excerpt from the forced scenario (a scratch script, not committed, ran the
-`test_each_later_compaction_is_recorded_and_none_twice` flow on SQLite files and read them back
-on a new connection). It is reproduced in the README. Two Planner compactions are `seq=4`
-(`cutoff_index` 4) and `seq=10` (`cutoff_index` 10, after the repair round), out of 6 Planner
-model calls and 2 summary calls.
+Persisted Run-log excerpt from the forced scenario. It is printed by
+`uv run pytest tests/pipeline/test_compaction_events.py -k durable -s`, which runs on SQLite
+files and reads them back on a new connection, and it is reproduced in the README. Two Planner
+compactions are `seq=4` (`cutoff_index` 4) and `seq=10` (`cutoff_index` 10, after the repair
+round), out of 6 Planner model calls and 2 summary calls.
+
+Mutation checks during review: removing the Run-log idempotency check failed
+`test_a_restarted_run_does_not_record_an_earlier_compaction_again`. That test restarts with a
+wider window, so the old event stays in state and nothing new compacts. A compaction that
+leaves `cutoff_index` unchanged is told apart by its summary text
+(`test_a_compaction_that_leaves_the_cutoff_unchanged_still_has_its_own_id`).
 
 Compatibility risk: the recorder depends on deepagents' private state key
 `_summarization_event` (read through the exported `SUMMARIZATION_EVENT_KEY`) and its
-`SummarizationEvent` fields. It also depends on `create_deep_agent` placing caller middleware
-after its summarization middleware. `tests/test_deepagents_facts.py` pins the first. The
-integration tests catch the second.
+`SummarizationEvent` fields, pinned by `tests/test_deepagents_facts.py`. No public alternative
+exists in 0.7.23: LangChain strips a `wrap_model_call` command before outer middleware sees it,
+and deepagents has no compaction callback.
 
 ## Reconciliations made visible in the README
 

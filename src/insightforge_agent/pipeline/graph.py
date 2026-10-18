@@ -219,6 +219,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
     `uploads` are the Run's PDFs; their bytes stay here and never enter graph state."""
     # The Researcher tools own one Run's ids, so the Planner is built per Run, on first use.
     holder: dict = {}
+    recorded: set[str] = set()  # compaction_ids this process has seen in the Run log
     approved: dict[str, str] = {}  # Sub-task id -> query the Planner may dispatch right now
     agent_of: dict[str, str] = {}  # Sub-task id -> the subagent its source type needs
 
@@ -259,10 +260,14 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
     def record_compaction(owner: str, run_id: str, compaction: ContextCompaction) -> None:
         """Logs a compaction once: its event stays in the agent's state for every later model
-        call, and a resumed or restarted Run sees it again."""
+        call, and a resumed or restarted Run sees it again. The Run log is read only for an id
+        this process has not seen, so later calls cost nothing."""
+        if compaction.compaction_id in recorded:
+            return
         with deps.repos.lock:
             if compaction.compaction_id not in logged_compactions(deps, owner, run_id):
                 deps.log(owner, run_id, COMPACTION_EVENT, **compaction.model_dump())
+            recorded.add(compaction.compaction_id)
 
     def log_locked(owner: str, run_id: str, type_: str, **payload) -> None:
         """A Run-log write from a tool call, which may run beside the Researcher tools."""

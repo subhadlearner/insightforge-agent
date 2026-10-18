@@ -413,12 +413,12 @@ padded replies, and the Run includes a repair round. This was read back from the
 on a new connection, with stage and repair events kept and the rest elided:
 
 ```
-run_id=run_054b8140ac9e state=COMPLETE planner_model_calls=6 summary_calls=2
+run_id=run_043206664f7e state=COMPLETE planner_model_calls=6 summary_calls=2
 seq=1  stage              {"state": "PLANNING"}
 seq=3  stage              {"state": "RESEARCHING"}
-seq=4  context_compacted  {"agent": "planner", "compaction_id": "cmp_ceeef4d09d5dbeb3", "cutoff_index": 4, "history_file": "/conversation_history/session_a0d5dc685e224ced89d4d6354dd707ca.md", "messages_in_conversation": 6, "subtask_id": null, "summary_chars": 331}
+seq=4  context_compacted  {"agent": "planner", "compaction_id": "cmp_a43eab4206a26351", "cutoff_index": 4, "history_file": "/conversation_history/session_c0bb905a4d684b25a832929431d4e664.md", "messages_in_conversation": 6, "subtask_id": null, "summary_chars": 331}
 seq=9  repair             {"missing": ["s3"]}
-seq=10 context_compacted  {"agent": "planner", "compaction_id": "cmp_2c92b3c8633a77ae", "cutoff_index": 10, "history_file": "/conversation_history/session_a0d5dc685e224ced89d4d6354dd707ca.md", "messages_in_conversation": 12, "subtask_id": null, "summary_chars": 331}
+seq=10 context_compacted  {"agent": "planner", "compaction_id": "cmp_2d7df507cb973dae", "cutoff_index": 10, "history_file": "/conversation_history/session_c0bb905a4d684b25a832929431d4e664.md", "messages_in_conversation": 12, "subtask_id": null, "summary_chars": 331}
 seq=13 stage              {"state": "EXTRACTING"}
 ...
 seq=38 stage              {"state": "COMPLETE"}
@@ -434,9 +434,10 @@ How to read an event:
 - `subtask_id` names the Sub-task a subagent was dispatched for.
 - The event carries no message text.
 
-Reproduce it with `uv run pytest tests/pipeline/test_compaction_events.py`. The excerpt is the
-same flow as `test_each_later_compaction_is_recorded_and_none_twice`, run on SQLite files.
-Run and compaction IDs differ per run.
+Reproduce it with
+`uv run pytest tests/pipeline/test_compaction_events.py -k durable -s`. That test prints this
+log and asserts its shape: two compactions at cutoffs 4 and 10, one on each side of the repair
+round. Run, compaction and session IDs differ on each run.
 
 Why compaction is not expected in normal Runs: the boundaries above keep the Planner thread
 small. Besides the DeepAgents system prompt, its thread holds the Brief with at most three Run
@@ -454,9 +455,13 @@ Limits:
   library's exported `SUMMARIZATION_EVENT_KEY`. No public hook reports a completed compaction
   in 0.7.23. A library upgrade that changes the key or the event's fields fails
   `tests/test_deepagents_facts.py`.
-- Recording relies on `create_deep_agent` placing caller middleware after its summarization
-  middleware. The integration tests would catch a change there, because no event would be
-  recorded.
+- A compaction is identified by its agent, the id of its conversation's first message, its
+  cumulative `cutoff_index` and its summary text. A compaction that summarises only the
+  previous summary keeps the same `cutoff_index`, so the summary text tells the two apart.
+  Two compactions with the same cutoff and byte-identical summaries would be recorded once.
+- Not covered by a test: the Planner's correction and clarification resumes, the
+  context-overflow fallback compaction, Doc Reader and Memory researcher attribution, and a
+  subagent rerun after a crash. They use the same recorder and identity as the tested paths.
 - Retention removes `context_compacted` events with the other detailed events of an expired
   Run.
 

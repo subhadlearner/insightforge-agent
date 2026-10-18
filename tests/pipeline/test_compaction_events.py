@@ -6,6 +6,8 @@ production `SummarizationMiddleware` that `create_deep_agent` installs compacts 
 calls the model for a summary and records it in the agent's state. Production models keep
 their real profiles and thresholds."""
 
+import json
+
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from insightforge_agent.domain.contracts import Brief
@@ -37,6 +39,10 @@ def compacting(script: list[AIMessage], window: int = WINDOW) -> ScriptedChat:
 
 def summary_calls(model: ScriptedChat) -> int:
     return sum(any(SUMMARY_PROMPT in str(m.content) for m in conv) for conv in model.seen)
+
+
+def planner_calls(model: ScriptedChat) -> int:
+    return len(model.seen) - summary_calls(model)
 
 
 def compactions(deps, run) -> list[dict]:
@@ -71,10 +77,6 @@ def test_each_later_compaction_is_recorded_and_none_twice(make_deps):
     assert cutoffs == sorted(set(cutoffs))  # a new, later cutoff each time
 
 
-def planner_calls(model: ScriptedChat) -> int:
-    return len(model.seen) - summary_calls(model)
-
-
 def test_a_restarted_run_keeps_its_compactions_and_records_new_ones_once(make_deps):
     import uuid
 
@@ -107,6 +109,37 @@ def test_a_restarted_run_keeps_its_compactions_and_records_new_ones_once(make_de
     assert len(after) == 1 + summary_calls(second)
     assert [e["cutoff_index"] for e in after] == sorted({e["cutoff_index"] for e in after})
 
+
+
+def test_a_restarted_run_does_not_record_an_earlier_compaction_again(make_deps):
+    """After a restart the old compaction's event is still in the Planner's checkpointed state,
+    and the new process's recorder sees it on every call; it must not be logged twice."""
+    import uuid
+
+    from insightforge_agent.domain.models import Run
+    from insightforge_agent.pipeline.graph import build_graph, outer_config
+
+    script = fakes.planner(research_ids=("s1", "s2"), repair_ids=("s3",)).script
+    first = compacting(script)
+    deps = make_deps(planner_model=first)
+    run = Run(id="run_cmp2", owner_id="alice", brief=BRIEF, state=RunState.PLANNING,
+              created_at=deps.now())
+    deps.repos.runs.add(run)
+    thread = f"thread-{uuid.uuid4()}"
+    config = outer_config(thread)
+    initial = {"thread_id": thread, "owner_id": "alice", "run_id": run.id, "brief": BRIEF}
+    build_graph(deps, interrupt_after=["researching"]).invoke(initial, config)
+    before = compactions(deps, run)
+    assert len(before) == 1
+
+    # A wider window after the restart: nothing new compacts, the old event stays in force.
+    second = compacting(script[planner_calls(first):], window=200_000)
+    restarted = make_deps(repos=deps.repos, store=deps.store, checkpointer=deps.checkpointer,
+                          planner_model=second)
+    build_graph(restarted).invoke(None, config)
+    assert restarted.repos.runs.get("alice", run.id).state == RunState.COMPLETE
+    assert planner_calls(second) >= 2 and summary_calls(second) == 0
+    assert compactions(restarted, run) == before
 
 def compacting_researcher(window: int = WINDOW) -> ScriptedChat:
     """The scripted Researcher, padded and searching twice, so its own conversation compacts:
@@ -150,13 +183,14 @@ def test_without_a_small_context_window_nothing_is_compacted_or_recorded(make_de
 
 
 def test_compaction_events_are_durable_in_the_sqlite_run_log(tmp_path):
+    """Also the README's evidence: run with `-s` to print the persisted Run log."""
     from langgraph.checkpoint.sqlite import SqliteSaver
 
     from insightforge_agent.pipeline.deps import Deps
     from insightforge_agent.stores.source_store import SourceStore
     from insightforge_agent.stores.sqlite import SqliteRepos
 
-    planner = compacting(fakes.planner().script)
+    planner = compacting(fakes.planner(research_ids=("s1", "s2"), repair_ids=("s3",)).script)
     repos = SqliteRepos(str(tmp_path / "app.db"))
     with SqliteSaver.from_conn_string(str(tmp_path / "ck.db")) as saver:
         search = fakes.FixtureSearch()
@@ -170,10 +204,37 @@ def test_compaction_events_are_durable_in_the_sqlite_run_log(tmp_path):
 
     reopened = SqliteRepos(str(tmp_path / "app.db"))  # a new connection to the same file
     try:
-        stored = [e for e in reopened.events.read_after("alice", run.id, limit=10_000)
-                  if e.type == "context_compacted"]
-        assert len(stored) == summary_calls(planner) == 1
-        assert stored[0].payload["agent"] == "planner" and stored[0].seq > 0
+        log = reopened.events.read_after("alice", run.id, limit=10_000)
         assert reopened.events.read_after("bob", run.id) == []  # owner-scoped like every event
     finally:
         reopened.close()
+    print(f"\nrun_id={run.id} state={run.state.value} planner_model_calls="
+          f"{planner_calls(planner)} summary_calls={summary_calls(planner)}")
+    for e in log:
+        if e.type in ("stage", "repair", "context_compacted"):
+            print(f"seq={e.seq} {e.type} {json.dumps(e.payload, sort_keys=True)}")
+    stored = [e for e in log if e.type == "context_compacted"]
+    assert len(stored) == summary_calls(planner) == 2
+    assert [e.payload["cutoff_index"] for e in stored] == [4, 10]
+    assert all(e.payload["agent"] == "planner" for e in stored)
+    repair = next(e.seq for e in log if e.type == "repair")
+    assert stored[0].seq < repair < stored[1].seq  # one before the repair round, one after
+
+
+def test_a_compaction_that_leaves_the_cutoff_unchanged_still_has_its_own_id():
+    # deepagents stores prior_cutoff + effective_cutoff - 1, so a compaction that summarises
+    # only the previous summary (effective cutoff 1) keeps the same cutoff_index. It is still
+    # a new compaction, with a new summary, and must not be taken for the earlier one.
+    from deepagents.middleware.summarization import SUMMARIZATION_EVENT_KEY
+
+    from insightforge_agent.agents.compaction import compaction_of
+
+    def state(summary: str) -> dict:
+        return {"messages": [HumanMessage("PLAN", id="m0"), AIMessage("ok", id="m1")],
+                SUMMARIZATION_EVENT_KEY: {"cutoff_index": 4, "file_path": None,
+                                          "summary_message": HumanMessage(summary)}}
+
+    first, again, later = (compaction_of("planner", state(s))
+                           for s in ("Summary one.", "Summary one.", "Summary two."))
+    assert first.compaction_id == again.compaction_id  # the same event seen twice
+    assert later.compaction_id != first.compaction_id  # a new compaction at the same cutoff

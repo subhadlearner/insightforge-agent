@@ -4,14 +4,15 @@
 subagent. When a model request crosses the trigger, that middleware summarises the older
 messages, calls the model with the summary in their place, and stores a `SummarizationEvent`
 (`cutoff_index`, `summary_message`, `file_path`) under `SUMMARIZATION_EVENT_KEY` through the
-model node's state update. The event replaces the previous one, and its `cutoff_index` counts
-every message compacted so far in that conversation, so each compaction has a new one.
+model node's state update. Each compaction replaces the previous event with one holding a new
+summary; `cutoff_index` counts the messages compacted so far, but stays the same when a
+compaction summarises only the previous summary, so a compaction is identified by both.
 
-This middleware is spliced in after the summarization middleware (where `create_deep_agent`
-puts caller middleware), so its `after_model` hook runs once that update is applied, and sees
-the event of a compaction that has completed. It reads only the library's exported key and its
-documented event fields; the state key itself is private to deepagents, so
-`tests/test_deepagents_facts.py` pins that contract against the installed version.
+`after_model` hooks run as their own graph node after the model node, so this one sees the
+event of a compaction that has completed. LangChain strips a `wrap_model_call` command before
+it reaches outer middleware, and deepagents 0.7.23 offers no compaction callback, so reading
+the state through the library's exported key is the narrowest observation available. The key
+itself is private to deepagents: `tests/test_deepagents_facts.py` pins that contract.
 
 The event stays in state for every later model call of the conversation, and a resumed or
 replayed conversation sees it again, so `on_compaction` must record each `compaction_id` once."""
@@ -23,16 +24,15 @@ from deepagents.middleware.summarization import SUMMARIZATION_EVENT_KEY
 from langchain.agents.middleware import AgentMiddleware
 from pydantic import BaseModel
 
-from insightforge_agent.domain.plan import dispatched_id
+from insightforge_agent.domain.plan import PLANNER, dispatched_id
 
 COMPACTION_EVENT = "context_compacted"
-PLANNER = "planner"
 
 
 class ContextCompaction(BaseModel):
     """The `context_compacted` Run-log payload. No message text: only counts and references."""
 
-    compaction_id: str  # one per compaction: agent, conversation and cutoff_index
+    compaction_id: str  # one per compaction: agent, conversation, cutoff_index and summary
     agent: str  # "planner" or the subagent's name
     subtask_id: str | None  # the Sub-task a subagent was dispatched for; None for the Planner
     cutoff_index: int  # messages of this conversation compacted so far, this one included
@@ -53,14 +53,15 @@ def compaction_of(agent: str, state) -> ContextCompaction | None:
     # checkpoint, so it names one Planner thread or one subagent dispatch.
     anchor = first.id or ""
     cutoff = int(event["cutoff_index"])
-    digest = hashlib.sha256(f"{agent}|{anchor}|{cutoff}".encode()).hexdigest()[:16]
+    summary = str(event["summary_message"].content)
+    digest = hashlib.sha256(f"{agent}|{anchor}|{cutoff}|{summary}".encode()).hexdigest()[:16]
     return ContextCompaction(
         compaction_id=f"cmp_{digest}",
         agent=agent,
         subtask_id=None if agent == PLANNER else dispatched_id(str(first.content)),
         cutoff_index=cutoff,
         messages_in_conversation=len(messages),
-        summary_chars=len(str(event["summary_message"].content)),
+        summary_chars=len(summary),
         history_file=event.get("file_path"),
     )
 

@@ -13,6 +13,7 @@ SourceType = Literal["web", "documents", "memory"]
 SUBTASK_ID_PATTERN = r"[A-Za-z0-9_]+"
 RESEARCHER = "researcher"
 DOC_READER = "doc_reader"
+PLANNER = "planner"  # the root agent, named in its Run-log events
 MEMORY_RESEARCHER = "memory_researcher"
 AGENT_FOR_SOURCE_TYPE: dict[str, str] = {"web": RESEARCHER, "documents": DOC_READER,
                                          "memory": MEMORY_RESEARCHER}
