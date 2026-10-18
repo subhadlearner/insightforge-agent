@@ -192,13 +192,15 @@ uv run insightforge-agent serve --port 8000
 `QDRANT_URL` defaults to `http://localhost:6335`. `QDRANT_URL=:memory:` runs Qdrant inside the
 process instead, so no Docker is needed, but nothing it indexed survives a restart.
 
-Stop it with Ctrl+C: open progress streams end at once (clients reconnect with
-`Last-Event-ID`), new Runs are refused from that moment (503), the scheduler and executor stop,
-running Runs finish, and the databases are closed. Queued new Runs are settled FAILED and
-queued clarification resumes stay RESUMING for the next start. Shutdown waits for running Runs
-with no time limit, so a stalled Run keeps the process from exiting; after a hard kill, startup
-handles each unfinished Run by its stored state (resuming or rescheduling clarifications,
-settling the rest). Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves
+Stop it with Ctrl+C. In order: new Runs are refused from that moment (503, and no Watchlist
+tick starts one), then open progress streams end (clients reconnect with `Last-Event-ID`); the
+scheduler is paused; queued new Runs are settled FAILED and queued clarification resumes stay
+RESUMING for the next start; running Runs are waited for with every resource still open; only
+then is the scheduler shut down and are Qdrant, the checkpointer and the databases closed
+(design.md, T10 notes). Shutdown waits for running Runs with no time limit, so a stalled Run
+keeps the process from exiting; after a hard kill, startup handles each unfinished Run by its
+stored state (resuming or rescheduling clarifications, settling the rest). There is no Run or
+Sub-task timeout (design.md section 10). Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves
 the same app, but on shutdown uvicorn then waits for open streams for up to
 `SSE_MAX_STREAM_SECONDS` (60 s).
 
@@ -211,6 +213,7 @@ queued new Runs); a submission beyond that is refused with 503. Endpoints:
 | `POST /research/run {"brief", "source_toggles"?, "documents"?}` | 202 with `run_id`; 422 if no source type is available; 503 at capacity |
 | `POST /research/estimate {"source_toggles"?, "document_count"?}` | a heuristic runtime estimate in seconds, shown before submit; creates nothing |
 | `GET /research/status?run_id=` | SSE progress (the Run log); reconnect with `Last-Event-ID` to resume |
+| `GET /research/runs/{run_id}` | the Run's stored `created_at` and the server's clock, for the Run page's elapsed time; read only |
 | `GET /research/{run_id}/clarification`, `POST /research/{run_id}/clarify {"answer"}` | the Run's clarifying question; 409 once resolved |
 | `GET /reports`, `GET /reports/{report_id}` | the selected persona's Reports (there is no delete) |
 | `GET /reports/{report_id}/citations` | one citation per Claim, in draft order: the Source, its date and credibility score, and the exact Passage the Claim cites |
@@ -227,8 +230,9 @@ still be refused with 422.
 ### Web UI (T14)
 
 The Next.js app in `web/` is the research workbench: pick a persona, write a Brief, choose
-sources and attach PDFs, see the runtime estimate, follow the Run live, answer a clarifying
-question, and read the Report with a citation drawer for every Claim. Run the API as above,
+sources and attach PDFs, see the runtime estimate, follow the Run live (stage rail, each
+Sub-task's state, workflow milestones, elapsed time and an activity log), answer a clarifying
+question, and read the Report with a table of contents and a citation drawer for every Claim. Run the API as above,
 then in a second terminal:
 
 ```bash
@@ -358,7 +362,8 @@ required `next dev` hostname).
 | Frontend unit and component tests (Vitest) | `npm test` in `web/` | `npm install` | yes |
 | TypeScript | `npm run typecheck` in `web/` | `npm install` | yes |
 | Production build | `npm run build` in `web/` | `npm install` | yes |
-| Browser E2E (Playwright) | `npm run test:e2e` in `web/` | `npx playwright install chromium` and `uv`. Starts `tests/web_e2e/server.py` (the real app, scripted models, no keys) and `next start` itself | yes |
+| Browser E2E (Playwright) | `npm run test:e2e` in `web/` | `npx playwright install chromium` and `uv`. Starts `tests/web_e2e/server.py` (the real app, scripted models, no keys, every outbound connection blocked) and `next start` itself | yes |
+| Real-PDF browser E2E (part of the above) | `npx playwright test e2e/real-pdf.spec.ts` in `web/` | model files from `models download`. Uploads the sample PDF through the browser; the real Docling, FastEmbed and in-process Qdrant read, index and retrieve it, and the citation drawer must show the cited passage with its page and section. Only chat models are scripted. **Skips** with the reason when the model cache is missing | the step runs, but CI has no model cache, so this test skips there |
 | Generated API types are current | `npm run api:types` in `web/` against a running API, then `git diff` | a running API | yes |
 
 In PowerShell, set the variable first: `$env:INSIGHTFORGE_ALLOW_LIVE_TESTS = "1"; uv run pytest -m live`
