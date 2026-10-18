@@ -8,7 +8,10 @@ import copy
 import itertools
 import json
 import re
+import threading
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -17,9 +20,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from insightforge_agent.domain.contracts import ReportDraft
 from insightforge_agent.domain.evidence import Thresholds
 from insightforge_agent.domain.models import RunState
-from insightforge_agent.evaluation.cli import main
+from insightforge_agent.evaluation.cli import allocate_evaluation_dir, main
 from insightforge_agent.evaluation.judge import CRITERIA, RUBRIC_VERSION
 from insightforge_agent.evaluation.library import load_library
+from insightforge_agent.evaluation.report import EvalReport as EvalReportModel
+from insightforge_agent.evaluation.report import render_markdown
 from insightforge_agent.pipeline.citations import report_citations
 from insightforge_agent.stores.source_store import SourceStore
 from insightforge_agent.stores.sqlite import SqliteRepos
@@ -600,6 +605,34 @@ def test_a_failing_judge_leaves_the_deterministic_metrics_untouched(tmp_path):
     assert "invalid judge reply" in (run_dir / "eval-report.md").read_text(encoding="utf-8")
 
 
+def test_a_blank_rationale_is_one_judge_error_and_only_synthesis_loses_comparability(tmp_path):
+    """The first judged Report's sheet has four valid scores and a blank rationale."""
+    replies = iter([json.dumps({**{c: 5 for c in CRITERIA}, "rationale": "   "})])
+    judges = Judges()
+
+    def factory(settings):
+        model = judges(settings)
+        model.reply = lambda messages: AIMessage(content=next(replies, SHEET))
+        return model
+    code, report, _ = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
+                               "--judge-provider", "groq", *TWO, judges=factory)
+    gemini, groq = provider(report, "gemini"), provider(report, "groq")
+    [first, second] = gemini["samples"]
+    assert code == 0 and len(judges.models[0].seen) == 4  # one call per Report, no retry
+    assert first["synthesis"]["status"] == "error" and first["synthesis"]["score"] is None
+    assert "invalid judge reply" in first["synthesis"]["reason"]
+    assert first["fact_check"] == samples(groq)[first["sample_id"]]["fact_check"]
+    assert first["citations"] == samples(groq)[first["sample_id"]]["citations"]
+    assert gemini["totals"]["synthesis"] == {"judged": 1, "errors": 1, "not_judged": 0,
+                                             "mean_score": 4.0}
+    assert groq["totals"]["synthesis"]["judged"] == 2 and second["synthesis"]["score"] == 4.0
+    assert report["comparability"]["fact_check"]["comparable"] is True
+    assert report["comparability"]["citations"]["comparable"] is True
+    synthesis = report["comparability"]["synthesis"]
+    assert synthesis["comparable"] is False
+    assert f"gemini has none for {first['sample_id']}" in synthesis["reason"]
+
+
 def test_without_a_judge_synthesis_is_not_judged_and_no_judge_is_built(tmp_path):
     judges = Judges()
     code, report, _ = evaluate(tmp_path, "--provider", "gemini", "--judge-provider", "none",
@@ -680,3 +713,214 @@ def test_the_judge_provider_must_be_chosen_explicitly(tmp_path):
     with pytest.raises(SystemExit) as exited:
         evaluate(tmp_path, "--provider", "gemini")
     assert exited.value.code == 2
+
+
+# --- the evaluation directory: atomic, collision-safe, never reused ----------------------------
+
+FROZEN = datetime(2026, 10, 19, 12, 0, 0, tzinfo=UTC)
+STAMP = "20261019T120000Z"
+ONE = ("--provider", "gemini", "--judge-provider", "none", "--brief",
+       "competitive-landscape-cloud")
+
+
+def run_at(tmp_path, *args, world=None, now=FROZEN) -> int:
+    return main(["--library", str(LIBRARY), "--out", str(tmp_path / "out"), *args],
+                make_deps=(world or World()).make_deps, make_judge=Judges(), root=ROOT,
+                now=lambda: now)
+
+
+def tree(path: Path) -> dict[str, bytes]:
+    return {str(p.relative_to(path)): p.read_bytes() for p in sorted(path.rglob("*"))
+            if p.is_file()}
+
+
+def test_evaluations_started_in_the_same_second_get_their_own_directories(tmp_path):
+    out = tmp_path / "out"
+    assert run_at(tmp_path, *ONE) == 0
+    first = tree(out / STAMP)
+    assert run_at(tmp_path, *ONE) == 0 and run_at(tmp_path, *ONE) == 0
+    assert sorted(p.name for p in out.iterdir()) == [STAMP, f"{STAMP}-1", f"{STAMP}-2"]
+    assert tree(out / STAMP) == first  # the earlier evaluation is untouched
+    for name in (f"{STAMP}-1", f"{STAMP}-2"):
+        report = json.loads((out / name / "eval-report.json").read_text(encoding="utf-8"))
+        # The stores each report points at are its own directory's.
+        assert provider(report, "gemini")["workdir"] == str(out / name / "gemini")
+        assert stored(provider(report, "gemini")).runs.list_for_owner(
+            "eval-competitive-landscape-cloud")
+
+
+def test_a_directory_another_process_already_claimed_is_skipped_not_reused(tmp_path):
+    claimed = tmp_path / "out" / STAMP
+    claimed.mkdir(parents=True)
+    (claimed / "eval-report.json").write_text("{\"theirs\": true}", encoding="utf-8")
+    assert run_at(tmp_path, *ONE) == 0
+    assert tree(claimed) == {"eval-report.json": b"{\"theirs\": true}"}
+    assert (tmp_path / "out" / f"{STAMP}-1" / "eval-report.json").exists()
+
+
+def test_concurrent_allocations_of_one_timestamp_each_get_a_distinct_directory(tmp_path):
+    base, workers = tmp_path / "out", 8
+    barrier, got, errors = threading.Barrier(workers), [], []
+
+    def claim():
+        barrier.wait()
+        try:
+            got.append(allocate_evaluation_dir(base, STAMP))
+        except Exception as e:  # noqa: BLE001 - recorded for the assertion
+            errors.append(e)
+    threads = [threading.Thread(target=claim) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert errors == []
+    assert sorted(p.name for p in got) == sorted(
+        [STAMP] + [f"{STAMP}-{n}" for n in range(1, workers)])
+
+
+def test_concurrent_processes_allocating_one_timestamp_never_share_a_directory(tmp_path):
+    base = tmp_path / "out"
+    with ProcessPoolExecutor(max_workers=4) as pool:
+        got = list(pool.map(allocate_evaluation_dir, [base] * 4, [STAMP] * 4))
+    assert len(set(got)) == 4 and all(p.parent == base and p.is_dir() for p in got)
+
+
+def test_exhausted_names_stop_before_any_run_and_touch_no_existing_evaluation(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("insightforge_agent.evaluation.cli.MAX_DIR_ATTEMPTS", 3)
+    out = tmp_path / "out"
+    for name in (STAMP, f"{STAMP}-1", f"{STAMP}-2"):
+        (out / name).mkdir(parents=True)
+        (out / name / "marker").write_text(name, encoding="utf-8")
+    before, world = tree(out), World()
+    code = run_at(tmp_path, *ONE, world=world)
+    err = capsys.readouterr().err
+    assert code == 1 and world.built == {} and tree(out) == before
+    assert "could not create the evaluation directory" in err and str(out) in err
+    assert "no Run was started" in err
+
+
+def test_a_filesystem_error_creating_the_directory_stops_before_any_run(
+        tmp_path, monkeypatch, capsys):
+    real_mkdir = Path.mkdir
+
+    def denied(self, *args, **kwargs):
+        if self.name.startswith(STAMP):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_mkdir(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", denied)
+    world = World()
+    code = run_at(tmp_path, *ONE, world=world)
+    err = capsys.readouterr().err
+    assert code == 1 and world.built == {}
+    assert "could not create the evaluation directory" in err and "Permission denied" in err
+    assert list((tmp_path / "out").iterdir()) == []
+
+
+# --- publication: eval-report.json is written last and means the evaluation is complete -------
+
+CLI = "insightforge-agent eval: error"
+
+
+def assert_unpublished_with_evidence(out: Path, err: str, cause: str) -> None:
+    """No report files, the Runs' stores kept and readable, and a diagnostic naming both."""
+    assert not (out / "eval-report.json").exists() and not (out / "eval-report.md").exists()
+    assert not [p for p in out.iterdir() if p.name.startswith(".eval-report")]  # no temp files
+    repos = SqliteRepos(str(out / "gemini" / "eval.db"))
+    [run] = repos.runs.list_for_owner("eval-competitive-landscape-cloud")
+    assert run.state == RunState.COMPLETE and (out / "gemini" / "checkpoints.db").exists()
+    repos.close()
+    assert CLI in err and "no eval-report.json was published" in err and cause in err
+    assert str(out) in err and "kept" in err
+
+
+def fail_replace(monkeypatch, name: str, error: OSError):
+    import insightforge_agent.evaluation.cli as cli
+    real = cli.os.replace
+
+    def replace(src, dst):
+        if Path(dst).name == name:
+            raise error
+        return real(src, dst)
+    monkeypatch.setattr(cli.os, "replace", replace)
+
+
+@pytest.mark.parametrize("stage", ["json", "markdown"])
+def test_a_report_that_cannot_be_prepared_publishes_nothing_and_keeps_the_runs(
+        tmp_path, monkeypatch, capsys, stage):
+    import insightforge_agent.evaluation.cli as cli
+    from insightforge_agent.evaluation.report import EvalReport
+
+    def broken(*args, **kwargs):
+        raise ValueError(f"cannot serialise the {stage}")
+    if stage == "json":
+        monkeypatch.setattr(EvalReport, "model_dump_json", broken)
+    else:
+        monkeypatch.setattr(cli, "render_markdown", broken)
+    assert run_at(tmp_path, *ONE) == 3
+    assert_unpublished_with_evidence(tmp_path / "out" / STAMP, capsys.readouterr().err,
+                                     f"cannot serialise the {stage}")
+
+
+def test_a_temporary_file_that_cannot_be_written_publishes_nothing(tmp_path, monkeypatch,
+                                                                   capsys):
+    import insightforge_agent.evaluation.cli as cli
+
+    def full(fd):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(cli.os, "fsync", full)
+    assert run_at(tmp_path, *ONE) == 3
+    assert_unpublished_with_evidence(tmp_path / "out" / STAMP, capsys.readouterr().err,
+                                     "No space left on device")
+
+
+def test_a_failed_json_publication_withdraws_the_markdown(tmp_path, monkeypatch, capsys):
+    fail_replace(monkeypatch, "eval-report.json", PermissionError(13, "Access is denied"))
+    assert run_at(tmp_path, *ONE) == 3
+    assert_unpublished_with_evidence(tmp_path / "out" / STAMP, capsys.readouterr().err,
+                                     "Access is denied")
+
+
+def test_a_failed_markdown_publication_never_reaches_the_json(tmp_path, monkeypatch, capsys):
+    fail_replace(monkeypatch, "eval-report.md", OSError(5, "Input/output error"))
+    assert run_at(tmp_path, *ONE) == 3
+    assert_unpublished_with_evidence(tmp_path / "out" / STAMP, capsys.readouterr().err,
+                                     "Input/output error")
+
+
+def test_a_cleanup_failure_is_reported_without_hiding_the_publication_error(
+        tmp_path, monkeypatch, capsys):
+    fail_replace(monkeypatch, "eval-report.json", OSError(5, "Input/output error"))
+    real_unlink = Path.unlink
+
+    def stuck(self, *args, **kwargs):
+        if self.name == "eval-report.md":
+            raise PermissionError(13, "file is locked", str(self))
+        return real_unlink(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", stuck)
+    out = tmp_path / "out" / STAMP
+    assert run_at(tmp_path, *ONE) == 3
+    err = capsys.readouterr().err
+    assert "Input/output error" in err and "no eval-report.json was published" in err
+    assert "could not remove" in err and "eval-report.md" in err and "file is locked" in err
+    assert not (out / "eval-report.json").exists()
+    assert (out / "gemini" / "eval.db").exists()
+
+
+def test_a_failed_publication_leaves_an_earlier_evaluation_untouched(tmp_path, monkeypatch):
+    assert run_at(tmp_path, *ONE) == 0
+    earlier = tree(tmp_path / "out" / STAMP)
+    fail_replace(monkeypatch, "eval-report.json", OSError(5, "Input/output error"))
+    assert run_at(tmp_path, *ONE) == 3
+    assert tree(tmp_path / "out" / STAMP) == earlier
+    assert not (tmp_path / "out" / f"{STAMP}-1" / "eval-report.json").exists()
+
+
+def test_a_published_evaluation_has_both_reports_and_no_temporary_files(tmp_path):
+    assert run_at(tmp_path, *ONE) == 0
+    out = tmp_path / "out" / STAMP
+    names = sorted(p.name for p in out.iterdir())
+    assert names == ["eval-report.json", "eval-report.md", "gemini"]
+    report = EvalReportModel.model_validate_json(
+        (out / "eval-report.json").read_text(encoding="utf-8"))
+    assert (out / "eval-report.md").read_text(encoding="utf-8") == render_markdown(report)

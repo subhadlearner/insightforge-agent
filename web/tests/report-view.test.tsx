@@ -95,6 +95,23 @@ describe("Report viewer", () => {
     markers.forEach((b) => expect(b).toBeDisabled());
   });
 
+  it.each([
+    ["the network", new api.ApiError(0, "The server could not be reached. Check that the API is running.")],
+    ["a 503", new api.ApiError(503, "The server is busy; try again shortly.")],
+    ["a 404", new api.ApiError(404, "report rep_1 not found")],
+  ])("says Sources could not be loaded after %s failure, never blaming provenance", async (_, error) => {
+    m.getCitations.mockRejectedValue(error);
+    render(<ReportView reportId="rep_1" />);
+    expect(await screen.findByTestId("citations-unavailable")).toHaveTextContent(
+      `Supporting evidence could not be loaded: ${error.message}`);
+    const appendix = document.querySelector(".report__print-sources") as HTMLElement;
+    expect(appendix).toHaveAttribute("data-print-sources-state", "failed");
+    expect(appendix).toHaveTextContent(`Sources could not be loaded: ${error.message}`);
+    expect(appendix).not.toHaveTextContent(/provenance/);
+    expect(appendix.querySelector("ol")).toBeNull(); // no Source is listed, so none is invented
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("BYD and Tesla");
+  });
+
   it("shows the Executive Summary under its own heading", async () => {
     render(<ReportView reportId="rep_1" />);
     const heading = await screen.findByRole("heading", { level: 2, name: "Executive Summary" });

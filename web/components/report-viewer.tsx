@@ -20,13 +20,22 @@ export type CitationsState =
   | { kind: "ready"; citations: Citation[] }
   | { kind: "failed"; status: number; message: string };
 
+type FailedCitations = Extract<CitationsState, { kind: "failed" }>;
+
+/** Only a 500 means the stored provenance could not be resolved; any other failure (the
+ *  network, a busy server, a missing Report) is a request that failed, and is said so. The
+ *  screen notice and the printed Sources use the same distinction. */
+function provenanceFailed(state: FailedCitations): boolean {
+  return state.status === 500;
+}
+
 function CitationsNotice({ state }: { state: CitationsState }) {
   if (state.kind !== "failed") return null;
   return (
     <div className="notice notice--error report__notice" role="alert" data-testid="citations-unavailable">
       <p className="notice__title">Sources unavailable</p>
       <p>
-        {state.status === 500
+        {provenanceFailed(state)
           ? "Supporting evidence is unavailable because this Report's stored citation provenance could not be resolved."
           : `Supporting evidence could not be loaded: ${state.message}`}
       </p>
@@ -179,7 +188,11 @@ export function ReportViewer({ report, citations }: { report: ParsedReport; cita
         data-print-sources-state={citations.kind}>
           <h2>Sources</h2>
           {citations.kind === "failed" ? (
-            <p>Sources unavailable because this Report's stored citation provenance could not be resolved.</p>
+            <p>
+              {provenanceFailed(citations)
+                ? "Sources unavailable because this Report's stored citation provenance could not be resolved."
+                : `Sources could not be loaded: ${citations.message}`}
+            </p>
           ) : citations.kind === "loading" ? (
             <p>Loading Sources…</p>
           ) : <ol>
