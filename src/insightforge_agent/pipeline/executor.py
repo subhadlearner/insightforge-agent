@@ -10,7 +10,8 @@ Two kinds of work, with different admission rules:
   `submit`. It is never refused for capacity, because the Run is durably RESUMING and refusing
   would only strand it; it waits in the queue for a free worker.
 
-Either kind is refused with `ExecutorClosed` once shutdown has begun. Work that was queued but
+Either kind is refused with `ExecutorClosed` once the executor is closed: `close` (as soon as
+the process is asked to stop) or `shutdown`. Work that was queued but
 never started when the executor shuts down is cancelled, and its `on_cancel` runs, so its Run
 ends in an explicit state instead of disappearing. Running work is waited for: the process's
 resources stay open until it has finished."""
@@ -124,11 +125,16 @@ class BoundedRunExecutor:
         with self._lock:
             self._in_flight -= 1
 
+    def close(self) -> None:
+        """Refuse new work from now on (ExecutorClosed), without waiting: queued and running
+        work carry on until `shutdown`. A Run created as this happens is settled by `admit`."""
+        with self._lock:
+            self._closed = True
+
     def shutdown(self) -> None:
         """Refuse new work, cancel queued work (running each `on_cancel`), and wait for the
         running work to finish."""
-        with self._lock:
-            self._closed = True
+        self.close()
         self._pool.shutdown(wait=True, cancel_futures=True)
 
 

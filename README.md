@@ -193,7 +193,7 @@ uv run insightforge-agent serve --port 8000
 process instead, so no Docker is needed, but nothing it indexed survives a restart.
 
 Stop it with Ctrl+C: open progress streams end at once (clients reconnect with
-`Last-Event-ID`), the scheduler and executor stop, running Runs finish, and the databases are
+`Last-Event-ID`), new Runs are refused from that moment (503), the scheduler and executor stop, running Runs finish, and the databases are
 closed. Queued new Runs are settled FAILED and queued clarification resumes stay RESUMING for the
 next start. Shutdown waits for running Runs with no time limit, so a stalled Run keeps the
 process from exiting; after a hard kill, startup handles each unfinished Run by its stored

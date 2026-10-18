@@ -19,15 +19,28 @@ Startup (`start`), in order:
 3. `startup_sweep` runs once, before any new Run can be accepted: in-progress Runs are settled,
    RESUMING ones resumed, expired clarifications timed out and the rest rescheduled. Resumes go
    to the RunExecutor, never run on this thread.
-4. The daily retention job is added unless the job store already holds it, and the
-   scheduler resumes: due and future timeouts now fire, into the executor; a retention sweep
-   missed while the process was down fires once.
+4. The daily retention job and the clarification reconciliation job are added unless the job
+   store already holds them, and the scheduler resumes: due and future timeouts now fire, into
+   the executor; a retention sweep missed while the process was down fires once.
 5. The lifespan yields: requests are served.
 
-Shutdown (`stop`), in order: the scheduler is paused and shut down (a timeout can no longer
-create executor work) and the handler removed; the executor refuses new work, settles queued
-work (a new Run FAILED, a resume left RESUMING for the next sweep) and waits for running Runs
-to finish; only then are Qdrant, the checkpointer and SQLite closed, last opened first."""
+Shutdown (T20 B4):
+
+1. `begin_shutdown` (as soon as the server is asked to stop): open streams end, and the
+   executor admits nothing more, so neither `POST /research/run` nor a Watchlist tick creates
+   a Run from then on (a Run created at that instant is settled FAILED by `admit`).
+2. `stop`: the scheduler is paused, so no job fires (jobs written meanwhile, such as a running
+   Run's clarification timeout, are still stored); the executor settles queued work (a new Run
+   FAILED, a resume left RESUMING for the next sweep) and waits for running Runs, with every
+   resource still open. A Diff such a Run would start is not scheduled; the next startup
+   recovers it.
+3. The job store is removed from the scheduler, which waits for a job-processing pass that
+   began before the pause to finish, and only then is the scheduler shut down (waiting for jobs
+   it already started). Shutting it down during such a pass made the pass's removal of a fired
+   one-shot job raise JobLookupError on the scheduler thread (SHUT-1). The stored jobs stay in
+   the database.
+4. The handlers are removed; Qdrant, the checkpointer and SQLite are closed, last opened first.
+"""
 
 import logging
 import sqlite3
@@ -78,7 +91,9 @@ from insightforge_agent.scheduler.webhook import WebhookSender, install_webhook_
 from insightforge_agent.scheduler.clarification import (
     ApsTimeoutScheduler,
     build_scheduler,
+    install_reconcile_handler,
     install_timeout_handler,
+    schedule_reconciliation,
 )
 from insightforge_agent.stores.personas import load_personas
 from insightforge_agent.stores.sqlite import SqliteRepos, sqlite_path
@@ -182,6 +197,7 @@ class Runtime:
     def start(self) -> None:
         self.scheduler.start(paused=True)
         install_timeout_handler(self.clarifications.time_out)
+        install_reconcile_handler(self.clarifications.reconcile_overdue)
         install_watchlist_handler(
             self.watchlists.schedules.tick, self.watchlists.schedules.retry_baseline
         )
@@ -195,24 +211,33 @@ class Runtime:
         schedules.diffs.webhooks.recover()
         # APScheduler runs on the wall clock; the sweep's cutoff uses `deps.now`.
         schedule_retention(self.scheduler, datetime.now(UTC))  # kept if already stored
+        schedule_reconciliation(self.scheduler, datetime.now(UTC))  # likewise
         self.scheduler.resume()
 
     def begin_shutdown(self) -> None:
         """The server was asked to stop: open progress streams end now (clients reconnect
-        later with Last-Event-ID), so they do not hold up the graceful shutdown."""
+        later with Last-Event-ID), so they do not hold up the graceful shutdown, and no new
+        research is admitted, from a request or a Watchlist tick."""
         self.closing.set()
+        self.executor.close()
 
     def stop(self) -> None:
         self.begin_shutdown()
-        if self.scheduler.running:
+        running = self.scheduler.running
+        if running:
             self.scheduler.pause()
+        self.executor.shutdown()  # waits for running Runs; resources stay open meanwhile
+        if running:
+            # Waits for a job-processing pass begun before the pause (it holds the job stores'
+            # lock), so the scheduler is never marked stopped during one (module docstring).
+            self.scheduler.remove_jobstore("default")
             self.scheduler.shutdown(wait=True)
         install_timeout_handler(None)
+        install_reconcile_handler(None)
         install_watchlist_handler(None)
         install_diff_handler(None)
         install_webhook_handler(None)
         install_retention_handler(None)
-        self.executor.shutdown()
         for close in reversed(self._closers):
             close()
         logger.info("runtime stopped: scheduler and executor shut down, resources closed")

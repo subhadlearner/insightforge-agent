@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 from insightforge_agent.domain.models import RunState
-from insightforge_agent.scheduler.clarification import JOB_TABLE, job_id
+from insightforge_agent.scheduler.clarification import JOB_TABLE, RECONCILE_JOB_ID, job_id
 from insightforge_agent.scheduler.retention import JOB_ID as RETENTION_JOB
 from insightforge_agent.stores.sqlite import SqliteRepos
 from tests.api.support import VAGUE
@@ -154,7 +154,8 @@ def stop_with_a_stream_open(server: Server, tmp_path) -> tuple[float, str, str]:
     db = sqlite3.connect(tmp_path / "app.db")
     try:
         assert sorted(r[0] for r in db.execute(f"SELECT id FROM {JOB_TABLE}")) == sorted([
-            job_id("alice", run_id), RETENTION_JOB])  # T13's daily retention job too
+            job_id("alice", run_id), RETENTION_JOB,  # T13's daily retention job too
+            RECONCILE_JOB_ID])  # and T20 B4's clarification reconciliation job
     finally:
         db.close()
     repos = SqliteRepos(str(tmp_path / "app.db"))

@@ -13,11 +13,16 @@ Every decision that must survive a crash or a duplicate callback is a persistent
 - A commit applies only to the earliest unfinished Diff of the item (`_next_run`), so a later Run
   never overtakes an earlier one.
 - `watchlist_alerts` is UNIQUE per Run; its delivery row is written in the same transaction.
+- `watchlist_seed_retries` holds, per item whose seed failed to normalise, how many times it
+  failed and `retry_after`, the earliest next attempt (T20 B4, T12-2). It is checked before the
+  Finding judge is called, removed in the transaction that establishes the seed, and removed
+  with the item. There is no permanent-failure state.
 
 The Diff commit (Finding updates, version, Diff record, Alert, delivery) is one transaction.
 """
 
 import json
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import NamedTuple
@@ -55,6 +60,11 @@ CREATE TABLE IF NOT EXISTS watchlist_alerts (
  owner_id TEXT NOT NULL, id TEXT NOT NULL, item_id TEXT NOT NULL, run_id TEXT NOT NULL,
  created_at TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0, alert TEXT NOT NULL,
  PRIMARY KEY(owner_id,id), UNIQUE(owner_id,run_id)
+);
+CREATE TABLE IF NOT EXISTS watchlist_seed_retries (
+ owner_id TEXT NOT NULL, item_id TEXT NOT NULL, failures INTEGER NOT NULL,
+ retry_after TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(owner_id,item_id)
 );
 CREATE TABLE IF NOT EXISTS alert_deliveries (
  owner_id TEXT NOT NULL, alert_id TEXT NOT NULL, url TEXT NOT NULL,
@@ -128,7 +138,36 @@ class SqliteDiffRepository:
                 (owner_id, item_id, initializing_run_id, 1, now.isoformat(),
                  json.dumps(detail)))
             self._upsert(owner_id, item_id, result.updates)
+            self._db.execute(
+                "DELETE FROM watchlist_seed_retries WHERE owner_id=? AND item_id=?",
+                (owner_id, item_id))
             return True
+
+    def seed_retry_after(self, owner_id, item_id) -> datetime | None:
+        """The earliest time the seed may be normalised again after a failure, if any."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT retry_after FROM watchlist_seed_retries WHERE owner_id=? AND item_id=?",
+                (owner_id, item_id)).fetchone()
+        return datetime.fromisoformat(row[0]) if row else None
+
+    def record_seed_failure(self, owner_id, item_id, error: str, now: datetime,
+                            delay_for: Callable[[int], timedelta]) -> datetime:
+        """Count one failed normalisation of the seed; returns `retry_after`, which is
+        `now + delay_for(failures so far)`."""
+        with self._write():
+            self._item(owner_id, item_id)
+            row = self._db.execute(
+                "SELECT failures FROM watchlist_seed_retries WHERE owner_id=? AND item_id=?",
+                (owner_id, item_id)).fetchone()
+            failures = (row[0] if row else 0) + 1
+            retry_after = now + delay_for(failures)
+            self._db.execute(
+                "INSERT INTO watchlist_seed_retries VALUES (?,?,?,?,?) "
+                "ON CONFLICT(owner_id,item_id) DO UPDATE SET failures=excluded.failures, "
+                "retry_after=excluded.retry_after, error=excluded.error",
+                (owner_id, item_id, failures, retry_after.isoformat(), error[:_ERROR_CHARS]))
+        return retry_after
 
     def _upsert(self, owner_id, item_id, updates: dict[str, EstablishedFinding]):
         self._db.executemany(
