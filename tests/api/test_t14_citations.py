@@ -117,7 +117,8 @@ def test_a_current_claim_resolves_to_its_primary_passage_and_source(app):
     assert response.status_code == 200
     assert response.json() == [{
         "section": 0, "claim": 0, "evidence_id": "ev1", "source_id": "src_obs_1",
-        "source_title": "Title src_obs_1", "published_at": "2029-11-05T00:00:00Z",
+        "source_title": "Title src_obs_1", "source_domain": "example.com",
+        "published_at": "2029-11-05T00:00:00Z",
         "credibility_score": 0.8, "passage": {"observation_id": "obs_1", "index": 2},
         "passage_text": "obs_1 p2", "page": None, "section_heading": None}]
 
@@ -134,6 +135,7 @@ def test_a_document_passage_carries_its_page_and_heading(app):
 
     assert body["passage_text"] == "Revenue grew 12%." and body["page"] == 4
     assert body["section_heading"] == "Results" and body["source_title"] == "deck.pdf"
+    assert body["source_domain"] is None  # a document has no domain
     assert body["credibility_score"] == 0.7
 
 
@@ -317,6 +319,6 @@ def test_the_openapi_schema_is_a_typed_citation_list(app):
     schema = get["responses"]["200"]["content"]["application/json"]["schema"]
     assert schema["type"] == "array" and schema["items"]["$ref"].endswith("/Citation")
     citation = spec["components"]["schemas"]["Citation"]
-    assert {"section", "claim", "evidence_id", "source_id", "source_title", "published_at",
-            "credibility_score", "passage", "passage_text", "page",
+    assert {"section", "claim", "evidence_id", "source_id", "source_title", "source_domain",
+            "published_at", "credibility_score", "passage", "passage_text", "page",
             "section_heading"} == set(citation["properties"])

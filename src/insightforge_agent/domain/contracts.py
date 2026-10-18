@@ -219,6 +219,38 @@ class ReportDraft(BaseModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+# A section's label: its Confidence, or BACKGROUND for Historical background only.
+SectionLabel = Literal["HIGH", "MEDIUM", "LOW", "BACKGROUND"]
+
+
+def section_confidence(draft: ReportDraft, bundle: EvidenceBundle,
+                       historical: HistoricalContext | None = None) -> list[SectionLabel | None]:
+    """Each Report section's label, derived when the Report is read from the Evidence bundle
+    and Historical context stored with it, so Reports written before it existed get labels too.
+
+    A section whose current Claims all cite bundle items takes the Confidence of the Evidence
+    sections they cite; when they cite several (only possible in a Report written before Claims
+    were filed by section), the lowest. A section of Historical Claims only, each citing a
+    Historical item, is BACKGROUND: it has no current Confidence. Anything else (a Claim citing
+    an id the stored records do not hold, or no Claims at all) is None, unresolved, never
+    shown as background and never given an invented label."""
+    of_item = {i.id: s.confidence for s in bundle.sections for i in s.items}
+    background = (historical or HistoricalContext()).by_id()
+    out: list[SectionLabel | None] = []
+    for section in draft.sections:
+        current = [c for c in section.claims if not c.historical]
+        past = [c for c in section.claims if c.historical]
+        if (not section.claims or any(c.evidence_id not in of_item for c in current)
+                or any(c.evidence_id not in background for c in past)):
+            out.append(None)
+        elif current:
+            out.append(min((of_item[c.evidence_id] for c in current),
+                           key=CONFIDENCE_ORDER.__getitem__))
+        else:
+            out.append("BACKGROUND")
+    return out
+
+
 class ClaimVerdict(BaseModel):
     """The Fact-Checker's verdict on one sampled Claim, named by its position in the draft.
     `matched` is the new Passage that best matches the Claim; `original` is the Passage the
@@ -255,6 +287,7 @@ class Citation(BaseModel):
     evidence_id: str
     source_id: str
     source_title: str
+    source_domain: str | None = None  # a web Source's host, for the inline citation
     published_at: datetime | None = None
     credibility_score: float | None = None
     passage: PassageRef

@@ -171,6 +171,24 @@ test("the Report's inline citations open the drawer with the API's exact Source 
   await page.keyboard.press("Escape");
   await expect(drawer).toBeHidden();
   await expect(page.getByRole("button", { name: `View source for claim ${n}` })).toBeFocused();
+
+  // T20 B1: the summary heading, one Confidence label per section as the API derives it, and
+  // each Claim's Source inline; all still shown when printed (the PDF is this page printed).
+  const report = await (await page.request.get(`/api/reports/${reportId}`)).json();
+  expect(report.section_confidence.length).toBeGreaterThan(1);
+  const first = citations[0];
+  const inline = `[Source: ${first.source_domain ?? first.source_title}, ${first.published_at ? first.published_at.slice(0, 10) : "undated"}, credibility: ${first.credibility_score != null ? first.credibility_score.toFixed(2) : "not scored"}]`;
+  for (const media of ["screen", "print"] as const) {
+    await page.emulateMedia({ media });
+    await expect(page.getByRole("heading", { level: 2, name: "Executive Summary" })).toBeVisible();
+    const labels = page.getByTestId("section-confidence");
+    await expect(labels).toHaveText(report.section_confidence.map((c: string | null) =>
+      c === null ? "Confidence unavailable"
+        : c === "BACKGROUND" ? "Background from earlier Reports · no current Confidence"
+        : `Confidence: ${c}`));
+    await expect(page.locator('[data-claim="0:0"] .claim__source')).toHaveText(inline);
+  }
+  await page.emulateMedia({ media: "screen" });
 });
 
 test("an estimate is shown, yet the backend can still refuse the Run with 422", async ({ page }) => {

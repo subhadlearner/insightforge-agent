@@ -661,6 +661,38 @@ a {
 .report__empty {
   color: var(--graphite);
 }
+/* Section Confidence: colour-coded, and always spelled out, so it survives greyscale print. */
+.confidence {
+  display: inline-block;
+  margin: -0.25rem 0 0.9rem;
+  padding: 0.1rem 0.55rem;
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+.confidence--high {
+  color: var(--verdigris-deep);
+  background: var(--verdigris-wash);
+}
+.confidence--medium {
+  color: var(--amber);
+  background: var(--amber-wash);
+}
+.confidence--low {
+  color: var(--crimson);
+  background: var(--crimson-wash);
+}
+.confidence--background,
+.confidence--unresolved {
+  color: var(--graphite);
+  background: var(--paper);
+}
+.confidence--unresolved {
+  border-style: dashed;
+}
 .report__gaps {
   padding-top: 1.25rem;
   border-top: 1px solid var(--rule);
@@ -684,6 +716,11 @@ a {
   white-space: normal;
 }
 .claim__background {
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  color: var(--graphite);
+}
+.claim__source {
   font-family: var(--font-ui);
   font-size: var(--step--1);
   color: var(--graphite);

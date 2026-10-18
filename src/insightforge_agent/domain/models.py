@@ -3,9 +3,11 @@
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from insightforge_agent.domain.evidence import domain_of
 from insightforge_agent.domain.plan import SubTask
 
 
@@ -92,6 +94,14 @@ class Source(_Record):
     title: str
     credibility_score: float | None = Field(default=None, ge=0, le=1)
     published_at: datetime | None = None
+
+    @property
+    def domain(self) -> str | None:
+        """A web Source's host name without "www.", as an inline citation shows it; None for
+        an uploaded document, which has no domain."""
+        if self.kind != "web" or not urlsplit(self.locator).hostname:
+            return None  # never the raw locator, which `domain_of` falls back to
+        return domain_of(self.locator)
 
 
 class Observation(_Record):

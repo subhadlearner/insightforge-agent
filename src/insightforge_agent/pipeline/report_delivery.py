@@ -1,4 +1,10 @@
-"""T15 deterministic Report exports, public projection, JWTs and Chromium PDF seam."""
+"""T15 deterministic Report exports, public projection, JWTs and Chromium PDF seam.
+
+Both exports show the Executive Summary under its own heading and each section's Confidence,
+derived from the stored Evidence bundle (`section_confidence`); a section of Historical
+background only is labelled as such, never given a current Confidence, and a section whose
+label cannot be resolved says so. A Markdown Claim ends
+with its Source inline as `[Source: domain, date, credibility: score]` (T20 S11.7)."""
 
 import json
 import subprocess
@@ -14,7 +20,9 @@ from insightforge_agent.domain.contracts import (
     EvidenceBundle,
     HistoricalContext,
     ReportDraft,
+    SectionLabel,
     VerifiedReport,
+    section_confidence,
 )
 from insightforge_agent.domain.errors import NotFoundError, ProvenanceError
 from insightforge_agent.domain.models import Report, Source
@@ -133,6 +141,7 @@ class PublicClaim(BaseModel):
 
 class PublicSection(BaseModel):
     heading: str
+    confidence: SectionLabel | None = None  # BACKGROUND: Historical only; None: unresolved
     claims: list[PublicClaim]
 
 
@@ -173,13 +182,13 @@ def _parts(report: Report):
     refs = {i.id: i.primary for s in evidence.sections for i in s.items}
     refs.update({i.id: i.primary for i in historical.items})
     dates = {i.id: i.report_date.isoformat() for i in historical.items}
-    return verified, refs, dates
+    return verified, refs, dates, section_confidence(verified.draft, evidence, historical)
 
 
 def _claim_sources(
     report: Report, store: SourceStore, owner_id: str
 ) -> tuple[VerifiedReport, dict[str, str], list[Source]]:
-    verified, refs, dates = _parts(report)
+    verified, refs, dates, _ = _parts(report)
     sources: list[Source] = []
     seen: set[str] = set()
     for section in verified.draft.sections:
@@ -199,22 +208,42 @@ def _claim_sources(
     return verified, dates, sources
 
 
+BACKGROUND_ONLY = "Background from earlier Reports only; no current Confidence"
+UNRESOLVED = "Confidence unavailable"
+
+
+def confidence_label(label: SectionLabel | None) -> str:
+    if label is None:
+        return UNRESOLVED
+    return BACKGROUND_ONLY if label == "BACKGROUND" else f"Confidence: {label}"
+
+
+def inline_source(source: Source) -> str:
+    """`[Source: domain, date, credibility: score]`. A document has no domain, so its title is
+    shown; a missing date or score is said to be missing, never guessed."""
+    where = source.domain or source.title
+    date = source.published_at.date().isoformat() if source.published_at else "undated"
+    score = (f"{source.credibility_score:.2f}" if source.credibility_score is not None
+             else "not scored")
+    return f"[Source: {where}, {date}, credibility: {score}]"
+
+
 def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
     verified, dates, sources = _claim_sources(report, store, owner_id)
     draft: ReportDraft = verified.draft
     lines = [f"# {draft.title}", ""]
     if draft.summary:
-        lines += [draft.summary, ""]
+        lines += ["## Executive Summary", "", draft.summary, ""]
     source_numbers = {s.id: i + 1 for i, s in enumerate(sources)}
-    _, refs, _ = _parts(report)
-    for section in draft.sections:
-        lines += [f"## {section.heading}", ""]
+    _, refs, _, confidences = _parts(report)
+    for section, confidence in zip(draft.sections, confidences, strict=True):
+        lines += [f"## {section.heading}", "", f"*{confidence_label(confidence)}*", ""]
         for claim in section.claims:
             source = store.source_for_passage(owner_id, refs[claim.evidence_id])
             historical = (f"Background from an earlier Report of {dates[claim.evidence_id]}: "
                           if claim.historical and claim.evidence_id in dates
                           else "Background from an earlier Report: " if claim.historical else "")
-            lines.append(f"- {historical}{claim.text} [Source {source_numbers[source.id]}]")
+            lines.append(f"- {historical}{claim.text} {inline_source(source)}")
         lines.append("")
     if draft.gaps:
         lines += ["## Gaps & limitations", ""]
@@ -238,6 +267,7 @@ def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
 def public_projection(report: Report, store: SourceStore, owner_id: str) -> PublicReport:
     verified, dates, sources = _claim_sources(report, store, owner_id)
     draft = verified.draft
+    confidences = _parts(report)[3]
     return PublicReport(
         id=report.id,
         created_at=report.created_at,
@@ -247,6 +277,7 @@ def public_projection(report: Report, store: SourceStore, owner_id: str) -> Publ
         sections=[
             PublicSection(
                 heading=s.heading,
+                confidence=confidence,
                 claims=[
                     PublicClaim(
                         text=c.text,
@@ -256,7 +287,7 @@ def public_projection(report: Report, store: SourceStore, owner_id: str) -> Publ
                     for c in s.claims
                 ],
             )
-            for s in draft.sections
+            for s, confidence in zip(draft.sections, confidences, strict=True)
         ],
         gaps=draft.gaps,
         fact_check=PublicFactCheck(

@@ -522,6 +522,8 @@ export interface components {
             source_id: string;
             /** Source Title */
             source_title: string;
+            /** Source Domain */
+            source_domain?: string | null;
             /** Published At */
             published_at?: string | null;
             /** Credibility Score */
@@ -930,6 +932,8 @@ export interface components {
         PublicSection: {
             /** Heading */
             heading: string;
+            /** Confidence */
+            confidence?: ("HIGH" | "MEDIUM" | "LOW" | "BACKGROUND") | null;
             /** Claims */
             claims: components["schemas"]["PublicClaim"][];
         };
@@ -977,6 +981,8 @@ export interface components {
             body: {
                 [key: string]: unknown;
             };
+            /** Section Confidence */
+            section_confidence: (("HIGH" | "MEDIUM" | "LOW" | "BACKGROUND") | null)[];
         };
         /** Run */
         Run: {
