@@ -8,6 +8,8 @@ their real profiles and thresholds."""
 
 import json
 
+import pytest
+
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from insightforge_agent.domain.contracts import Brief
@@ -238,3 +240,63 @@ def test_a_compaction_that_leaves_the_cutoff_unchanged_still_has_its_own_id():
                            for s in ("Summary one.", "Summary one.", "Summary two."))
     assert first.compaction_id == again.compaction_id  # the same event seen twice
     assert later.compaction_id != first.compaction_id  # a new compaction at the same cutoff
+
+
+@pytest.mark.parametrize("resumed_window, new_compactions", [
+    (WINDOW, 1),  # the resumed Planner compacts again: only that one is added
+    (200_000, 0),  # nothing new compacts: the old event stays in force on every call
+])
+def test_a_run_resumed_from_reopened_sqlite_files_records_each_compaction_once(
+        tmp_path, resumed_window, new_compactions):
+    """A real process restart: every SQLite connection (repositories and checkpointer) is
+    closed after the first compaction is persisted, then reopened from disk to resume."""
+    import uuid
+
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from insightforge_agent.domain.models import Run
+    from insightforge_agent.pipeline.deps import Deps
+    from insightforge_agent.pipeline.graph import build_graph, outer_config
+    from insightforge_agent.stores.source_store import SourceStore
+    from insightforge_agent.stores.sqlite import SqliteRepos
+
+    def process(planner: ScriptedChat, repos: SqliteRepos, saver) -> Deps:
+        search = fakes.FixtureSearch()
+        return Deps(repos=repos, store=SourceStore(repos.sources, repos.observations, repos.passages),
+                    planner_model=planner, writer_model=fakes.writer(), light_model=fakes.light(),
+                    researcher_model=fakes.researcher(), search=search, fetcher=search,
+                    checkpointer=saver)
+
+    app_db, ck_db = str(tmp_path / "app.db"), str(tmp_path / "ck.db")
+    script = fakes.planner(research_ids=("s1", "s2"), repair_ids=("s3",)).script
+    thread = f"thread-{uuid.uuid4()}"
+    config = outer_config(thread)
+
+    first = compacting(script)
+    repos = SqliteRepos(app_db)
+    with SqliteSaver.from_conn_string(ck_db) as saver:
+        deps = process(first, repos, saver)
+        run = Run(id="run_reopen", owner_id="alice", brief=BRIEF, state=RunState.PLANNING,
+                  created_at=deps.now())
+        repos.runs.add(run)
+        build_graph(deps, interrupt_after=["researching"]).invoke(
+            {"thread_id": thread, "owner_id": "alice", "run_id": run.id, "brief": BRIEF}, config)
+        before = compactions(deps, run)
+    repos.close()
+    assert len(before) == summary_calls(first) == 1
+
+    second = compacting(script[planner_calls(first):], window=resumed_window)
+    repos = SqliteRepos(app_db)  # reopened from disk, with the checkpoint restored from ck.db
+    try:
+        with SqliteSaver.from_conn_string(ck_db) as saver:
+            resumed = process(second, repos, saver)
+            build_graph(resumed).invoke(None, config)
+            after = compactions(resumed, run)
+            assert repos.runs.get("alice", run.id).state == RunState.COMPLETE
+    finally:
+        repos.close()
+    assert planner_calls(second) >= 2  # the resumed Planner ran with the old event in state
+    assert summary_calls(second) == new_compactions
+    assert after[:1] == before  # the persisted compaction is not recorded again
+    assert len(after) == 1 + new_compactions
+    assert len({e["compaction_id"] for e in after}) == len(after)

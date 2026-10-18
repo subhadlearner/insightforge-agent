@@ -84,6 +84,24 @@ wider window, so the old event stays in state and nothing new compacts. A compac
 leaves `cutoff_index` unchanged is told apart by its summary text
 (`test_a_compaction_that_leaves_the_cutoff_unchanged_still_has_its_own_id`).
 
+Process restart from disk: `test_a_run_resumed_from_reopened_sqlite_files_records_each_compaction_once`
+forces a real compaction, persists its event, and closes both the SQLite repositories and the
+checkpointer. It then reopens both from the same files and resumes the Run. With the original
+window the resumed Planner compacts again, and exactly one new event is added. With a wider
+window nothing new compacts, the old event stays in force, and nothing is added. Removing the
+Run-log idempotency check fails the second case.
+
+Accepted exceptions (review of PR #61):
+
+- **Identity edge case.** A compaction is identified by its agent, its first message id, its
+  cumulative `cutoff_index` and its summary text. Two compactions with the same cutoff and
+  byte-identical summaries would be recorded once, so recording every compaction is not
+  guaranteed in that case. Accepted as a documented exception: there is no public compaction
+  callback to do better.
+- **Deferred tests.** Doc Reader and Memory researcher attribution, and the context-overflow
+  fallback compaction. They use the same recorder and identity as the tested paths. Planner
+  correction and clarification resumes, and a crashed-subagent rerun, are also untested.
+
 Compatibility risk: the recorder depends on deepagents' private state key
 `_summarization_event` (read through the exported `SUMMARIZATION_EVENT_KEY`) and its
 `SummarizationEvent` fields, pinned by `tests/test_deepagents_facts.py`. No public alternative
