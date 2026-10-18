@@ -201,7 +201,7 @@ state (resuming or rescheduling clarifications, settling the rest). Plain `uvico
 but on shutdown uvicorn then waits for open streams for up to `SSE_MAX_STREAM_SECONDS` (60 s).
 
 Runs execute in the API process on a bounded pool (`RUN_CONCURRENCY` workers, `RUN_QUEUE_LIMIT`
-queued); a submission beyond that is refused with 503. Endpoints:
+queued new Runs); a submission beyond that is refused with 503. Endpoints:
 
 | Endpoint | What it does |
 |---|---|
