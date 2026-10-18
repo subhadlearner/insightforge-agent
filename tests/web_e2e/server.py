@@ -12,6 +12,13 @@ A small `/__test__` router lets a browser test steer what it cannot reach throug
   time plus an offset), e.g. past a clarification deadline, so an answer is late (409).
 - `POST /__test__/clarification/{run_id}/timeout?owner=alice`: run the durable timeout job now,
   as APScheduler would at the deadline.
+- `GET /__test__/capabilities`: whether real uploaded-document research is wired (and if not,
+  why), and every outbound connection the process attempted (all blocked).
+
+Uploaded documents are researched with the real Docling, fastembed and in-process Qdrant when
+their model files are cached (`tests/web_e2e/real_documents.py`; `E2E_REAL_DOCUMENTS`
+`auto` by default, `1` to require them, `0` to skip them). The whole process runs behind
+`tests/network_guard.py`: no outbound connection or DNS lookup can succeed.
 
 SSE streams live `E2E_SSE_SECONDS` (default 3) while a Run is unfinished, so EventSource
 reconnects with Last-Event-ID during an ordinary test.
@@ -40,6 +47,7 @@ from insightforge_agent.domain.models import Report, Run, RunState
 from insightforge_agent.domain.watchlist import WatchlistItem
 from tests.api.support import Gate, scripted_deps, settings
 from tests.pipeline import fakes
+from tests.web_e2e import real_documents
 
 
 class Clock:
@@ -50,14 +58,15 @@ class Clock:
         return datetime.now(UTC) + self.offset
 
 
-def build(tmp: Path, sse_seconds: float):
+def build(tmp: Path, sse_seconds: float, blocked: list[str] | None = None):
     gate, clock = Gate(fakes.FixtureSearch()), Clock()
+    documents, capabilities = real_documents.load(os.environ.get("E2E_REAL_DOCUMENTS", "auto"))
     runtime = Runtime.build(settings(
         tmp,
         sse_max_stream_seconds=sse_seconds,
         web_origin=os.environ.get("E2E_WEB_ORIGIN", "http://127.0.0.1:3200"),
     ),
-                            scripted_deps(gate, clock))
+                            scripted_deps(gate, clock, **documents))
     app = create_app(runtime)
     control = APIRouter(prefix="/__test__", include_in_schema=False)
 
@@ -76,6 +85,10 @@ def build(tmp: Path, sse_seconds: float):
     @control.post("/clock/reset", status_code=204)
     def reset_clock():
         clock.offset = timedelta()
+
+    @control.get("/capabilities")
+    def capabilities_now():
+        return {**capabilities, "blocked_network": list(blocked or [])}
 
     @control.post("/clarification/{run_id}/timeout")
     def time_out(run_id: str, owner: str = "alice"):
@@ -316,8 +329,9 @@ def build(tmp: Path, sse_seconds: float):
 def main() -> None:
     port = int(os.environ.get("E2E_PORT", "8100"))
     sse_seconds = float(os.environ.get("E2E_SSE_SECONDS", "3"))
+    blocked = real_documents.guard_network()  # before anything loads, the models included
     with tempfile.TemporaryDirectory(prefix="insightforge-e2e-") as tmp:
-        app = build(Path(tmp), sse_seconds)
+        app = build(Path(tmp), sse_seconds, blocked)
         # Playwright stops the process on exit; open streams end within E2E_SSE_SECONDS.
         uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning",
                     timeout_graceful_shutdown=5)
