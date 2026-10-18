@@ -194,11 +194,14 @@ process instead, so no Docker is needed, but nothing it indexed survives a resta
 
 Stop it with Ctrl+C: open progress streams end at once (clients reconnect with
 `Last-Event-ID`), the scheduler and executor stop, running Runs finish, and the databases are
-closed. Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves the same app,
+closed. Queued new Runs are settled FAILED and queued clarification resumes stay RESUMING for the
+next start. Shutdown waits for running Runs with no time limit, so a stalled Run keeps the
+process from exiting; after a hard kill, startup handles each unfinished Run by its stored
+state (resuming or rescheduling clarifications, settling the rest). Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves the same app,
 but on shutdown uvicorn then waits for open streams for up to `SSE_MAX_STREAM_SECONDS` (60 s).
 
 Runs execute in the API process on a bounded pool (`RUN_CONCURRENCY` workers, `RUN_QUEUE_LIMIT`
-queued); a submission beyond that is refused with 503. Endpoints:
+queued new Runs); a submission beyond that is refused with 503. Endpoints:
 
 | Endpoint | What it does |
 |---|---|
@@ -395,7 +398,7 @@ at a time.
 | **Bounded Passage batches.** Extraction (one Source at a time), Synthesis (one Sub-task at a time) and the Fact-Checker read Passage text in batches under `PASSAGE_TOKEN_CAP` (default 3,000 estimated tokens, measured on the rendered batch). An oversized Passage is read in windows, never truncated | The cost of one call does not grow with page or document length | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_budget` (captures the payloads); `tests/pipeline/test_t5_review.py::test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synthesis` |
 | **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context, and never sees Passage text. When the bundle is over budget, whole lowest-ranked items are cut (never truncated mid-item), and each cut is logged as an `evidence_cut` event with its reason, Confidence and rank | The Writer's input is bounded however much research succeeded | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`. Nothing is summarised: the implementation drops whole items (design §4 was corrected to say so). Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
 | **Historical context stays apart.** Claims from earlier Reports enter as Historical items with their original Report, date and Passages, never as current Evidence items. They never establish or confirm a Finding | Old material cannot pose as current evidence, and its provenance stays checkable | CI-tested: `tests/pipeline/test_t8_memory.py::test_memory_findings_become_historical_claims_with_original_lineage`, `tests/pipeline/test_t8_historical_checks.py` |
-| **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway spend | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner and Writer calls are not counted yet |
+| **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway Passage reading | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner, Researcher and Writer calls are not counted, so it does not bound all model spend (design section 10) |
 
 ### Run-log compaction: what is and is not proven
 
