@@ -29,6 +29,7 @@ from apscheduler.schedulers.base import BaseScheduler
 logger = logging.getLogger(__name__)
 
 JOB_TABLE = "apscheduler_jobs"
+JOBSTORE = "default"  # the one job store, in the application database
 RECONCILE_JOB_ID = "clarification-reconcile"
 RECONCILE_INTERVAL = timedelta(minutes=1)
 _handler: Callable[[str, str], object] | None = None
@@ -84,7 +85,7 @@ def job_id(owner_id: str, run_id: str) -> str:
 def build_scheduler(database_url: str) -> BackgroundScheduler:
     """A scheduler whose job store is the application database (`sqlite:///...`)."""
     return BackgroundScheduler(
-        jobstores={"default": SQLAlchemyJobStore(url=database_url, tablename=JOB_TABLE)},
+        jobstores={JOBSTORE: SQLAlchemyJobStore(url=database_url, tablename=JOB_TABLE)},
         timezone=UTC)
 
 

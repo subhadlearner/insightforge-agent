@@ -8,8 +8,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from apscheduler.schedulers.base import STATE_PAUSED, STATE_STOPPED
 
+from insightforge_agent.domain.errors import ClarificationConflict
 from insightforge_agent.domain.models import RunState
 from insightforge_agent.pipeline.executor import BoundedRunExecutor, ExecutorClosed
+from insightforge_agent.pipeline.research import NOT_STARTED
 from insightforge_agent.scheduler import clarification as timeouts_module
 from insightforge_agent.scheduler.clarification import (
     RECONCILE_JOB_ID,
@@ -88,6 +90,47 @@ def test_reconciliation_and_the_timeout_job_together_resolve_a_question_once(tmp
             t.join(30)
         assert app.wait(run_id).state == RunState.COMPLETE
         wait_until(lambda: app.runtime.executor.in_flight == 0)
+        assert types(app, run_id).count("clarification_resolved") == 1
+
+
+def test_an_answer_overtaken_by_reconciliation_at_the_deadline_loses_and_is_not_stored(
+        tmp_path):
+    """The answer passes its deadline check just before the deadline, then reconciliation
+    resolves the Run first: the compare-and-set keeps the timeout and rejects the answer."""
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        run_id = awaiting(app)
+        runs = app.runtime.repos.runs
+        real_resolve = runs.resolve_clarification
+        in_resolve, release = threading.Event(), threading.Event()
+
+        def resolve(owner_id, rid, **kw):
+            if threading.current_thread().name == "answerer":
+                in_resolve.set()
+                assert release.wait(30)
+            return real_resolve(owner_id, rid, **kw)
+
+        runs.resolve_clarification = resolve
+        clock.advance(TIMEOUT - timedelta(seconds=1))  # the answer is still in time
+        outcome = []
+
+        def answer():
+            try:
+                app.runtime.clarifications.answer("alice", run_id, ANSWER)
+                outcome.append("answered")
+            except ClarificationConflict:
+                outcome.append("conflict")
+
+        answerer = threading.Thread(target=answer, name="answerer")
+        answerer.start()
+        assert in_resolve.wait(30)
+        clock.advance(timedelta(seconds=2))  # now past the deadline
+        assert app.runtime.clarifications.reconcile_overdue() == 1
+        release.set()
+        answerer.join(30)
+        assert outcome == ["conflict"]
+        final = app.wait(run_id)
+        assert final.clarification.resolution == "timed_out" and final.clarification.answer is None
         assert types(app, run_id).count("clarification_resolved") == 1
 
 
@@ -190,6 +233,49 @@ def test_no_research_is_admitted_once_shutdown_has_begun(tmp_path):
         assert app.runtime.repos.runs.list_for_owner("alice") == []
         assert app.runtime.repos.watchlists.counts("alice", item.id) == (0, 0, 0)
         assert app.runtime.executor.in_flight == 0
+
+
+def test_manual_and_watchlist_admission_racing_the_stop_signal_strand_no_run(tmp_path):
+    """Requests and a Watchlist tick race `begin_shutdown`. Whatever was admitted first runs
+    or is settled; nothing is created afterwards, and no Run is left in its first state."""
+    clock = Clock(T0)
+    with App(tmp_path, now=clock, run_concurrency=1, run_queue_limit=4) as app:
+        item = setup(app, cadence_minutes=15, max_runs=5)
+        barrier = threading.Barrier(5)
+        results = []
+
+        def manual():
+            barrier.wait()
+            results.append(app.submit().status_code)
+
+        def watchlist():
+            barrier.wait()
+            results.append(tick(app, clock, item))
+
+        def stop_signal():
+            barrier.wait()
+            app.runtime.begin_shutdown()
+
+        threads = [threading.Thread(target=f) for f in (manual, manual, manual, watchlist,
+                                                        stop_signal)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        assert app.submit().status_code == 503  # after the signal, always refused
+        assert tick(app, clock, item) is None
+        created = app.runtime.repos.runs.list_for_owner("alice")
+        statuses = [r for r in results if isinstance(r, int)]
+        assert len(created) == statuses.count(202) + sum(
+            1 for r in results if r is not None and not isinstance(r, int))
+        assert set(statuses) <= {202, 503}
+    with App(tmp_path, now=clock) as again:  # whatever was admitted ended, or was settled
+        for run in created:
+            final = again.wait(run.id)
+            assert final.state in (RunState.COMPLETE, RunState.FAILED)
+            if final.state == RunState.FAILED:
+                assert any(e.payload.get("reason") == NOT_STARTED
+                           for e in again.events(run.id))
 
 
 def test_a_run_created_as_admission_closes_is_failed_not_stranded():

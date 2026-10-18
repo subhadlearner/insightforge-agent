@@ -49,6 +49,9 @@ SEED_RETRY_DELAYS = tuple(timedelta(minutes=m) for m in (1, 2, 4, 8, 16, 32, 60)
 
 
 def seed_retry_delay(failures: int) -> timedelta:
+    """The wait after the `failures`-th failure (1 or more)."""
+    if failures < 1:
+        raise ValueError("a seed retry delay follows at least one failure")
     return SEED_RETRY_DELAYS[min(failures, len(SEED_RETRY_DELAYS)) - 1]
 
 

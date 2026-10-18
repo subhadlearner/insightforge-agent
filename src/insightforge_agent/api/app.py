@@ -89,6 +89,7 @@ from insightforge_agent.scheduler.retention import (
 from insightforge_agent.scheduler.watchlist import WatchlistScheduler, install_watchlist_handler
 from insightforge_agent.scheduler.webhook import WebhookSender, install_webhook_handler
 from insightforge_agent.scheduler.clarification import (
+    JOBSTORE,
     ApsTimeoutScheduler,
     build_scheduler,
     install_reconcile_handler,
@@ -230,7 +231,7 @@ class Runtime:
         if running:
             # Waits for a job-processing pass begun before the pause (it holds the job stores'
             # lock), so the scheduler is never marked stopped during one (module docstring).
-            self.scheduler.remove_jobstore("default")
+            self.scheduler.remove_jobstore(JOBSTORE)
             self.scheduler.shutdown(wait=True)
         install_timeout_handler(None)
         install_reconcile_handler(None)

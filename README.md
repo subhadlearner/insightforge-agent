@@ -193,12 +193,14 @@ uv run insightforge-agent serve --port 8000
 process instead, so no Docker is needed, but nothing it indexed survives a restart.
 
 Stop it with Ctrl+C: open progress streams end at once (clients reconnect with
-`Last-Event-ID`), new Runs are refused from that moment (503), the scheduler and executor stop, running Runs finish, and the databases are
-closed. Queued new Runs are settled FAILED and queued clarification resumes stay RESUMING for the
-next start. Shutdown waits for running Runs with no time limit, so a stalled Run keeps the
-process from exiting; after a hard kill, startup handles each unfinished Run by its stored
-state (resuming or rescheduling clarifications, settling the rest). Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves the same app,
-but on shutdown uvicorn then waits for open streams for up to `SSE_MAX_STREAM_SECONDS` (60 s).
+`Last-Event-ID`), new Runs are refused from that moment (503), the scheduler and executor stop,
+running Runs finish, and the databases are closed. Queued new Runs are settled FAILED and
+queued clarification resumes stay RESUMING for the next start. Shutdown waits for running Runs
+with no time limit, so a stalled Run keeps the process from exiting; after a hard kill, startup
+handles each unfinished Run by its stored state (resuming or rescheduling clarifications,
+settling the rest). Plain `uvicorn insightforge_agent.api.app:app_from_env --factory` serves
+the same app, but on shutdown uvicorn then waits for open streams for up to
+`SSE_MAX_STREAM_SECONDS` (60 s).
 
 Runs execute in the API process on a bounded pool (`RUN_CONCURRENCY` workers, `RUN_QUEUE_LIMIT`
 queued new Runs); a submission beyond that is refused with 503. Endpoints:

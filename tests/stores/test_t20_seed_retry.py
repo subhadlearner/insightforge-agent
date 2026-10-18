@@ -6,6 +6,8 @@ there is no permanent-failure state. SQLite files, a recording scheduler, a scri
 
 from datetime import timedelta
 
+import pytest
+
 from langchain_core.messages import AIMessage
 
 from insightforge_agent.agents.finding_judge import FindingJudge
@@ -19,20 +21,21 @@ MINUTE = timedelta(minutes=1)
 
 
 class CountingJudgeModel:
-    """Fails (malformed JSON) while `failing`, then answers; counts every call."""
+    """Fails with `bad` (malformed JSON, or no judgment) while `failing`, then answers;
+    counts every call."""
 
-    def __init__(self):
+    def __init__(self, bad="{not json"):
         self.calls = 0
         self.failing = True
 
         def reply(messages):
             self.calls += 1
-            return AIMessage(content="{not json") if self.failing else unsupported_reply(messages)
+            return AIMessage(content=bad) if self.failing else unsupported_reply(messages)
         self.model = ScriptedChat(reply=reply)
 
 
-def failing_world(tmp_path):
-    judge = CountingJudgeModel()
+def failing_world(tmp_path, bad="{not json"):
+    judge = CountingJudgeModel(bad)
     w = World(tmp_path / "seed.db", judge=FindingJudge(judge.model, DEFAULT_REGISTRY))
     w.add_item()
     w.complete("r1", 1, fact("Model X", predicate="offers"))
@@ -50,8 +53,9 @@ def test_the_schedule_is_1_2_4_8_16_32_then_60_minutes_indefinitely():
     assert SEED_RETRY_DELAYS[-1] == timedelta(minutes=60)
 
 
-def test_each_failure_waits_longer_and_early_callbacks_never_call_the_judge(tmp_path):
-    w, judge = failing_world(tmp_path)
+@pytest.mark.parametrize("bad", ["{not json", '{"judgments": []}'])
+def test_each_failure_waits_longer_and_early_callbacks_never_call_the_judge(tmp_path, bad):
+    w, judge = failing_world(tmp_path, bad)
     expected_waits = [1, 2, 4, 8, 16, 32, 60, 60]
     for attempt, wait in enumerate(expected_waits, start=1):
         w.diffs.run_item(OWNER, ITEM)

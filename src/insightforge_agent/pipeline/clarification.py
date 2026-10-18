@@ -86,10 +86,11 @@ class ClarificationService:
         Returns how many this call timed out. No model call is made here."""
         now = self._deps.now()
         timed_out = 0
-        for run in self._deps.repos.runs.list_unfinished():
-            if (run.state == RunState.AWAITING_CLARIFICATION and run.clarification is not None
-                    and run.clarification.expired(now)
-                    and self.time_out(run.owner_id, run.id)):
+        overdue = [run for run in self._deps.repos.runs.list_unfinished()
+                   if run.state == RunState.AWAITING_CLARIFICATION
+                   and run.clarification is not None and run.clarification.expired(now)]
+        for run in overdue:
+            if self.time_out(run.owner_id, run.id):
                 timed_out += 1
         return timed_out
 
