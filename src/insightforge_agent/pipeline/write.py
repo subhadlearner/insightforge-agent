@@ -16,7 +16,8 @@ material or the Brief. The check is lexical; it does not establish that the evid
 summary. When retries run out on a draft whose Claims pass, the draft is repaired in code
 instead of failing the Run: an uncovered section is filled with its items' own statements, an
 unsupported summary sentence is removed (an emptied summary is rebuilt from the Claims), and an
-over-long summary is kept and logged. Claim-rule violations still fail the Run, as before."""
+over-long summary is shortened in code to whole sentences or whole Claims (`fit_summary`), so a
+published summary never exceeds the limit. Claim-rule violations still fail the Run."""
 
 import re
 
@@ -289,35 +290,65 @@ def _fill_uncovered(draft: ReportDraft, bundle: EvidenceBundle) -> tuple[ReportD
     return grown, [s.heading for s in missing]
 
 
-def _fallback_summary(draft: ReportDraft) -> str:
-    """Current Claims, the first of each section first, up to the word limit. Each is a Claim
-    that already passed its own grounding check."""
+def _leading_within_limit(sentences: list[str]) -> list[str]:
+    """The longest run of leading sentences that fits the word limit."""
+    kept: list[str] = []
+    for sentence in sentences:
+        if summary_words(" ".join([*kept, sentence])) > SUMMARY_MAX_WORDS:
+            break
+        kept.append(sentence)
+    return kept
+
+
+def _claim_texts(draft: ReportDraft) -> list[str]:
+    """Current Claims, the first of each section first, then Historical Claims (dated as
+    written), which a Report of Historical background only has alone."""
     current = [[c.text for c in s.claims if not c.historical] for s in draft.sections]
     ordered = [cs[0] for cs in current if cs] + [t for cs in current for t in cs[1:]]
+    return ordered + [c.text for s in draft.sections for c in s.claims if c.historical]
+
+
+def _claims_within_limit(draft: ReportDraft) -> list[str]:
+    """Claims in `_claim_texts` order, each kept whole while it fits the word limit. Each
+    already passed its own grounding check."""
     chosen: list[str] = []
-    for text in ordered:
-        if chosen and summary_words(" ".join([*chosen, text])) > SUMMARY_MAX_WORDS:
-            break
-        chosen.append(text)
-    return " ".join(chosen)
+    for text in _claim_texts(draft):
+        if summary_words(" ".join([*chosen, text])) <= SUMMARY_MAX_WORDS:
+            chosen.append(text)
+    return chosen
+
+
+def fit_summary(sentences: list[str], draft: ReportDraft) -> tuple[str, str | None]:
+    """A summary of at most `SUMMARY_MAX_WORDS` from supported `sentences`, adding no words of
+    its own, and how it was shortened: None (it fitted), "sentences" (leading whole sentences),
+    "claims" (no sentence fitted, so whole Claims), or "truncated" (nothing whole
+    fits: the first sentence, or else the first Claim, cut at a word with a closing "…")."""
+    if summary_words(" ".join(sentences)) <= SUMMARY_MAX_WORDS and sentences:
+        return " ".join(sentences), None
+    if kept := _leading_within_limit(sentences):
+        return " ".join(kept), "sentences"
+    if claims := _claims_within_limit(draft):
+        return " ".join(claims), "claims"
+    first = sentences[0] if sentences else next(iter(_claim_texts(draft)), "")
+    return " ".join([*first.split()[:SUMMARY_MAX_WORDS - 1], "…"]), "truncated"
 
 
 def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
             historical: HistoricalContext, brief: str) -> ReportDraft:
-    """A draft whose Claims pass, made publishable in code once retries are spent."""
+    """A draft whose Claims pass, made publishable in code once retries are spent. The
+    published summary never exceeds `SUMMARY_MAX_WORDS` and holds only supported sentences or
+    Claims (or a word-boundary cut of one)."""
     draft, filled = _fill_uncovered(draft, bundle)
     unsupported = unsupported_summary_sentences(draft.summary, bundle, historical, brief)
     dropped = {sentence for sentence, _ in unsupported}
-    summary = " ".join(t for t in _summary_sentences(draft.summary) if t not in dropped)
-    rebuilt = not summary
-    if rebuilt:
-        summary = _fallback_summary(draft)
+    supported = [t for t in _summary_sentences(draft.summary) if t not in dropped]
+    summary, shortened = fit_summary(supported, draft)
     draft = draft.model_copy(update={"summary": summary})
-    words = summary_words(summary)
     deps.log(owner_id, run_id, "writer_repaired", filled_sections=filled,
-             removed_summary_sentences=sorted(dropped), summary_rebuilt=rebuilt,
-             summary_words=words, summary_over_limit=words > SUMMARY_MAX_WORDS)
-    if violations(draft, bundle, historical) or coverage_problems(draft, bundle):
+             removed_summary_sentences=sorted(dropped), summary_rebuilt=not supported,
+             summary_shortened=shortened, summary_words=summary_words(summary))
+    if (violations(draft, bundle, historical) or coverage_problems(draft, bundle)
+            or summary_words(summary) > SUMMARY_MAX_WORDS):
         raise RunFailed("the Writer's draft could not be repaired")
     return draft
 

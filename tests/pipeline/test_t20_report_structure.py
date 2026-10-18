@@ -22,6 +22,7 @@ from insightforge_agent.domain.contracts import (
 from insightforge_agent.pipeline.errors import RunFailed
 from insightforge_agent.pipeline.write import (
     SUMMARY_MAX_WORDS,
+    fit_summary,
     place_claims,
     summary_problems,
     unsupported_summary_sentences,
@@ -189,7 +190,8 @@ def test_an_earlier_draft_with_passing_claims_is_kept_over_a_later_broken_one(ma
     draft = write(deps)
     assert headings(draft) == [("Sales", ["ev_1"]), ("Pricing", ["ev_2"]),
                                ("Batteries", ["ev_3"])]
-    assert draft.summary == long_summary  # over the limit, but nothing unsupported
+    # One 151-word sentence: no whole sentence fits, so the summary is built from the Claims.
+    assert draft.summary == f"{SALES} {PRICE} {CELLS}"
 
 
 # --- the Executive Summary -----------------------------------------------------------------
@@ -232,15 +234,68 @@ def test_an_empty_summary_is_retried_then_rebuilt(make_deps):
     assert draft.summary == f"{SALES} {PRICE} {CELLS}"
 
 
-def test_an_over_long_summary_is_retried_but_never_fails_the_run(make_deps):
+def test_an_over_long_summary_is_retried_then_cut_to_whole_sentences_never_published(make_deps):
     long_summary = " ".join([SALES] * 30)  # 210 words, every one supported
     model = writer(*[reply(ALL_PLACED, summary=long_summary)] * 3)
     deps = make_deps(writer_model=model)
     draft = write(deps)
+    assert len(model.seen) == 3  # no model call beyond the existing retries
     assert "it may have at most 150" in str(model.seen[1][-1].content)
-    assert draft.summary == long_summary
+    assert draft.summary == " ".join([SALES] * 21)  # 147 words: the 22nd sentence would pass 150
     (repaired,) = logged(deps, "writer_repaired")
-    assert repaired["summary_over_limit"] is True and repaired["summary_words"] == 210
+    assert repaired["summary_shortened"] == "sentences" and repaired["summary_words"] == 147
+
+
+def test_a_summary_of_exactly_150_words_is_published_untouched(make_deps):
+    exact = " ".join([SALES] * 20) + " " + " ".join(["BYD"] * 9) + " BYD."  # 140 + 10 words
+    assert len(exact.split()) == SUMMARY_MAX_WORDS
+    model = writer(reply(ALL_PLACED, summary=exact))
+    deps = make_deps(writer_model=model)
+    assert write(deps).summary == exact and len(model.seen) == 1
+    assert logged(deps, "writer_repaired") == []
+
+
+def test_a_151_word_summary_is_retried(make_deps):
+    over = " ".join([SALES] * 20) + " " + " ".join(["BYD"] * 10) + " BYD."
+    assert len(over.split()) == SUMMARY_MAX_WORDS + 1
+    model = writer(reply(ALL_PLACED, summary=over), reply(ALL_PLACED))
+    deps = make_deps(writer_model=model)
+    assert write(deps).summary == GOOD_SUMMARY
+    assert "the summary has 151 words" in str(model.seen[1][-1].content)
+
+
+DRAFT = ReportDraft(title="T", sections=[
+    ReportSection(heading="Sales", claims=[Claim(text=SALES, evidence_id="ev_1")]),
+    ReportSection(heading="Pricing", claims=[Claim(text=PRICE, evidence_id="ev_2")])])
+
+
+@pytest.mark.parametrize("sentences, expected, how", [
+    ([SALES, PRICE], f"{SALES} {PRICE}", None),
+    ([SALES] * 22, " ".join([SALES] * 21), "sentences"),
+    ([" ".join(["BYD"] * 151) + "."], f"{SALES} {PRICE}", "claims"),
+    ([], f"{SALES} {PRICE}", "claims"),
+])
+def test_fit_summary_keeps_whole_supported_text_within_the_limit(sentences, expected, how):
+    summary, shortened = fit_summary(sentences, DRAFT)
+    assert (summary, shortened) == (expected, how)
+    assert len(summary.split()) <= SUMMARY_MAX_WORDS
+
+
+def test_fit_summary_cuts_at_a_word_only_when_nothing_whole_fits():
+    long_claim = " ".join(["BYD"] * 200) + "."
+    draft = ReportDraft(title="T", sections=[ReportSection(heading="Sales", claims=[
+        Claim(text=long_claim, evidence_id="ev_1")])])
+    summary, shortened = fit_summary([long_claim], draft)
+    assert shortened == "truncated" and summary.endswith(" …")
+    assert len(summary.split()) == SUMMARY_MAX_WORDS
+    assert summary.split()[:-1] == long_claim.split()[:SUMMARY_MAX_WORDS - 1]  # no new words
+
+
+def test_a_background_only_report_summary_falls_back_to_its_historical_claims():
+    dated = "BYD planned a plant in Hungary (reported 2026-01-05)."
+    draft = ReportDraft(title="T", sections=[ReportSection(heading="Earlier outlook", claims=[
+        Claim(text=dated, evidence_id="hist_1", historical=True)])])
+    assert fit_summary([], draft) == (dated, "claims")
 
 
 def test_the_word_limit_is_inclusive():
