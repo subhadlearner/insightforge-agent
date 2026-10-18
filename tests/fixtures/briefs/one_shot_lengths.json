@@ -1,0 +1,16 @@
+{
+  "_doc": "T20 B2: one-shot Brief lengths, shared by tests/api/test_t20_brief_limit.py and web/tests/brief-limit.test.tsx so the server and the Brief form are checked against the same cases. A case's text is prefix + unit repeated `repeat` times + suffix; `length` is its count in Unicode code points (Python len, JavaScript Array.from), raw and untrimmed. The limit is 500.",
+  "cases": [
+    {"name": "499 ASCII", "prefix": "", "unit": "a", "repeat": 499, "suffix": "", "length": 499},
+    {"name": "500 ASCII", "prefix": "", "unit": "a", "repeat": 500, "suffix": "", "length": 500},
+    {"name": "501 ASCII", "prefix": "", "unit": "a", "repeat": 501, "suffix": "", "length": 501},
+    {"name": "500 with leading and trailing whitespace and newlines", "prefix": "\n  ", "unit": "a", "repeat": 494, "suffix": " \n\t", "length": 500},
+    {"name": "501 with leading and trailing whitespace", "prefix": " ", "unit": "a", "repeat": 499, "suffix": " ", "length": 501},
+    {"name": "500 supplementary-plane emoji (1000 UTF-16 code units)", "prefix": "", "unit": "🚗", "repeat": 500, "suffix": "", "length": 500},
+    {"name": "501 supplementary-plane emoji", "prefix": "", "unit": "🚗", "repeat": 501, "suffix": "", "length": 501},
+    {"name": "500 as 250 letters with a combining acute accent", "prefix": "", "unit": "é", "repeat": 250, "suffix": "", "length": 500},
+    {"name": "502 as 251 letters with a combining acute accent", "prefix": "", "unit": "é", "repeat": 251, "suffix": "", "length": 502},
+    {"name": "500 as 100 five-code-point ZWJ family sequences", "prefix": "", "unit": "👨‍👩‍👧", "repeat": 100, "suffix": "", "length": 500},
+    {"name": "505 as 101 ZWJ family sequences", "prefix": "", "unit": "👨‍👩‍👧", "repeat": 101, "suffix": "", "length": 505}
+  ]
+}
