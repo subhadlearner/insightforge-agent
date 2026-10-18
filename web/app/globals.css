@@ -268,7 +268,17 @@ a {
   border-radius: var(--radius);
   padding: 1rem 1.15rem;
   resize: vertical;
-  margin-bottom: 2rem;
+}
+.brief__count {
+  margin: 0.35rem 0 2rem;
+  text-align: right;
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+  color: var(--graphite);
+}
+.brief__count--full {
+  color: var(--ink);
+  font-weight: 600;
 }
 .brief__input::placeholder {
   color: #8a94a1;

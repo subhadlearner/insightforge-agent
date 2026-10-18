@@ -1,10 +1,10 @@
 """`/research`: submit a Brief, and follow a Run's progress (design.md sections 6 and 9).
 
 `POST /research/run` answers 202 as soon as the Run is stored and queued on the RunExecutor;
-the pipeline never runs in the request. A Brief that fails the Submission check is 422 and
-creates no Run. A full or closing executor is 503 (with Retry-After) and creates no Run, except
-in the instant shutdown begins between storing the Run and queueing it: that Run is already
-FAILED when the 503 is sent.
+the pipeline never runs in the request. A Brief over 500 characters, or one that fails the
+Submission check, is 422 and creates no Run. A full or closing executor is 503 (with
+Retry-After) and creates no Run, except in the instant shutdown begins between storing the Run
+and queueing it: that Run is already FAILED when the 503 is sent.
 
 `GET /research/status?run_id=...` is a Server-Sent Events stream of the Run's persisted
 `run_events`, tailed with a cursor; nothing is buffered beyond one bounded batch.
@@ -54,6 +54,7 @@ from insightforge_agent.pipeline.executor import ExecutorFull, WorkNotAccepted
 from insightforge_agent.pipeline.research import ResearchService
 
 RETRY_AFTER_SECONDS = 10
+ONE_SHOT_BRIEF_MAX_CHARS = 500
 BATCH = 100  # events read per query: the most the stream ever holds in memory
 KEEPALIVE_SECONDS = 15.0
 _CURSOR = re.compile(r"[0-9]{1,18}")
@@ -65,7 +66,10 @@ class DocumentIn(BaseModel):
 
 
 class RunIn(BaseModel):
-    brief: str = Field(min_length=1)
+    # A one-shot Brief: at most 500 characters counted as `len()` does (code points, raw,
+    # before any trimming), as the Brief form counts them. Only this request has the limit;
+    # the shared `Brief` and a Watchlist Brief (up to 10,000) do not.
+    brief: str = Field(min_length=1, max_length=ONE_SHOT_BRIEF_MAX_CHARS)
     # Omitted: the persona's defaults from users.yml, else web only.
     source_toggles: dict[SourceType, bool] | None = None
     documents: list[DocumentIn] = Field(default_factory=list)

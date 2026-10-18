@@ -282,3 +282,32 @@ test("choosing a first persona on a Report deep link reloads that Report as the 
   await expect(page.getByLabel("Researching as")).toHaveValue("alice");
   await fresh.close();
 });
+
+test("a one-shot Brief stops at 500 characters in the browser and at the API", async ({ page, request }) => {
+  await choosePersona(page);
+  const brief = page.getByLabel("Brief", { exact: true });
+  await expect(page.getByTestId("brief-count")).toHaveText("0/500");
+  await brief.focus();
+  await page.keyboard.insertText(`${BRIEF} ${"x".repeat(600)}`); // as a paste: one input event
+  await expect(page.getByTestId("brief-count")).toHaveText("500/500");
+  expect(await brief.evaluate((el: HTMLTextAreaElement) => Array.from(el.value).length)).toBe(500);
+  await expect(page.getByRole("status").filter({ hasText: "Text beyond the limit was not added." })).toHaveCount(1);
+  await page.keyboard.type("y");
+  await expect(page.getByTestId("brief-count")).toHaveText("500/500");
+  // A paste in the middle that starts like the text after it keeps that text and the caret.
+  await brief.fill("Start End");
+  await brief.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(6, 6));
+  await page.keyboard.insertText(`E${"x".repeat(600)}`);
+  await expect(brief).toHaveValue(`Start E${"x".repeat(490)}End`);
+  expect(await brief.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(497);
+  await brief.fill("\u{1F697}".repeat(500)); // 1000 UTF-16 code units, 500 characters
+  await expect(page.getByTestId("brief-count")).toHaveText("500/500");
+
+  // The server counts the same way (that no Run is created is tests/api/test_t20_brief_limit.py).
+  expect((await request.post("/api/session", { data: { persona_id: "alice" } })).ok()).toBeTruthy();
+  for (const over of ["a".repeat(501), "\u{1F697}".repeat(501)]) {
+    const refused = await request.post("/api/research/run", { data: { brief: over } });
+    expect(refused.status()).toBe(422);
+    expect((await refused.json()).detail[0].type).toBe("string_too_long");
+  }
+});

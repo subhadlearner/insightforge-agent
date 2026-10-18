@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, submitRun, type SourceToggles } from "@/lib/api";
+import { BRIEF_MAX_CHARS, briefLength, fitBrief } from "@/lib/brief";
 import { encodeDocuments } from "@/lib/files";
 import { PdfPicker } from "./pdf-picker";
 import { usePersona } from "./persona-context";
@@ -40,6 +41,8 @@ export function BriefForm() {
   const router = useRouter();
   const { current } = usePersona();
   const [brief, setBrief] = useState("");
+  // Set when the last edit was cut to the limit, so the status can say text was not added.
+  const [truncated, setTruncated] = useState(false);
   const [toggles, setToggles] = useState<SourceToggles>(() => togglesFor(current?.source_toggles));
   const [files, setFiles] = useState<File[]>([]);
   const [submission, setSubmission] = useState<Submission>({ kind: "idle" });
@@ -48,6 +51,18 @@ export function BriefForm() {
   // held on. The checkbox, the estimate and the submission all use this one value; removing
   // the last PDF returns to the User's own choice.
   const effective: SourceToggles = files.length ? { ...toggles, documents: true } : toggles;
+  const used = briefLength(brief);
+  const remaining = BRIEF_MAX_CHARS - used;
+  const fits = used <= BRIEF_MAX_CHARS;
+  // Announced only when it changes: on reaching the last 50, at the limit, and when an edit
+  // was cut; never on every keystroke.
+  const limitStatus = truncated
+    ? `The Brief is limited to ${BRIEF_MAX_CHARS} characters. Text beyond the limit was not added.`
+    : remaining === 0
+      ? `Character limit reached: ${BRIEF_MAX_CHARS} of ${BRIEF_MAX_CHARS}.`
+      : remaining <= 50
+        ? "50 or fewer characters left."
+        : "";
 
   // A different persona brings its own default sources; the same persona keeps the User's
   // edits (keyed by ID, not by the identity of the persona object).
@@ -58,7 +73,8 @@ export function BriefForm() {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (submitting || !current || !brief.trim()) return;
+    // The limit is on the raw text, as typed; the trimmed text is what is sent.
+    if (submitting || !current || !brief.trim() || !fits) return;
     setSubmission({ kind: "submitting" });
     try {
       // Encoded once, here; never retried automatically (a retry could start a second Run).
@@ -80,13 +96,27 @@ export function BriefForm() {
         <textarea
           id="brief"
           className="brief__input"
-          aria-describedby="brief-hint"
+          aria-describedby="brief-hint brief-count"
           rows={7}
           value={brief}
           disabled={submitting}
           placeholder="How did BYD's battery EV pricing compare with Tesla's in Europe during 2025?"
-          onChange={(e) => setBrief(e.target.value)}
+          onChange={(e) => {
+            const fitted = fitBrief(e.target.value, e.target.selectionEnd ?? e.target.value.length);
+            if (fitted.truncated) {
+              // Set before React re-renders, so the caret stays where the kept text ends.
+              e.target.value = fitted.value;
+              e.target.setSelectionRange(fitted.caret, fitted.caret);
+            }
+            setTruncated(fitted.truncated);
+            setBrief(fitted.value);
+          }}
         />
+        <p id="brief-count" className={`brief__count${remaining === 0 ? " brief__count--full" : ""}`}>
+          <span aria-hidden="true" data-testid="brief-count">{used}/{BRIEF_MAX_CHARS}</span>
+          <span className="visually-hidden">{`${used} of ${BRIEF_MAX_CHARS} characters used`}</span>
+        </p>
+        <p className="visually-hidden" role="status" data-testid="brief-limit-status">{limitStatus}</p>
         <SourceTogglesField
           value={effective}
           onToggle={(type, on) => setToggles((t) => ({ ...t, [type]: on }))}
@@ -97,7 +127,7 @@ export function BriefForm() {
 
       <aside className="desk__side" aria-label="Before you submit">
         <RuntimeEstimate toggles={effective} documentCount={files.length} enabled={Boolean(current)} />
-        <button type="submit" className="button button--primary" disabled={submitting || !current || !brief.trim()}>
+        <button type="submit" className="button button--primary" disabled={submitting || !current || !brief.trim() || !fits}>
           {submitting ? "Starting research…" : "Start research"}
         </button>
         {!current && <p className="desk__note">Choose a persona at the top to start.</p>}
