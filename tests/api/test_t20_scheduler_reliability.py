@@ -235,6 +235,29 @@ def test_no_research_is_admitted_once_shutdown_has_begun(tmp_path):
         assert app.runtime.executor.in_flight == 0
 
 
+def test_admission_is_already_closed_when_the_closing_signal_is_published(tmp_path,
+                                                                           monkeypatch):
+    """Deterministic interleaving: a request and a Watchlist tick arrive at the instant
+    `closing` is set, before `begin_shutdown` returns. Admission must already be closed."""
+    clock = Clock(T0)
+    with App(tmp_path, now=clock) as app:
+        item = setup(app, max_runs=2)
+        closing, seen = app.runtime.closing, []
+        publish = closing.set
+
+        def set_with_arrivals():
+            seen.append(app.submit().status_code)  # just before the signal is visible
+            seen.append(tick(app, clock, item))
+            publish()
+            seen.append(app.submit().status_code)  # just after it
+
+        monkeypatch.setattr(closing, "set", set_with_arrivals)
+        app.runtime.begin_shutdown()
+        assert seen == [503, None, 503]
+        assert app.runtime.repos.runs.list_for_owner("alice") == []
+        assert app.runtime.executor.in_flight == 0
+
+
 def test_manual_and_watchlist_admission_racing_the_stop_signal_strand_no_run(tmp_path):
     """Requests and a Watchlist tick race `begin_shutdown`. Whatever was admitted first runs
     or is settled; nothing is created afterwards, and no Run is left in its first state."""

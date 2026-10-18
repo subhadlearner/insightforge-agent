@@ -218,9 +218,10 @@ class Runtime:
     def begin_shutdown(self) -> None:
         """The server was asked to stop: open progress streams end now (clients reconnect
         later with Last-Event-ID), so they do not hold up the graceful shutdown, and no new
-        research is admitted, from a request or a Watchlist tick."""
-        self.closing.set()
+        research is admitted, from a request or a Watchlist tick. Admission closes first, so
+        nothing that sees `closing` set can still find the executor open."""
         self.executor.close()
+        self.closing.set()
 
     def stop(self) -> None:
         self.begin_shutdown()

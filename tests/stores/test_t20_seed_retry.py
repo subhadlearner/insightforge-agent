@@ -27,9 +27,11 @@ class CountingJudgeModel:
     def __init__(self, bad="{not json"):
         self.calls = 0
         self.failing = True
+        self.during_call = lambda: None
 
         def reply(messages):
             self.calls += 1
+            self.during_call()
             return AIMessage(content=bad) if self.failing else unsupported_reply(messages)
         self.model = ScriptedChat(reply=reply)
 
@@ -73,6 +75,26 @@ def test_each_failure_waits_longer_and_early_callbacks_never_call_the_judge(tmp_
         assert judge.calls == attempt
         assert job_at(w) == retry_at
         w.now = retry_at
+    w.repos.close()
+
+
+def test_the_backoff_runs_from_the_failure_not_from_the_start_of_a_slow_judge_call(tmp_path):
+    w, judge = failing_world(tmp_path)
+    started = w.now
+
+    def slow_call():
+        w.now += 3 * MINUTE  # the failing call takes three minutes
+
+    judge.during_call = slow_call
+    w.diffs.run_item(OWNER, ITEM)
+    failed_at = started + 3 * MINUTE
+    assert judge.calls == 1 and w.now == failed_at
+    retry_at = w.repos.diffs.seed_retry_after(OWNER, ITEM)
+    assert retry_at == failed_at + MINUTE and job_at(w) == retry_at
+    judge.during_call = lambda: None
+    w.now = retry_at - timedelta(seconds=1)  # already past `started + 1 minute`
+    w.diffs.run_item(OWNER, ITEM)
+    assert judge.calls == 1
     w.repos.close()
 
 

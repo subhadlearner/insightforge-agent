@@ -192,8 +192,11 @@ class DiffService:
         except NotFoundError:
             raise  # the item was deleted
         except Exception as error:  # noqa: BLE001 - every failure backs off, none is final
+            # The wait runs from the failure, not the attempt's start: a slow judge call must
+            # not leave the retry already due.
             retry_after = repo.record_seed_failure(
-                owner_id, item_id, f"{type(error).__name__}: {error}", now, seed_retry_delay)
+                owner_id, item_id, f"{type(error).__name__}: {error}", self.deps.now(),
+                seed_retry_delay)
             logger.warning("Baseline seed normalisation for %s/%s failed; retrying at %s",
                            owner_id, item_id, retry_after, exc_info=True)
             self.schedule(owner_id, item_id, retry_after)
