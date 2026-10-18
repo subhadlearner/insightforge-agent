@@ -493,10 +493,15 @@ suite, and it needs the keys from [Configuration](#configuration). `--provider` 
 (`anthropic`, `gemini`, `groq`). `--judge-provider` is one provider, or `none` to skip the
 synthesis judge. `--brief` is repeatable, and a run with it is marked partial. `--out` defaults
 to `eval-results/`, which is git-ignored. Settings and every provider's pipeline are validated
-before any Run starts: a usage or configuration error exits 2, and a pipeline or judge that
-cannot be built exits 1. Each provider gets its own SQLite files and an in-process Qdrant
-under `<out>/<UTC timestamp>/<provider>/`, and each sample runs as its own User. The command
-writes `eval-report.json` and `eval-report.md` in `<out>/<UTC timestamp>/`.
+before any Run starts: a usage or configuration error exits 2, and a pipeline, judge or
+evaluation directory that cannot be set up exits 1. Each evaluation gets a new directory,
+`<out>/<UTC timestamp>/` (`<timestamp>-1`, `-2` ... if one started in the same second), and
+never reuses an existing one. Each provider gets its own SQLite files and an in-process Qdrant
+under `<provider>/` in it, and each sample runs as its own User. The command writes
+`eval-report.md` and then `eval-report.json` there, so `eval-report.json` exists only for a
+complete evaluation. If the Runs finish but the reports cannot be written, it exits 3, leaves
+no `eval-report.json`, and keeps the Runs' SQLite files. An unexpected error while the Runs
+execute (or Ctrl+C) stops it with a traceback and exit 1, also with no `eval-report.json`.
 
 What the measurements mean:
 

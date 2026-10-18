@@ -5,6 +5,7 @@ scores synthesis only and sees no Passage text."""
 import json
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from insightforge_agent.evaluation.judge import (
@@ -90,6 +91,39 @@ def test_an_out_of_range_or_fractional_score_is_an_error():
 def test_an_extra_criterion_is_an_error():
     extra = json.loads(sheet()) | {"accuracy": 5}
     assert judge_synthesis(judge(json.dumps(extra)), SAMPLE, stored()).status == "error"
+
+
+ABSENT = object()
+
+
+def with_rationale(value) -> str:
+    full = json.loads(sheet())
+    if value is ABSENT:
+        del full["rationale"]
+    else:
+        full["rationale"] = value
+    return json.dumps(full)
+
+
+def test_a_rationale_is_trimmed_and_kept_up_to_600_characters():
+    result = judge_synthesis(judge(with_rationale("  Clear and well organised.\n")), SAMPLE,
+                             stored())
+    assert result.status == "judged" and result.rationale == "Clear and well organised."
+    longest = "x" * 600
+    padded = judge_synthesis(judge(with_rationale(f"\t{longest}  ")), SAMPLE, stored())
+    assert padded.status == "judged" and padded.rationale == longest and padded.score == 4.0
+
+
+@pytest.mark.parametrize("value", [ABSENT, None, "", "   \n\t", 42, ["Clear."],
+                                   {"text": "Clear."}, "x" * 601, " " + "x" * 601 + " "],
+                         ids=["absent", "null", "empty", "whitespace", "number", "list",
+                              "object", "601", "601-padded"])
+def test_a_score_sheet_without_a_usable_rationale_is_an_error_with_one_call(value):
+    model = judge(with_rationale(value))
+    result = judge_synthesis(model, SAMPLE, stored())
+    assert result.status == "error" and result.score is None and result.scores is None
+    assert result.rationale == "" and "invalid judge reply" in result.reason
+    assert len(model.seen) == 1  # one call, never retried
 
 
 def test_a_judge_call_that_raises_is_an_error():

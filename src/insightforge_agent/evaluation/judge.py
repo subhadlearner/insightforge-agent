@@ -5,13 +5,22 @@ The judge scores how well the Report synthesises, never whether it is true: fact
 and citations are the deterministic metrics, and the judge cannot change them. It sees the
 Brief, the expected Report structure and the Report as published (`body["verified"]["draft"]`,
 so `[UNVERIFIED]` marks show), and no Passage text. A reply that is not a complete score sheet
-of whole numbers from 1 to 5 is an `error` with no score; there is no retry, so every judged
-Report had exactly one call. Changing the rubric text or criteria means a new RUBRIC_VERSION."""
+of whole numbers from 1 to 5 with a rationale (a string of 1 to 600 characters once trimmed;
+never truncated) is an `error` with no score; there is no retry, so every judged Report had
+exactly one call. Changing the rubric text or criteria means a new RUBRIC_VERSION."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from langchain_core.language_models import BaseChatModel
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    StringConstraints,
+    ValidationError,
+)
 
 from insightforge_agent.agents.llm_json import BadModelReply, ask_json
 from insightforge_agent.domain.contracts import ReportDraft
@@ -40,6 +49,11 @@ Reply with JSON only: {"coverage": int, "organisation": int, "synthesis": int,
 "calibration": int, "rationale": str (at most 3 sentences)}"""
 
 Score = Field(ge=1, le=5)
+MAX_RATIONALE_CHARS = 600
+# Required, a string, trimmed, then at least one character and at most the maximum: an
+# overlong one is refused, never cut.
+Rationale = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1,
+                                                  max_length=MAX_RATIONALE_CHARS)]
 
 
 class ScoreSheet(BaseModel):
@@ -49,7 +63,7 @@ class ScoreSheet(BaseModel):
     organisation: StrictInt = Score
     synthesis: StrictInt = Score
     calibration: StrictInt = Score
-    rationale: str = ""
+    rationale: Rationale
 
 
 class SynthesisResult(BaseModel):

@@ -6,12 +6,24 @@
 This makes real model and search calls with the keys in the environment and `.env`, so it is
 never run by the default test suite. Each provider gets its own SQLite files under the output
 directory and an in-process vector store; the app's database is never touched. One judge
-scores every provider, so their synthesis scores can be compared. Writes `eval-report.json`
-and `eval-report.md`. Exit 0 once the report is written, whatever it measured; 2 for a usage
-or configuration error, and 1 when the judge or a provider's pipeline cannot be built: both
-before any Run starts, leaving no output behind."""
+scores every provider, so their synthesis scores can be compared.
+
+Each evaluation gets a new directory, `<out>/<UTC timestamp>`, or `<timestamp>-1`, `-2` ...
+when an evaluation started in the same second already has one; an existing one is never
+reused. Both reports are prepared, then written to temporary files in that directory and
+published by rename: `eval-report.md` first, `eval-report.json` last, so `eval-report.json`
+exists only for a complete evaluation.
+
+Exit 0 once both reports are published, whatever they measured; 2 for a usage or configuration
+error; 1 when the judge, a provider's pipeline or the evaluation directory cannot be set up,
+before any Run starts and leaving no output behind; 3 when the Runs finished but the reports
+could not be prepared or published: no `eval-report.json` is left, and the Runs' SQLite files
+are kept in the evaluation directory. An unexpected error while the Runs execute (or Ctrl+C)
+ends the command with Python's traceback and exit 1; it, too, publishes no `eval-report.json`
+and keeps the stores."""
 
 import argparse
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -57,6 +69,8 @@ from insightforge_agent.stores.sqlite import SqliteRepos
 JUDGE_ROLE = "writer"  # the judge is the judge provider's Writer model
 # Generation settings a chat model may carry; what it does not set is the provider's default.
 INFERENCE_FIELDS = ("temperature", "max_tokens", "max_output_tokens", "top_p", "top_k")
+STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+MAX_DIR_ATTEMPTS = 100  # <stamp>, then <stamp>-1 ... <stamp>-99
 
 # Builds one provider's Deps over that provider's repositories, checkpointer and vector store.
 MakeDeps = Callable[[Settings, SqliteRepos, SqliteSaver, QdrantClient], Deps]
@@ -170,7 +184,6 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
                        fingerprint=library_fingerprint(opts.library, library, root))
 
     started = now()
-    out = opts.out / started.strftime("%Y%m%dT%H%M%SZ")
     judge, identity = None, JudgeIdentity(provider="none", rubric_version=RUBRIC_VERSION)
     if judge_settings is not None:
         try:
@@ -181,30 +194,106 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
             provider=opts.judge_provider, rubric_version=RUBRIC_VERSION,
             model=configured_model_name(JUDGE_ROLE, judge_settings),
             runtime_model=_model_id(judge), role=JUDGE_ROLE, inference=_inference(judge))
+    try:
+        out = allocate_evaluation_dir(opts.out, started.strftime(STAMP_FORMAT))
+    except OSError as e:
+        return _no_directory(opts.out, e)
     with ExitStack() as stack:
         # Every provider is wired before any Run starts, so a construction failure costs no
         # provider calls and leaves no partial evaluation behind.
-        out.mkdir(parents=True, exist_ok=False)
         built = {}
         for provider in opts.provider:
             try:
                 built[provider] = _open(settings[provider], out / provider, make_deps, stack)
             except Exception as e:  # noqa: BLE001
-                stack.close()
-                shutil.rmtree(out)
-                return _cannot_build(f"the {provider} pipeline", e)
+                # The cause is reported first; a clean-up failure after it, never instead.
+                code = _cannot_build(f"the {provider} pipeline", e)
+                try:
+                    stack.close()  # runs every close, even after one raises
+                except Exception as closing:  # noqa: BLE001 - any close may fail; reported
+                    print(f"insightforge-agent eval: error: could not close the stores in "
+                          f"{out}: {type(closing).__name__}: {closing}", file=sys.stderr)
+                try:
+                    shutil.rmtree(out)
+                except OSError as cleanup:
+                    print(f"insightforge-agent eval: error: could not remove {out}: "
+                          f"{type(cleanup).__name__}: {cleanup}", file=sys.stderr)
+                return code
         results = []
         for provider, deps in built.items():
             print(f"eval: {provider}: running {len(samples)} brief(s)", file=sys.stderr)
             results.append(_evaluate(provider, settings[provider], deps, samples, info, root,
                                      out / provider, judge))
-    report = EvalReport(generated_at=started, library=info, code=_code_version(root),
-                        judge=identity, providers=results,
-                        comparability=comparability_of(results))
-    (out / "eval-report.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
-    (out / "eval-report.md").write_text(render_markdown(report), encoding="utf-8")
-    print(out / "eval-report.md")
+    return _publish(out, lambda: EvalReport(
+        generated_at=started, library=info, code=_code_version(root), judge=identity,
+        providers=results, comparability=comparability_of(results)))
+
+
+def _publish(out: Path, build: Callable[[], EvalReport]) -> int:
+    """Both reports, prepared in full, then published by rename: Markdown first, JSON last.
+    On failure, whatever of them was written is removed where possible; the Runs' stores in
+    `out` are always kept."""
+    json_path, md_path = out / "eval-report.json", out / "eval-report.md"
+    try:
+        report = build()
+        texts = {md_path: render_markdown(report), json_path: report.model_dump_json(indent=2)}
+        for text in texts.values():
+            text.encode("utf-8")  # an unencodable character fails here, before any write
+    except Exception as e:  # noqa: BLE001 - reported (exit 3); the Runs' stores are kept
+        return _not_published(out, "could not be prepared", e, [])
+    temps = {final: out / f".{final.name}.tmp" for final in texts}
+    published: list[Path] = []
+    try:
+        for final, text in texts.items():
+            _write_synced(temps[final], text)
+        for final in (md_path, json_path):  # eval-report.json last: it marks completion
+            os.replace(temps[final], final)
+            published.append(final)
+    except OSError as e:
+        return _not_published(out, "could not be written", e, [*temps.values(), *published])
+    print(md_path)
     return 0
+
+
+def _write_synced(path: Path, text: str) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _not_published(out: Path, what: str, error: Exception, to_remove: list[Path]) -> int:
+    """Remove what may have been written of the reports, then report the failure; a file
+    that cannot be removed is listed after the cause, never instead of it."""
+    stuck = []
+    for path in to_remove:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            stuck.append(f"{path} ({type(e).__name__}: {e})")
+    print(f"insightforge-agent eval: error: the Runs finished but the reports {what}: "
+          f"{type(error).__name__}: {error}; no eval-report.json was published. The Runs' "
+          f"SQLite files are kept in {out}"
+          + (f"; could not remove: {', '.join(stuck)}" if stuck else ""), file=sys.stderr)
+    return 3
+
+
+def allocate_evaluation_dir(base: Path, stamp: str) -> Path:
+    """Claim a new, empty directory for one evaluation: `<base>/<stamp>`, or `<stamp>-1`,
+    `<stamp>-2` ... when another evaluation (in this or another process) already has it.
+    Each name is claimed by one `mkdir`, which fails if the name exists, so two evaluations
+    never share a directory and an existing one is never reused. FileExistsError once
+    MAX_DIR_ATTEMPTS names are taken; any other OSError is raised as it is."""
+    base.mkdir(parents=True, exist_ok=True)
+    for n in range(MAX_DIR_ATTEMPTS):
+        candidate = base / (stamp if n == 0 else f"{stamp}-{n}")
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        return candidate
+    raise FileExistsError(f"{base / stamp} and its {MAX_DIR_ATTEMPTS - 1} numbered "
+                          f"alternatives already exist; choose another --out")
 
 
 def _open(settings: Settings, workdir: Path, make_deps: MakeDeps, stack: ExitStack) -> Deps:
@@ -246,4 +335,11 @@ def _usage(message: str) -> int:
 def _cannot_build(what: str, error: Exception) -> int:
     print(f"insightforge-agent eval: error: could not build {what}: {type(error).__name__}: "
           f"{error}; no Run was started and no report was written", file=sys.stderr)
+    return 1
+
+
+def _no_directory(base: Path, error: OSError) -> int:
+    print(f"insightforge-agent eval: error: could not create the evaluation directory under "
+          f"{base}: {type(error).__name__}: {error}; no Run was started and no report was "
+          f"written", file=sys.stderr)
     return 1
