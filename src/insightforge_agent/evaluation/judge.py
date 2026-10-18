@@ -50,7 +50,8 @@ Reply with JSON only: {"coverage": int, "organisation": int, "synthesis": int,
 
 Score = Field(ge=1, le=5)
 MAX_RATIONALE_CHARS = 600
-# Required, a string, trimmed, then 1 to 600 characters: an overlong one is refused, not cut.
+# Required, a string, trimmed, then at least one character and at most the maximum: an
+# overlong one is refused, never cut.
 Rationale = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1,
                                                   max_length=MAX_RATIONALE_CHARS)]
 

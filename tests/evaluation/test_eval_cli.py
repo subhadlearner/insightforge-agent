@@ -11,6 +11,7 @@ import re
 import threading
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import Manager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,11 +21,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from insightforge_agent.domain.contracts import ReportDraft
 from insightforge_agent.domain.evidence import Thresholds
 from insightforge_agent.domain.models import RunState
+from insightforge_agent.evaluation import cli
 from insightforge_agent.evaluation.cli import allocate_evaluation_dir, main
 from insightforge_agent.evaluation.judge import CRITERIA, RUBRIC_VERSION
 from insightforge_agent.evaluation.library import load_library
-from insightforge_agent.evaluation.report import EvalReport as EvalReportModel
-from insightforge_agent.evaluation.report import render_markdown
+from insightforge_agent.evaluation.report import EvalReport, render_markdown
 from insightforge_agent.pipeline.citations import report_citations
 from insightforge_agent.stores.source_store import SourceStore
 from insightforge_agent.stores.sqlite import SqliteRepos
@@ -697,6 +698,18 @@ def test_a_provider_whose_deps_cannot_be_built_stops_before_any_run(tmp_path, ca
     assert gemini.planner_model.seen == [] and gemini.writer_model.seen == []
 
 
+def test_a_failed_cleanup_after_a_build_error_is_reported_after_the_cause(tmp_path, monkeypatch,
+                                                                          capsys):
+    def locked(path, *args, **kwargs):
+        raise PermissionError(13, "file is in use", str(path))
+    monkeypatch.setattr(cli.shutil, "rmtree", locked)
+    code, _, _ = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
+                          "--judge-provider", "none", world=Unbuildable("groq"))
+    err = capsys.readouterr().err
+    assert code == 1 and "file is in use" in err
+    assert err.index("cannot construct the search client") < err.index("could not remove")
+
+
 def test_a_judge_that_cannot_be_built_stops_before_any_run(tmp_path, capsys):
     def broken(settings):
         raise RuntimeError("cannot construct the judge")
@@ -773,21 +786,31 @@ def test_concurrent_allocations_of_one_timestamp_each_get_a_distinct_directory(t
         t.start()
     for t in threads:
         t.join(30)
-    assert errors == []
+    assert not any(t.is_alive() for t in threads) and errors == []
     assert sorted(p.name for p in got) == sorted(
         [STAMP] + [f"{STAMP}-{n}" for n in range(1, workers)])
 
 
+def claim_together(barrier, base: Path, stamp: str) -> Path:
+    """One process's allocation, started with the others' (a module function, so a spawned
+    worker can import it)."""
+    barrier.wait(60)
+    return allocate_evaluation_dir(base, stamp)
+
+
 def test_concurrent_processes_allocating_one_timestamp_never_share_a_directory(tmp_path):
-    base = tmp_path / "out"
-    with ProcessPoolExecutor(max_workers=4) as pool:
-        got = list(pool.map(allocate_evaluation_dir, [base] * 4, [STAMP] * 4))
-    assert len(set(got)) == 4 and all(p.parent == base and p.is_dir() for p in got)
+    base, workers = tmp_path / "out", 4
+    with Manager() as manager, ProcessPoolExecutor(max_workers=workers) as pool:
+        barrier = manager.Barrier(workers)  # every worker is up before any mkdir
+        got = list(pool.map(claim_together, [barrier] * workers, [base] * workers,
+                            [STAMP] * workers))
+    assert sorted(p.name for p in got) == sorted(
+        [STAMP] + [f"{STAMP}-{n}" for n in range(1, workers)])
 
 
 def test_exhausted_names_stop_before_any_run_and_touch_no_existing_evaluation(
         tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr("insightforge_agent.evaluation.cli.MAX_DIR_ATTEMPTS", 3)
+    monkeypatch.setattr(cli, "MAX_DIR_ATTEMPTS", 3)
     out = tmp_path / "out"
     for name in (STAMP, f"{STAMP}-1", f"{STAMP}-2"):
         (out / name).mkdir(parents=True)
@@ -835,7 +858,6 @@ def assert_unpublished_with_evidence(out: Path, err: str, cause: str) -> None:
 
 
 def fail_replace(monkeypatch, name: str, error: OSError):
-    import insightforge_agent.evaluation.cli as cli
     real = cli.os.replace
 
     def replace(src, dst):
@@ -848,9 +870,6 @@ def fail_replace(monkeypatch, name: str, error: OSError):
 @pytest.mark.parametrize("stage", ["json", "markdown"])
 def test_a_report_that_cannot_be_prepared_publishes_nothing_and_keeps_the_runs(
         tmp_path, monkeypatch, capsys, stage):
-    import insightforge_agent.evaluation.cli as cli
-    from insightforge_agent.evaluation.report import EvalReport
-
     def broken(*args, **kwargs):
         raise ValueError(f"cannot serialise the {stage}")
     if stage == "json":
@@ -862,10 +881,25 @@ def test_a_report_that_cannot_be_prepared_publishes_nothing_and_keeps_the_runs(
                                      f"cannot serialise the {stage}")
 
 
+def test_a_report_that_cannot_be_assembled_is_exit_3_and_keeps_the_runs(tmp_path, monkeypatch,
+                                                                        capsys):
+    def broken(results):
+        raise KeyError("comparability")
+    monkeypatch.setattr(cli, "comparability_of", broken)
+    assert run_at(tmp_path, *ONE) == 3
+    assert_unpublished_with_evidence(tmp_path / "out" / STAMP, capsys.readouterr().err,
+                                     "KeyError")
+
+
+def test_an_unencodable_report_fails_before_any_file_is_written(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "render_markdown", lambda report: "lone surrogate \ud800")
+    assert run_at(tmp_path, *ONE) == 3
+    assert_unpublished_with_evidence(tmp_path / "out" / STAMP, capsys.readouterr().err,
+                                     "UnicodeEncodeError")
+
+
 def test_a_temporary_file_that_cannot_be_written_publishes_nothing(tmp_path, monkeypatch,
                                                                    capsys):
-    import insightforge_agent.evaluation.cli as cli
-
     def full(fd):
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(cli.os, "fsync", full)
@@ -921,6 +955,6 @@ def test_a_published_evaluation_has_both_reports_and_no_temporary_files(tmp_path
     out = tmp_path / "out" / STAMP
     names = sorted(p.name for p in out.iterdir())
     assert names == ["eval-report.json", "eval-report.md", "gemini"]
-    report = EvalReportModel.model_validate_json(
+    report = EvalReport.model_validate_json(
         (out / "eval-report.json").read_text(encoding="utf-8"))
     assert (out / "eval-report.md").read_text(encoding="utf-8") == render_markdown(report)

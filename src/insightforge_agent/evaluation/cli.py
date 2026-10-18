@@ -18,7 +18,9 @@ Exit 0 once both reports are published, whatever they measured; 2 for a usage or
 error; 1 when the judge, a provider's pipeline or the evaluation directory cannot be set up,
 before any Run starts and leaving no output behind; 3 when the Runs finished but the reports
 could not be prepared or published: no `eval-report.json` is left, and the Runs' SQLite files
-are kept in the evaluation directory."""
+are kept in the evaluation directory. An unexpected error while the Runs execute (or Ctrl+C)
+ends the command with Python's traceback and exit 1; it, too, publishes no `eval-report.json`
+and keeps the stores."""
 
 import argparse
 import os
@@ -195,8 +197,7 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
     try:
         out = allocate_evaluation_dir(opts.out, started.strftime(STAMP_FORMAT))
     except OSError as e:
-        return _cannot_build(f"the evaluation directory under {opts.out}", e,
-                             what_failed="create")
+        return _no_directory(opts.out, e)
     with ExitStack() as stack:
         # Every provider is wired before any Run starts, so a construction failure costs no
         # provider calls and leaves no partial evaluation behind.
@@ -206,26 +207,33 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
                 built[provider] = _open(settings[provider], out / provider, make_deps, stack)
             except Exception as e:  # noqa: BLE001
                 stack.close()
-                shutil.rmtree(out)
-                return _cannot_build(f"the {provider} pipeline", e)
+                code = _cannot_build(f"the {provider} pipeline", e)
+                try:
+                    shutil.rmtree(out)
+                except OSError as cleanup:  # reported after the cause, never instead of it
+                    print(f"insightforge-agent eval: error: could not remove {out}: "
+                          f"{type(cleanup).__name__}: {cleanup}", file=sys.stderr)
+                return code
         results = []
         for provider, deps in built.items():
             print(f"eval: {provider}: running {len(samples)} brief(s)", file=sys.stderr)
             results.append(_evaluate(provider, settings[provider], deps, samples, info, root,
                                      out / provider, judge))
-    report = EvalReport(generated_at=started, library=info, code=_code_version(root),
-                        judge=identity, providers=results,
-                        comparability=comparability_of(results))
-    return _publish(out, report)
+    return _publish(out, lambda: EvalReport(
+        generated_at=started, library=info, code=_code_version(root), judge=identity,
+        providers=results, comparability=comparability_of(results)))
 
 
-def _publish(out: Path, report: EvalReport) -> int:
+def _publish(out: Path, build: Callable[[], EvalReport]) -> int:
     """Both reports, prepared in full, then published by rename: Markdown first, JSON last.
     On failure, whatever of them was written is removed where possible; the Runs' stores in
     `out` are always kept."""
     json_path, md_path = out / "eval-report.json", out / "eval-report.md"
     try:
+        report = build()
         texts = {md_path: render_markdown(report), json_path: report.model_dump_json(indent=2)}
+        for text in texts.values():
+            text.encode("utf-8")  # an unencodable character fails here, before any write
     except Exception as e:  # noqa: BLE001 - reported (exit 3); the Runs' stores are kept
         return _not_published(out, "could not be prepared", e, [])
     temps = {final: out / f".{final.name}.tmp" for final in texts}
@@ -249,10 +257,11 @@ def _write_synced(path: Path, text: str) -> None:
         os.fsync(f.fileno())
 
 
-def _not_published(out: Path, what: str, error: Exception, written: list[Path]) -> int:
-    """Report the failure; a file that cannot be removed is listed, after the cause."""
+def _not_published(out: Path, what: str, error: Exception, to_remove: list[Path]) -> int:
+    """Remove what may have been written of the reports, then report the failure; a file
+    that cannot be removed is listed after the cause, never instead of it."""
     stuck = []
-    for path in written:
+    for path in to_remove:
         try:
             path.unlink(missing_ok=True)
         except OSError as e:
@@ -318,8 +327,14 @@ def _usage(message: str) -> int:
     return 2
 
 
-def _cannot_build(what: str, error: Exception, what_failed: str = "build") -> int:
-    print(f"insightforge-agent eval: error: could not {what_failed} {what}: "
-          f"{type(error).__name__}: {error}; no Run was started and no report was written",
-          file=sys.stderr)
+def _cannot_build(what: str, error: Exception) -> int:
+    print(f"insightforge-agent eval: error: could not build {what}: {type(error).__name__}: "
+          f"{error}; no Run was started and no report was written", file=sys.stderr)
+    return 1
+
+
+def _no_directory(base: Path, error: OSError) -> int:
+    print(f"insightforge-agent eval: error: could not create the evaluation directory under "
+          f"{base}: {type(error).__name__}: {error}; no Run was started and no report was "
+          f"written", file=sys.stderr)
     return 1

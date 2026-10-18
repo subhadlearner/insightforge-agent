@@ -93,6 +93,9 @@ def test_an_extra_criterion_is_an_error():
     assert judge_synthesis(judge(json.dumps(extra)), SAMPLE, stored()).status == "error"
 
 
+ABSENT = object()
+
+
 def with_rationale(value) -> str:
     full = json.loads(sheet())
     if value is ABSENT:
@@ -100,9 +103,6 @@ def with_rationale(value) -> str:
     else:
         full["rationale"] = value
     return json.dumps(full)
-
-
-ABSENT = object()
 
 
 def test_a_rationale_is_trimmed_and_kept_up_to_600_characters():
