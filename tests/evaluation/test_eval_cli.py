@@ -710,6 +710,24 @@ def test_a_failed_cleanup_after_a_build_error_is_reported_after_the_cause(tmp_pa
     assert err.index("cannot construct the search client") < err.index("could not remove")
 
 
+def test_a_store_that_fails_to_close_after_a_build_error_hides_neither_it_nor_the_cleanup(
+        tmp_path, monkeypatch, capsys):
+    """gemini's stores are open when groq's pipeline fails; closing gemini's repositories then
+    raises (after really closing, so the files can still be removed)."""
+    real_close = SqliteRepos.close
+
+    def close_then_fail(self):
+        real_close(self)
+        raise RuntimeError("close failed")
+    monkeypatch.setattr(SqliteRepos, "close", close_then_fail)
+    code, _, out = evaluate(tmp_path, "--provider", "gemini", "--provider", "groq",
+                            "--judge-provider", "none", world=Unbuildable("groq"))
+    err = capsys.readouterr().err
+    assert code == 1 and "close failed" in err and "could not close the stores" in err
+    assert err.index("cannot construct the search client") < err.index("close failed")
+    assert list(out.iterdir()) == []  # the directory was still removed
+
+
 def test_a_judge_that_cannot_be_built_stops_before_any_run(tmp_path, capsys):
     def broken(settings):
         raise RuntimeError("cannot construct the judge")

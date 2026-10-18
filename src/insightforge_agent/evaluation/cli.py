@@ -206,11 +206,16 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
             try:
                 built[provider] = _open(settings[provider], out / provider, make_deps, stack)
             except Exception as e:  # noqa: BLE001
-                stack.close()
+                # The cause is reported first; a clean-up failure after it, never instead.
                 code = _cannot_build(f"the {provider} pipeline", e)
                 try:
+                    stack.close()  # runs every close, even after one raises
+                except Exception as closing:  # noqa: BLE001 - any close may fail; reported
+                    print(f"insightforge-agent eval: error: could not close the stores in "
+                          f"{out}: {type(closing).__name__}: {closing}", file=sys.stderr)
+                try:
                     shutil.rmtree(out)
-                except OSError as cleanup:  # reported after the cause, never instead of it
+                except OSError as cleanup:
                     print(f"insightforge-agent eval: error: could not remove {out}: "
                           f"{type(cleanup).__name__}: {cleanup}", file=sys.stderr)
                 return code
