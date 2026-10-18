@@ -294,6 +294,12 @@ test("a one-shot Brief stops at 500 characters in the browser and at the API", a
   await expect(page.getByRole("status").filter({ hasText: "Text beyond the limit was not added." })).toHaveCount(1);
   await page.keyboard.type("y");
   await expect(page.getByTestId("brief-count")).toHaveText("500/500");
+  // A paste in the middle that starts like the text after it keeps that text and the caret.
+  await brief.fill("Start End");
+  await brief.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(6, 6));
+  await page.keyboard.insertText(`E${"x".repeat(600)}`);
+  await expect(brief).toHaveValue(`Start E${"x".repeat(490)}End`);
+  expect(await brief.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(497);
   await brief.fill("\u{1F697}".repeat(500)); // 1000 UTF-16 code units, 500 characters
   await expect(page.getByTestId("brief-count")).toHaveText("500/500");
 

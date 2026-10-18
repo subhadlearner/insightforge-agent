@@ -7,24 +7,18 @@ export const briefLength = (text: string): number => Array.from(text).length;
 
 export type FittedBrief = { value: string; caret: number; truncated: boolean };
 
-// The next value of the Brief after an edit from `previous` to `next`. Within the limit it is
-// `next` as typed. Over it, only the inserted text is cut (at a code point, never inside a
-// surrogate pair), so a paste in the middle keeps the text after it; `caret` (UTF-16, for
-// setSelectionRange) is the end of what was kept.
-export function fitBrief(previous: string, next: string): FittedBrief {
-  const after = Array.from(next);
-  if (after.length <= BRIEF_MAX_CHARS) return { value: next, caret: next.length, truncated: false };
-  const before = Array.from(previous);
-  let prefix = 0;
-  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
-  let suffix = 0;
-  while (suffix < before.length - prefix && suffix < after.length - prefix
-    && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix++;
-  const head = after.slice(0, prefix);
-  const tail = after.slice(after.length - suffix);
-  const room = Math.max(0, BRIEF_MAX_CHARS - head.length - tail.length);
-  const kept = head.concat(after.slice(prefix, after.length - suffix).slice(0, room));
-  // Only reachable if `previous` was itself over the limit: cut the end as well.
-  const value = kept.concat(tail).slice(0, BRIEF_MAX_CHARS).join("");
-  return { value, caret: Math.min(kept.join("").length, value.length), truncated: true };
+// The value to keep after an edit produced `next`, with the caret where the browser put it
+// (`selectionEnd`, UTF-16). An insertion, typed or pasted, and a paste over a selection all
+// leave the caret at the end of the inserted text, so the text after the caret is existing
+// text: it is always kept. Over the limit only the text before the caret is cut, from its
+// end, which removes inserted text only (before the edit the Brief fitted). Cuts fall
+// between code points, never inside a surrogate pair; `caret` is the end of what was kept.
+export function fitBrief(next: string, caret: number = next.length): FittedBrief {
+  if (briefLength(next) <= BRIEF_MAX_CHARS) return { value: next, caret, truncated: false };
+  const head = Array.from(next.slice(0, caret));
+  const tail = Array.from(next.slice(caret));
+  const kept = head.slice(0, Math.max(0, BRIEF_MAX_CHARS - tail.length)).join("");
+  // `tail` alone over the limit is only possible if the Brief was already over it.
+  const value = Array.from(kept + tail.join("")).slice(0, BRIEF_MAX_CHARS).join("");
+  return { value, caret: Math.min(kept.length, value.length), truncated: true };
 }

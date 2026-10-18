@@ -42,7 +42,7 @@ describe("Brief length counting", () => {
   });
 
   it.each(CASES.map((c) => [c.name, c] as const))("fits %s to the limit at a code point", (_, c) => {
-    const fitted = fitBrief("", textOf(c));
+    const fitted = fitBrief(textOf(c));
     expect(fitted.truncated).toBe(c.length > 500);
     expect(briefLength(fitted.value)).toBe(Math.min(c.length, 500));
     expect(textOf(c).startsWith(fitted.value)).toBe(true);
@@ -50,19 +50,34 @@ describe("Brief length counting", () => {
   });
 
   it("cuts only the inserted text, keeping what follows a paste in the middle", () => {
-    const fitted = fitBrief("ab", `a${"x".repeat(600)}b`);
+    const fitted = fitBrief(`a${"x".repeat(600)}b`, 601);
     expect(fitted).toEqual({ value: `a${"x".repeat(498)}b`, caret: 499, truncated: true });
   });
 
-  it("refuses a keystroke at the limit and keeps the caret where it was typed", () => {
+  // Review repro 1: inserted text that starts like the text after it.
+  it("keeps existing text that the pasted text happens to match", () => {
+    const pasted = `E${"x".repeat(600)}`;
+    const fitted = fitBrief(`Start ${pasted}End`, 6 + pasted.length);
+    expect(fitted).toEqual({ value: `Start E${"x".repeat(490)}End`, caret: 497, truncated: true });
+  });
+
+  // Review repro 2: a keystroke equal to the character after the caret.
+  it.each(["b", "Z"])("refuses %s typed at the limit and keeps the caret where it was typed", (key) => {
     const full = "a".repeat(250) + "b".repeat(250);
-    const fitted = fitBrief(full, `${"a".repeat(250)}Z${"b".repeat(250)}`);
+    const fitted = fitBrief(`${"a".repeat(250)}${key}${"b".repeat(250)}`, 251);
     expect(fitted).toEqual({ value: full, caret: 250, truncated: true });
   });
 
+  it("cuts a paste over a selection, keeping the text after the selection", () => {
+    // "Start SEL End" with "SEL" selected, replaced by "S" and 600 "x".
+    const fitted = fitBrief(`Start S${"x".repeat(600)} End`, 607);
+    expect(fitted).toEqual({ value: `Start S${"x".repeat(489)} End`, caret: 496, truncated: true });
+  });
+
   it("places the caret in UTF-16 code units after emoji", () => {
-    const fitted = fitBrief("", "\u{1F697}".repeat(501));
-    expect(fitted.caret).toBe(1000);
+    expect(fitBrief("\u{1F697}".repeat(501)).caret).toBe(1000);
+    const fitted = fitBrief(`\u{1F697}${"x".repeat(600)}\u{1F697}`, 602);
+    expect(fitted).toEqual({ value: `\u{1F697}${"x".repeat(498)}\u{1F697}`, caret: 500, truncated: true });
   });
 });
 
@@ -111,6 +126,37 @@ describe("Brief form counter", () => {
     expect(briefLength(input.value)).toBe(500);
     expect(input.value).toBe(`Start ${"x".repeat(491)}End`);
     expect(input.selectionStart).toBe(497);
+  });
+
+  it("keeps the existing text when the paste starts like it", async () => {
+    const input = await renderDesk();
+    fireEvent.change(input, { target: { value: "Start End" } });
+    input.focus();
+    input.setSelectionRange(6, 6);
+    await userEvent.paste(`E${"x".repeat(600)}`);
+    expect(input.value).toBe(`Start E${"x".repeat(490)}End`);
+    expect(input.selectionStart).toBe(497);
+  });
+
+  it("cuts a paste over a selection without losing the text after it", async () => {
+    const input = await renderDesk();
+    fireEvent.change(input, { target: { value: "Start SEL End" } });
+    input.focus();
+    input.setSelectionRange(6, 9);
+    await userEvent.paste(`S${"x".repeat(600)}`);
+    expect(input.value).toBe(`Start S${"x".repeat(489)} End`);
+    expect(input.selectionStart).toBe(496);
+  });
+
+  it("keeps the caret in place when a typed character matches the next one", async () => {
+    const input = await renderDesk();
+    const full = "a".repeat(250) + "b".repeat(250);
+    fireEvent.change(input, { target: { value: full } });
+    input.focus();
+    input.setSelectionRange(250, 250);
+    await userEvent.keyboard("b");
+    expect(input.value).toBe(full);
+    expect(input.selectionStart).toBe(250);
   });
 
   it("refuses typing at the limit, then counts down again on deletion", async () => {

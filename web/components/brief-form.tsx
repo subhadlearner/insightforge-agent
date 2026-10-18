@@ -102,7 +102,7 @@ export function BriefForm() {
           disabled={submitting}
           placeholder="How did BYD's battery EV pricing compare with Tesla's in Europe during 2025?"
           onChange={(e) => {
-            const fitted = fitBrief(brief, e.target.value);
+            const fitted = fitBrief(e.target.value, e.target.selectionEnd ?? e.target.value.length);
             if (fitted.truncated) {
               // Set before React re-renders, so the caret stays where the kept text ends.
               e.target.value = fitted.value;
