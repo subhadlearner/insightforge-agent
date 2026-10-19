@@ -31,7 +31,7 @@ def t18():
 def test_39_negatives_reach_the_judge_and_n31_is_blocked_by_the_figure_gate(t18, make_deps):
     from insightforge_agent.embeddings import FastEmbedEmbedder
     from insightforge_agent.pipeline.fact_check import counterpart, screen
-    from tests.live.test_t18_stage_b import passages, verdicts
+    from tests.t18_stage_b_support import passages, verdicts
 
     deps = make_deps(embedder=FastEmbedEmbedder("BAAI/bge-small-en-v1.5"))
     stored = verdicts(t18)
