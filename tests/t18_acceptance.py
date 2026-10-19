@@ -21,6 +21,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from insightforge_agent.domain.contracts import UNVERIFIED_MARK
+from insightforge_agent.domain.provenance import asserted_names, common_words, tokens
+
 # ---- Stage B-1: entailment calibration -------------------------------------------------------
 
 CLEARLY_SUPPORTED = "yes"  # the adjudication recorded before any paid call
@@ -114,19 +117,51 @@ def b2_cap_decision(record: dict) -> str:
 
 # ---- Stage B-3: judge-only -------------------------------------------------------------------
 
-def b3_outcome(judge_report: dict, expected_samples: int = 5) -> tuple[str, list[str]]:
-    """'pass' only when every one of the expected stored Reports was judged with valid scores;
-    'failed' when any was refused or errored (its error type is detail, not success);
-    'inconclusive' when fewer Reports were judged than expected."""
-    results = judge_report.get("results", [])
-    judged = [r for r in results if r["synthesis"]["status"] == "judged"
-              and r["synthesis"].get("scores")]
-    problems = [f"{r['sample_id']}: {r['synthesis']['status']}: {r['synthesis'].get('reason', '')}"
-                for r in results if r not in judged]
+# The stored Reports B-3 judges: T18's five, by provider and sample, each with its Report id.
+T18_JUDGE_SAMPLES = {
+    ("anthropic", "competitive-landscape-cloud"): "rep_3489459c430cef66",
+    ("anthropic", "document-annual-report"): "rep_741a37d0ab3d8397",
+    ("anthropic", "market-sizing-solar"): "rep_95e98f158ef7e398",
+    ("anthropic", "memory-prior-report"): "rep_6e48a16b54b2cc51",
+    ("anthropic", "regulatory-impact-semiconductors"): "rep_e0d086224779e53f",
+}
+JUDGE_CRITERIA = ("coverage", "organisation", "synthesis", "calibration")  # synthesis-rubric-v1
+
+
+def _valid_scores(scores) -> bool:
+    """Exactly the four rubric criteria, each a whole number from 1 to 5 (never a bool)."""
+    return (isinstance(scores, dict) and set(scores) == set(JUDGE_CRITERIA)
+            and all(type(v) is int and 1 <= v <= 5 for v in scores.values()))
+
+
+def b3_outcome(judge_report: dict,
+               expected: dict = T18_JUDGE_SAMPLES) -> tuple[str, list[str]]:
+    """'pass' only when each expected stored Report has exactly one result, judged with valid
+    scores. 'failed' when any result is refused or errored (its error type is detail, not
+    success), has malformed scores, is a duplicate, names an unexpected sample or another Report.
+    'inconclusive' when nothing failed but an expected Report has no result."""
+    problems, seen = [], {}
+    for r in judge_report.get("results", []):
+        key = (r.get("provider"), r.get("sample_id"))
+        synthesis = r.get("synthesis") or {}
+        name = f"{key[0]}/{key[1]}"
+        if key not in expected:
+            problems.append(f"{name}: unexpected sample")
+        elif key in seen:
+            problems.append(f"{name}: more than one result")
+        elif r.get("report_id") != expected[key]:
+            problems.append(f"{name}: judged Report {r.get('report_id')}, expected "
+                            f"{expected[key]}")
+        elif synthesis.get("status") != "judged":
+            problems.append(f"{name}: {synthesis.get('status')}: {synthesis.get('reason', '')}")
+        elif not _valid_scores(synthesis.get("scores")):
+            problems.append(f"{name}: malformed scores {synthesis.get('scores')!r}")
+        seen.setdefault(key, r)
     if problems:
         return "failed", problems
-    if len(judged) != expected_samples:
-        return "inconclusive", [f"{len(judged)} of {expected_samples} Reports judged"]
+    missing = [f"{p}/{s}: no result" for p, s in expected if (p, s) not in seen]
+    if missing:
+        return "inconclusive", missing
     return "pass", []
 
 
@@ -143,6 +178,9 @@ _NEGATION = re.compile(r"\b(?:not|no|never|without|denied|rejected|unlikely|cann
                        r"didn't|doesn't|isn't|wasn't|failed|fails)\b", re.IGNORECASE)
 _SEGMENTS = {"cardiology": r"cardiolog\w*", "orthopaedic": r"orthop(?:a)?edic\w*",
              "diagnostics": r"diagnostic\w*"}
+_COMPARED = re.compile(r"(?:compared (?:with|to)|versus|vs\.?|relative to|against|than|from|over)"
+                       r"\s+(?:the\s+)?(?:fiscal\s+(?:year\s+)?|FY\s?)?$", re.IGNORECASE)
+_NORTHWIND = re.compile(r"\bNorthwind\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -151,14 +189,15 @@ class Fact:
 
     terms: tuple[str, ...]  # each must appear in the sentence
     figure: str | None = None  # the exact figure stated, if any
-    years: frozenset[str] | None = None  # allowed years; another year is a mismatch
+    years: frozenset[str] | None = None  # the measured period; another year is a mismatch
     segment: str | None = None  # whose figure: a segment, or "total" (no segment named)
+    compared_with: frozenset[str] = frozenset()  # a comparison base, allowed only as one
 
 
 NORTHWIND_FACTS = {
     "revenue 612 million": Fact((r"revenue",), r"\b612 million\b", frozenset({"2025"}), "total"),
     "growth 14 percent": Fact((r"\bgr[eo]w|growth|increas|\brose\b",), r"\b14 ?(?:percent|%)",
-                              frozenset({"2024", "2025"}), "total"),
+                              frozenset({"2025"}), "total", frozenset({"2024"})),
     "cardiology segment 341 million": Fact((r"contribut|revenue|sales",), r"\b341 million\b",
                                            frozenset({"2025"}), "cardiology"),
     "orthopaedic segment 187 million": Fact((r"contribut|revenue|sales",), r"\b187 million\b",
@@ -209,10 +248,15 @@ def _judge_sentence(fact: Fact, sentence: str) -> str:
     if _NEGATION.search(sentence):
         return "mismatch"
     if fact.years is not None:
-        years = set(_YEAR.findall(sentence))
-        if years and not years & fact.years:
-            return "mismatch"  # another period
-        if not years:
+        stated = [(m.group(), m.start()) for m in _YEAR.finditer(sentence)]
+        # A comparison base ("compared with fiscal 2024") is not the measured period.
+        bases = {y for y, at in stated if _COMPARED.search(sentence[:at])}
+        measured = {y for y, _ in stated} - (bases & fact.compared_with)
+        if fact.compared_with and bases - fact.compared_with:
+            return "mismatch"  # another comparison base ("compared with fiscal 2023")
+        if measured and not measured & fact.years:
+            return "mismatch"  # another period ("grew 14 percent in fiscal 2024")
+        if not stated:
             return "candidate"  # the period is not stated: not established
     return "match"
 
@@ -223,31 +267,80 @@ def judge_fact(fact: Fact, text: str) -> str:
     return max(verdicts or ["absent"], key=_RANK.__getitem__)
 
 
-def _claims_and_items(body: dict) -> tuple[list[dict], dict[str, str]]:
-    """Current Report Claims, and retained Evidence statements by id."""
-    claims = [c for s in body["draft"]["sections"] for c in s["claims"] if not c.get("historical")]
-    items = {i["id"]: i["statement"] for s in body["evidence"]["sections"] for i in s["items"]}
+def _claims_and_items(body: dict) -> tuple[list[dict], dict[str, dict]]:
+    """The published Report's current Claims (`verified.draft`, the Report a reader sees; never
+    the pre-check draft, never Historical Claims), each with `unverified` set when the
+    Fact-Checker judged it so (its verdict, or the mark on its text), and its text without the
+    mark; and the retained Evidence items by id. An unsampled Claim has no verdict, and none is
+    invented: it counts as published, neither verified nor unverified."""
+    verified = body["verified"]
+    unverified = {(v["section"], v["claim"]) for v in verified.get("verdicts", [])
+                  if v["verdict"] == "unverified"}
+    claims = []
+    for si, section in enumerate(verified["draft"]["sections"]):
+        for ci, c in enumerate(section["claims"]):
+            if c.get("historical"):
+                continue
+            marked = c["text"].endswith(UNVERIFIED_MARK)
+            claims.append({**c, "text": c["text"].removesuffix(UNVERIFIED_MARK),
+                           "unverified": marked or (si, ci) in unverified})
+    items = {i["id"]: i for s in body["evidence"]["sections"] for i in s["items"]}
     return claims, items
 
 
+def _attribution(item: dict | None) -> str:
+    """Whose fact a retained Evidence item states: 'northwind' when it or its entity names
+    Northwind, 'other' when its entity is someone else, 'unknown' otherwise."""
+    if item is None:
+        return "unknown"
+    entity = item.get("entity") or ""
+    if _NORTHWIND.search(item["statement"]) or _NORTHWIND.search(entity):
+        return "northwind"
+    return "other" if entity.strip() else "unknown"
+
+
+def _attributed(verdict: str, claim: str, item: dict | None, common: frozenset[str]) -> str:
+    """A Claim's verdict once its company is checked. A Claim naming Northwind is Northwind's.
+    One that names a company its cited Evidence does not ("Medtronic revenue reached 612
+    million"), or cites Evidence about another company, is a mismatch. One that names no company
+    is attributed through its cited Evidence; without that, it is only a candidate."""
+    if verdict not in ("match", "candidate") or _NORTHWIND.search(claim):
+        return verdict
+    cited = item or {"statement": "", "entity": ""}
+    known = {t.casefold() for t in tokens(f"{cited['statement']} {cited.get('entity') or ''}")}
+    if any(n.casefold() not in known for n in asserted_names(claim, common)):
+        return "mismatch"  # attributed to a company the cited Evidence does not name
+    who = _attribution(item)
+    if who == "other":
+        return "mismatch"
+    return verdict if who == "northwind" else "candidate"
+
+
 def document_coverage(body: dict) -> dict:
-    """Per Northwind fact, in this order: 'mismatch' if any Claim misstates it (another
-    segment's figure, another period, negated), even beside a correct one; 'covered' if a Claim
-    states it and cites retained Evidence that states it; 'candidate' if only one side states it
+    """Per Northwind fact, over the published Report, in this order: 'mismatch' if any Claim
+    misstates it (another segment's figure, another period, another company, negated), even
+    beside a correct one or when marked unverified; 'covered' if a Claim the Fact-Checker did
+    not mark unverified states it and cites retained Evidence that states it; 'unverified claim'
+    if only unverified Claims do (manual adjudication); 'candidate' if only one side states it
     or a side is unsettled (manual adjudication); 'retained, not claimed'; 'mismatch' if only
     Evidence misstates it; else 'missing'. Gap lines are never read."""
     claims, items = _claims_and_items(body)
+    common = common_words([c["text"] for c in claims] + [i["statement"] for i in items.values()])
     facts = {}
     for name, fact in NORTHWIND_FACTS.items():
-        on_items = {i: judge_fact(fact, s) for i, s in items.items()}
-        pairs = [(judge_fact(fact, c["text"]), on_items.get(c["evidence_id"], "absent"))
-                 for c in claims]
-        if any(claim == "mismatch" for claim, _ in pairs):
+        on_items = {i: _attributed(judge_fact(fact, x["statement"]), x["statement"], x, common)
+                    for i, x in items.items()}
+        pairs = [(_attributed(judge_fact(fact, c["text"]), c["text"],
+                              items.get(c["evidence_id"]), common),
+                  on_items.get(c["evidence_id"], "absent"), c["unverified"]) for c in claims]
+        if any(claim == "mismatch" for claim, _, _ in pairs):
             facts[name] = "mismatch"
-        elif ("match", "match") in pairs:
+        elif ("match", "match", False) in pairs:
             facts[name] = "covered"
+        elif ("match", "match", True) in pairs:
+            facts[name] = "unverified claim"
         elif any(claim in ("match", "candidate") or item in ("match", "candidate")
-                 for claim, item in pairs) or "candidate" in on_items.values():
+                 for claim, item, _ in pairs) or "candidate" in on_items.values():
             facts[name] = "candidate"
         elif "match" in on_items.values():
             facts[name] = "retained, not claimed"
@@ -257,7 +350,7 @@ def document_coverage(body: dict) -> dict:
             facts[name] = "missing"
     values = set(facts.values())
     status = ("failed" if values & {"missing", "mismatch", "retained, not claimed"} else
-              "inconclusive" if "candidate" in values else "pass")
+              "inconclusive" if values & {"candidate", "unverified claim"} else "pass")
     return {"status": status, "facts": facts}
 
 
@@ -281,10 +374,11 @@ _FIGURE = re.compile(r"\$?\d[\d,.]*\s*(?:billion|million|%|percent)", re.IGNOREC
 
 
 def regulatory_coverage(body: dict, fetched_texts: list[str]) -> dict:
-    """Per objective: 'covered' (a Claim states a known fact and cites retained Evidence that
-    does), 'candidate' (another figure-bearing statement on it: manual review), 'retained, not
-    claimed', or, when absent, 'pipeline loss' if the Run's own fetched text stated it (a
-    failure) or 'not fetched' (external unavailability: inconclusive)."""
+    """Per objective, over the published Report: 'covered' (a Claim not marked unverified states
+    a known fact and cites retained Evidence that does), 'unverified claim' (only unverified
+    Claims do: manual adjudication), 'candidate' (another figure-bearing statement on it: manual
+    review), 'retained, not claimed', or, when absent, 'pipeline loss' if the Run's own fetched
+    text stated it (a failure) or 'not fetched' (external unavailability: inconclusive)."""
     claims, items = _claims_and_items(body)
     out = {}
     for name, o in REGULATORY_OBJECTIVES.items():
@@ -296,12 +390,15 @@ def regulatory_coverage(body: dict, fetched_texts: list[str]) -> dict:
         def known(text: str) -> bool:
             return about(text) and any(re.search(k, text, re.IGNORECASE) for k in o["known"])
 
-        pairs = [(c["text"], items.get(c["evidence_id"], "")) for c in claims]
-        if any(known(c) and known(i) for c, i in pairs):
+        pairs = [(c["text"], items[c["evidence_id"]]["statement"] if c["evidence_id"] in items
+                  else "", c["unverified"]) for c in claims]
+        if any(known(c) and known(i) and not u for c, i, u in pairs):
             out[name] = "covered"
-        elif any(about(c) and about(i) for c, i in pairs):
+        elif any(known(c) and known(i) for c, i, _ in pairs):
+            out[name] = "unverified claim"
+        elif any(about(c) and about(i) for c, i, _ in pairs):
             out[name] = "candidate"
-        elif any(about(i) for i in items.values()):
+        elif any(about(i["statement"]) for i in items.values()):
             out[name] = "retained, not claimed"
         elif any(about(t) for t in fetched_texts):
             out[name] = "pipeline loss"

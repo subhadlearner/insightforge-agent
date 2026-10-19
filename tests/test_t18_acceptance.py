@@ -103,31 +103,84 @@ def test_b2_cap_decision_follows_the_spec_rule():
 
 # ---- B-3 ---------------------------------------------------------------------------------------
 
-def judged(sid, status="judged", reason=""):
-    return {"sample_id": sid, "synthesis": {"status": status, "reason": reason,
-                                            "scores": {"coverage": 3} if status == "judged" else None}}
+# T18's five stored Reports, written out here independently of the rule's own table.
+T18_REPORTS = [("competitive-landscape-cloud", "rep_3489459c430cef66"),
+               ("document-annual-report", "rep_741a37d0ab3d8397"),
+               ("market-sizing-solar", "rep_95e98f158ef7e398"),
+               ("memory-prior-report", "rep_6e48a16b54b2cc51"),
+               ("regulatory-impact-semiconductors", "rep_e0d086224779e53f")]
+SCORES = {"coverage": 3, "organisation": 4, "synthesis": 3, "calibration": 2}
+
+
+def judged(n, status="judged", reason="", scores=SCORES, sample=None, report=None):
+    sid, rid = T18_REPORTS[n]
+    return {"provider": "anthropic", "sample_id": sample or sid, "report_id": report or rid,
+            "synthesis": {"status": status, "reason": reason,
+                          "scores": scores if status == "judged" else None}}
+
+
+ALL_FIVE = [judged(n) for n in range(5)]
 
 
 def test_b3_passes_only_when_all_five_reports_have_valid_scores():
-    assert b3_outcome({"results": [judged(f"s{i}") for i in range(5)]}) == ("pass", [])
-    status, detail = b3_outcome({"results": [judged(f"s{i}") for i in range(4)] + [
-        judged("s4", "error", "invalid judge reply: string_too_long")]})
+    assert b3_outcome({"results": ALL_FIVE}) == ("pass", [])
+    status, detail = b3_outcome({"results": ALL_FIVE[:4] + [
+        judged(4, "error", "invalid judge reply: string_too_long")]})
     assert status == "failed" and "string_too_long" in detail[0]  # a typed error is not a pass
-    assert b3_outcome({"results": [judged(f"s{i}") for i in range(4)]})[0] == "inconclusive"
+    assert b3_outcome({"results": ALL_FIVE[:4]})[0] == "inconclusive"
+
+
+# ---- R4-01: one complete, valid judgment for each expected Report ---------------------------
+
+@pytest.mark.parametrize("results", [
+    ALL_FIVE[:4] + [judged(3)],  # a duplicate standing in for a missing Report
+    ALL_FIVE + [judged(0)],  # all five, one judged twice
+    ALL_FIVE[:4] + [judged(4, sample="market-sizing-wind")],  # an unexpected sample
+    ALL_FIVE[:4] + [judged(4, report="rep_000000000000")],  # another Report of the sample
+], ids=["duplicate for missing", "duplicate extra", "unexpected sample", "other report"])
+def test_b3_duplicates_and_unexpected_identities_fail(results):
+    assert b3_outcome({"results": results})[0] == "failed"
+
+
+@pytest.mark.parametrize("scores", [
+    {"coverage": 3, "organisation": 4, "synthesis": 3},  # a criterion missing
+    {**SCORES, "accuracy": 3},  # an extra criterion
+    {**SCORES, "calibration": 0}, {**SCORES, "calibration": 6},  # out of range
+    {**SCORES, "calibration": 3.5}, {**SCORES, "calibration": "3"},  # not whole numbers
+    {**SCORES, "calibration": True}, {**SCORES, "calibration": None},
+    {}, None,
+], ids=["missing", "extra", "zero", "six", "fraction", "string", "bool", "null", "empty", "none"])
+def test_b3_malformed_scores_fail(scores):
+    status, detail = b3_outcome({"results": ALL_FIVE[:4] + [judged(4, scores=scores)]})
+    assert status == "failed" and "regulatory-impact-semiconductors" in detail[0]
+
+
+def test_b3_a_failure_outranks_a_missing_report_and_missing_alone_is_inconclusive():
+    assert b3_outcome({"results": ALL_FIVE[:3] + [judged(3, scores={})]})[0] == "failed"
+    status, detail = b3_outcome({"results": ALL_FIVE[1:]})
+    assert (status, detail) == ("inconclusive", ["anthropic/competitive-landscape-cloud: no result"])
 
 
 # ---- Stage C -----------------------------------------------------------------------------------
 
-def body(statements, claimed=True, claim_texts=None):
-    """A stored Report body: one Evidence item per statement, each cited by a Claim whose text
-    is the statement (or claim_texts[n])."""
-    items = [{"id": f"ev_{n}", "statement": s} for n, s in enumerate(statements)]
+def body(statements, claimed=True, claim_texts=None, entity="Northwind Health", unverified=(),
+         marked=True):
+    """A stored Report body: one Evidence item per statement (about `entity`), each cited by a
+    Claim whose text is the statement (or claim_texts[n]). `draft` is the pre-check draft;
+    `verified.draft` the published Report, where each Claim at a position in `unverified` has an
+    unverified verdict and, when `marked`, the [UNVERIFIED] mark. No other Claim is sampled."""
+    items = [{"id": f"ev_{n}", "statement": s, "entity": entity} for n, s in enumerate(statements)]
     texts = claim_texts or [i["statement"] for i in items]
+    claims = [{"evidence_id": i["id"], "historical": False, "text": t}
+              for i, t in zip(items, texts)] if claimed else []
+    published = [{**c, "text": c["text"] + " [UNVERIFIED]"} if n in unverified and marked else c
+                 for n, c in enumerate(claims)]
+    gaps = ["Sub-task s2 (R&D): this research did not establish it."]
     return {"evidence": {"sections": [{"items": items}]},
-            "draft": {"gaps": ["Sub-task s2 (R&D): this research did not establish it."],
-                      "sections": [{"claims": [
-                          {"evidence_id": i["id"], "historical": False, "text": t}
-                          for i, t in zip(items, texts)] if claimed else []}]}}
+            "draft": {"gaps": gaps, "sections": [{"claims": claims}]},
+            "verified": {"draft": {"gaps": gaps, "sections": [{"claims": published}]},
+                         "verdicts": [{"section": 0, "claim": n, "verdict": "unverified"}
+                                      for n in unverified]}}
 
 
 NORTHWIND = ["Northwind Health revenue reached 612 million dollars in fiscal 2025.",
@@ -260,11 +313,11 @@ def cli(*args):
 
 
 @pytest.mark.parametrize("results, code, status", [
-    ([judged(f"s{i}") for i in range(5)], 0, "pass"),
-    ([judged(f"s{i}") for i in range(4)] + [judged("s4", "error", "string_too_long")], 1,
-     "failed"),
-    ([judged(f"s{i}") for i in range(4)], 2, "inconclusive"),
-], ids=["pass", "failed", "inconclusive"])
+    (ALL_FIVE, 0, "pass"),
+    (ALL_FIVE[:4] + [judged(4, "error", "string_too_long")], 1, "failed"),
+    (ALL_FIVE[:4] + [judged(3)], 1, "failed"),
+    (ALL_FIVE[:4], 2, "inconclusive"),
+], ids=["pass", "failed", "duplicate", "inconclusive"])
 def test_the_b3_command_exits_nonzero_unless_it_passes(tmp_path, results, code, status):
     f = tmp_path / "judge-report.json"
     f.write_text(json.dumps({"results": results}), encoding="utf-8")
@@ -351,3 +404,114 @@ def test_figures_inside_decimals_and_unrelated_sentences_are_not_about_the_fact(
                       "Revenue was 171 million dollars in fiscal 2025.") == "absent"
     assert judge_fact(programmes, "The pipeline holds 6 programmes in clinical trials at the end "
                                   "of fiscal 2025.") == "match"
+
+
+# ---- R4-02: the company and the measured period ---------------------------------------------
+
+REVENUE = "Northwind Health revenue reached 612 million dollars in fiscal 2025."
+GROWTH = "Revenue grew 14 percent compared with fiscal 2024."
+
+
+@pytest.mark.parametrize("claim", [
+    "Medtronic revenue reached 612 million dollars in fiscal 2025.",
+    "Revenue at Medtronic reached 612 million dollars in fiscal 2025.",
+], ids=["sentence-initial", "mid-sentence"])
+def test_a_northwind_figure_claimed_for_another_company_is_a_mismatch(claim):
+    r = document_coverage(body(NORTHWIND, claim_texts=[
+        claim if s == REVENUE else s for s in NORTHWIND]))
+    assert r["facts"]["revenue 612 million"] == "mismatch" and r["status"] == "failed"
+    beside = document_coverage(body(NORTHWIND + [REVENUE], claim_texts=NORTHWIND + [claim]))
+    assert beside["facts"]["revenue 612 million"] == "mismatch"  # even beside the right Claim
+
+
+def test_a_claim_citing_evidence_about_another_company_is_a_mismatch():
+    northwind = body(NORTHWIND)
+    other = {"id": "ev_other", "entity": "Medtronic",
+             "statement": "Medtronic revenue reached 612 million dollars in fiscal 2025."}
+    northwind["evidence"]["sections"][0]["items"].append(other)
+    northwind["verified"]["draft"]["sections"][0]["claims"].append(
+        {"evidence_id": "ev_other", "historical": False,
+         "text": "Revenue reached 612 million dollars in fiscal 2025."})
+    assert document_coverage(northwind)["facts"]["revenue 612 million"] == "mismatch"
+
+
+def test_implicit_attribution_comes_only_from_the_cited_evidence():
+    # "Revenue grew 14 percent ..." names no company: its Northwind Evidence attributes it.
+    assert document_coverage(body(NORTHWIND))["facts"]["growth 14 percent"] == "covered"
+    unattributed = document_coverage(body(NORTHWIND, entity=""))
+    assert unattributed["facts"]["growth 14 percent"] == "candidate"
+    assert unattributed["facts"]["revenue 612 million"] == "covered"  # names Northwind itself
+    assert unattributed["status"] == "inconclusive"
+
+
+@pytest.mark.parametrize("claim, verdict", [
+    ("Revenue grew 14 percent in fiscal 2024.", "mismatch"),  # the comparison year as the period
+    ("Revenue grew 14 percent in fiscal 2025 compared with fiscal 2023.", "mismatch"),
+    ("Revenue grew 14 percent compared with fiscal 2023.", "mismatch"),  # another base
+    ("Revenue grew 14 percent.", "candidate"),  # no period stated
+    (GROWTH, "covered"),  # the base fixes the period: the year after it
+    ("Revenue grew 14 percent in fiscal 2025 compared with fiscal 2024.", "covered"),
+    ("Northwind Health revenue rose 14 percent over fiscal 2024.", "covered"),
+])
+def test_growth_separates_the_measured_period_from_the_comparison_base(claim, verdict):
+    texts = [claim if s == GROWTH else s for s in NORTHWIND]
+    assert document_coverage(body(NORTHWIND, claim_texts=texts))["facts"][
+        "growth 14 percent"] == verdict
+
+
+# ---- R4-03: the published Report, and the Fact-Checker's verdicts ---------------------------
+
+@pytest.mark.parametrize("marked", [True, False], ids=["marked", "verdict only"])
+def test_a_fact_claimed_only_by_an_unverified_claim_is_not_a_pass(marked):
+    r = document_coverage(body(NORTHWIND, unverified=(0,), marked=marked))
+    assert r["facts"]["revenue 612 million"] == "unverified claim"
+    assert r["status"] == "inconclusive"
+
+
+def test_the_published_report_is_read_not_the_pre_check_draft():
+    b = body(NORTHWIND)
+    published = b["verified"]["draft"]["sections"][0]
+    published["claims"] = [c for c in published["claims"] if "612" not in c["text"]]
+    r = document_coverage(b)  # the pre-check draft still states it
+    assert r["facts"]["revenue 612 million"] == "retained, not claimed" and r["status"] == "failed"
+
+
+def test_unsampled_claims_count_as_published_and_no_verdict_is_invented():
+    b = body(NORTHWIND)
+    assert b["verified"]["verdicts"] == []
+    assert document_coverage(b)["status"] == "pass"
+
+
+def test_an_unverified_misstatement_still_fails():
+    texts = [CARDIO.replace("2025", "2024") if s == CARDIO else s for s in NORTHWIND]
+    r = document_coverage(body(NORTHWIND, claim_texts=texts,
+                               unverified=(NORTHWIND.index(CARDIO),)))
+    assert r["facts"]["cardiology segment 341 million"] == "mismatch"
+
+
+def test_historical_claims_never_cover_a_current_fact():
+    b = body(NORTHWIND)
+    for c in b["verified"]["draft"]["sections"][0]["claims"]:
+        if "612" in c["text"]:
+            c["historical"] = True
+    assert document_coverage(b)["facts"]["revenue 612 million"] == "retained, not claimed"
+
+
+def test_regulatory_coverage_needs_a_claim_that_was_not_marked_unverified():
+    r = regulatory_coverage(body(REG, unverified=(0,)), [])
+    assert r["objectives"] == {"Nvidia China revenue": "unverified claim",
+                               "H20 charge or lost sales": "covered"}
+    assert r["status"] == "inconclusive"
+
+
+def test_stage_c_command_exits_2_when_a_fact_rests_on_an_unverified_claim(tmp_path):
+    d = evaluation(tmp_path, [("document-annual-report", NORTHWIND),
+                              ("regulatory-impact-semiconductors", REG)])
+    con = sqlite3.connect(d / "anthropic" / "eval.db")
+    con.execute("UPDATE reports SET body=? WHERE id='rep_0'",
+                (json.dumps(body(NORTHWIND, unverified=(0,))),))
+    con.commit()
+    con.close()
+    rc, out = cli("stage-c", d)
+    assert (rc, out["status"]) == (2, "inconclusive")
+    assert "document-annual-report: revenue 612 million: unverified claim" in out["reasons"]
