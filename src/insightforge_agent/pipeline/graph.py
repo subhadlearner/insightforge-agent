@@ -51,6 +51,13 @@ from insightforge_agent.domain.contracts import (
     SubTaskResult,
     VerifiedReport,
 )
+from insightforge_agent.domain.document_recovery import (
+    LIMITATION_LEXICON,
+    RECOVERY_CAP,
+    irrelevance_stated,
+    recoverable,
+    recovered_chunks,
+)
 from insightforge_agent.domain.documents import Upload, check_uploads, chunk_id, chunk_ids_in
 from insightforge_agent.domain.errors import (
     ClarificationConflict,
@@ -185,6 +192,20 @@ def returned_by_subtask(deps: Deps, owner_id: str, run_id: str, event_type: str,
 def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
     """Per Sub-task, the chunk IDs its own Doc Reader searches returned in this Run."""
     return returned_by_subtask(deps, owner_id, run_id, DOC_SEARCH_EVENT, "chunk_ids")
+
+
+def search_rankings(deps: Deps, owner_id: str, run_id: str) -> dict[str, list[list[str]]]:
+    """Per Sub-task, each of its own Doc Reader searches in this Run, in order, as the chunk ids
+    it returned in rank order (T18 CS2 recovery). A search with no Sub-task authorises nothing;
+    a search that raised wrote no event."""
+    found: dict[str, list[list[str]]] = {}
+    cursor = 0
+    while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
+        for e in batch:
+            if e.type == DOC_SEARCH_EVENT and e.payload.get("subtask_id"):
+                found.setdefault(e.payload["subtask_id"], []).append(list(e.payload["chunk_ids"]))
+        cursor = batch[-1].seq
+    return found
 
 
 def returned_memory_refs(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
@@ -445,6 +466,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         known = {s.id for s in deps.repos.sources.list_for_run(owner, run_id)}
         summaries = summaries_from_log(deps, owner, run_id)
         returned = returned_chunks(deps, owner, run_id)
+        rankings = search_rankings(deps, owner, run_id)
         documents = set(state.get("documents", []))
         source_type = {t["id"]: t["source_type"] for t in state["plan"]["sub_tasks"]}
         all_outcomes = outcomes(state)
@@ -458,7 +480,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 ok = outcome.status == "succeeded" and sid in found_background
                 if not ok:
                     deps.log(owner, run_id, "subtask_failed", subtask_id=sid,
-                             status=outcome.status)
+                             status=outcome.status, reason=reply_head(outcome))
                 results.append(SubTaskResult(subtask_id=sid,
                                              status="succeeded" if ok else "failed"))
                 settle_subtask(owner, run_id, sid, ok)
@@ -479,14 +501,59 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                         refs.append(ref)
             ok = bool(refs)
             if not ok:
-                deps.log(owner, run_id, "subtask_failed", subtask_id=sid, status=outcome.status)
+                extra = {}
+                if source_type[sid] == "documents":
+                    searches = rankings.get(sid, [])
+                    extra = dict(searches=len(searches),
+                                 returned_chunks=len({c for ids in searches for c in ids}))
+                deps.log(owner, run_id, "subtask_failed", subtask_id=sid, status=outcome.status,
+                         reason=reply_head(outcome), **extra)
+            settle_subtask(owner, run_id, sid, ok)
+            if not ok and source_type[sid] == "documents" and outcome.status == "failed":
+                recovered = recover_document_scope(owner, run_id, sid, outcome, rankings,
+                                                   returned, documents)
+                if recovered is not None:
+                    results.append(recovered)
+                    continue
             results.append(SubTaskResult(
                 subtask_id=sid, status="succeeded" if ok else "failed", source_refs=refs))
-            settle_subtask(owner, run_id, sid, ok)
         if not any(r.status == "succeeded" for r in results):
             raise RunFailed("every Sub-task failed")
         return {"research": ResearchResults(results=results).model_dump(),
                 "historical": historical.context.model_dump(mode="json")}
+
+    def reply_head(outcome) -> str:
+        """The start of a Sub-task's reply, for the failure record; never Source text."""
+        return (outcome.dispatch.result or "")[:300] if outcome.dispatch else "no reply"
+
+    def recover_document_scope(owner: str, run_id: str, sid: str, outcome,
+                               rankings: dict[str, list[list[str]]],
+                               returned: dict[str, set[str]],
+                               documents: set[str]) -> SubTaskResult | None:
+        """T18 CS2: a Document Reader that failed only because its search shows no chunk text
+        (domain/document_recovery) gets its own searches' chunks back as candidates for
+        Synthesis, through the same trust checks as chunks it names. The Sub-task stays FAILED
+        for the user; its result carries the scope, marked `search_recovery`."""
+        reply, searches = outcome.dispatch.result or "", rankings.get(sid, [])
+        ok, phrases = recoverable(reply, searches)
+        if not ok:
+            return None
+        chosen = recovered_chunks(searches)
+        refs = document_refs(owner, ", ".join(chosen), returned.get(sid, set()), documents)
+        kept = [chunk_id(p) for r in refs for p in r.passages]
+        deps.log(owner, run_id, "document_scope_recovered", subtask_id=sid,
+                 trigger="metadata_only_limitation", lexicon=LIMITATION_LEXICON,
+                 matched_phrases=phrases, irrelevance_stated=irrelevance_stated(reply),
+                 reply_head=reply[:300], searches=len(searches), recovered=kept,
+                 excluded_by_trust_checks=[c for c in chosen if c not in set(kept)],
+                 cap=RECOVERY_CAP)
+        if not refs:
+            return None
+        refs = [r.model_copy(update={"summary": r.summary + "; recovered from this Sub-task's "
+                                     "own searches (not selected by the Document Reader)"})
+                for r in refs]
+        return SubTaskResult(subtask_id=sid, status="succeeded", source_refs=refs,
+                             scope_origin="search_recovery")
 
     def settle_subtask(owner: str, run_id: str, sid: str, ok: bool) -> None:
         """Store the validated outcome and its event in one write, so a crash leaves both or

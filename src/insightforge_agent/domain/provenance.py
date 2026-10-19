@@ -139,3 +139,83 @@ def missing_names(*, statement: str, entities: list[str], entity: str, passage_t
     passage_tokens = [w.casefold() for w in tokens(passage_text)]
     return NameCheck(missing=sorted(n for n in required if not _contains(passage_tokens, n)),
                      labels_ignored=ignored)
+
+
+# Words that name a kind of document, never the company it speaks for.
+_GENERIC_DOCUMENT_WORDS = frozenset({
+    "annual", "report", "reports", "financial", "statement", "statements", "form", "fiscal",
+    "year", "quarterly", "results", "review", "summary", "letter", "shareholders", "the", "of",
+    "and", "interim", "half", "full", "integrated", "sustainability",
+})
+_FILENAME_WORDS = re.compile(r"[\s_.\-]+")
+
+
+def _capitalised_runs(text: str) -> list[list[str]]:
+    runs: list[list[str]] = []
+    current: list[str] = []
+    for word in tokens(text):
+        if word[:1].isupper() and not any(c.isdigit() for c in word):
+            current.append(word)
+            continue
+        if current:
+            runs.append(current)
+        current = []
+    if current:
+        runs.append(current)
+    return runs
+
+
+def document_entity(filename: str, chunk_texts: list[str]) -> str | None:
+    """The company an uploaded document speaks for (T18 CS2), when the document itself
+    establishes it: a run of capitalised words its own text uses in at least two chunks (one,
+    for a one-chunk document), every word of which is in the file name, and which is not only
+    generic document words. The longest such run if it is the only one that long, else None."""
+    stem = {w.casefold() for w in _FILENAME_WORDS.split(filename) if w}
+    seen: dict[tuple[str, ...], set[int]] = {}
+    for n, text in enumerate(chunk_texts):
+        for run in _capitalised_runs(text):
+            for i in range(len(run)):
+                for j in range(i + 1, len(run) + 1):
+                    words = tuple(run[i:j])
+                    if all(w.casefold() in stem for w in words) and not all(
+                            w.casefold() in _GENERIC_DOCUMENT_WORDS for w in words):
+                        seen.setdefault(words, set()).add(n)
+    found = [w for w, chunks in seen.items() if len(chunks) >= min(2, len(chunk_texts))]
+    if not found:
+        return None
+    longest = max(len(w) for w in found)
+    top = [w for w in found if len(w) == longest]
+    return " ".join(top[0]) if len(top) == 1 else None
+
+
+def _within(name: str, entity: str) -> bool:
+    """Whether `name` is the entity or a run of its words ("Northwind", "Health")."""
+    want = [w.casefold() for w in tokens(name)]
+    have = [w.casefold() for w in tokens(entity)]
+    return bool(want) and any(have[i:i + len(want)] == want
+                              for i in range(len(have) - len(want) + 1))
+
+
+def credited_by_document(missing: list[str], *, entity: str | None, statement: str,
+                         chunk_text: str, common: frozenset[str]) -> bool:
+    """Whether the missing names are all the document's own entity, in a chunk of that same
+    document that names no one else. A proper name in the chunk that the statement does not
+    assert, that is not the entity and is not a code (NW-200) denies the credit, so a chunk
+    about another company is never attributed to the document's company."""
+    if not entity or not missing or not all(_within(m, entity) for m in missing):
+        return False
+    # Words the statement writes in lower case are common words here ("pricing pressure"), and
+    # only the chunk sentences the statement draws on (most shared words) are checked.
+    common = common | common_words([statement])
+    stated = {w.casefold() for n in asserted_names(statement, common) for w in tokens(n)}
+    words = {w.casefold() for w in tokens(statement) if w.casefold() not in OPENERS}
+    sentences = _SENTENCE.split(_plain(chunk_text).strip())
+    overlap = [len(words & {w.casefold() for w in tokens(s)}) for s in sentences]
+    drawn_on = " ".join(s for s, n in zip(sentences, overlap, strict=True)
+                        if n and n == max(overlap))
+    for name in asserted_names(drawn_on, common):
+        if any(c.isdigit() for c in name) or _within(name, entity):
+            continue
+        if not {w.casefold() for w in tokens(name)} <= stated:
+            return False
+    return True

@@ -60,7 +60,12 @@ from insightforge_agent.domain.passages import (
     split_by_passages,
     value_in_text,
 )
-from insightforge_agent.domain.provenance import common_words, missing_names
+from insightforge_agent.domain.provenance import (
+    common_words,
+    credited_by_document,
+    document_entity,
+    missing_names,
+)
 from insightforge_agent.domain.periods import (
     UNKNOWN,
     parse_period,
@@ -218,12 +223,16 @@ def synthesize(
     # The lower-case vocabulary of everything this Run read: tells a common word from a name
     # at the start of a statement (domain/provenance).
     common = common_words(p.text for c in contents.values() for p in c.passages)
+    # T18 CS2: the company each uploaded document speaks for, when the document establishes it.
+    entity_of = {c.observation.id: document_entity(c.source.title, [p.text for p in c.passages])
+                 for c in contents.values()
+                 if c.observation is not None and c.source.kind == "pdf"}
     brief_vector = deps.embedder.embed([brief])[0]
     items: list[EvidenceItem] = []
     scores: dict[str, float] = {}
     for c in merged.values():
         item = _validate(deps, owner_id, run_id, c, source_by_obs, fetched_on, facts_at,
-                         facts_by_group, common)
+                         facts_by_group, common, entity_of)
         if item is None:
             continue
         supporting_sources = list(dict.fromkeys(source_by_obs[r.observation_id] for r in item.supporting))
@@ -277,7 +286,30 @@ def synthesize(
     for item in cut:
         deps.log(owner_id, run_id, "evidence_cut", reason="over evidence budget",
                  evidence_id=item.id, confidence=item.confidence, rank=ranked.index(item) + 1)
+    _log_recovery_outcome(deps, owner_id, run_id, research, items, kept)
     return build(kept)
+
+
+def _log_recovery_outcome(deps: Deps, owner_id: str, run_id: str, research: ResearchResults,
+                          validated: list[EvidenceItem], retained: list[EvidenceItem]) -> None:
+    """T18 CS2: for each recovered documents Sub-task, what recovery alone contributed: its
+    chunks no Document Reader selected, the items citing one that passed provenance, figures
+    and entailment, and those kept in the bundle. Retrieval alone never counts."""
+    selected = {(p.observation_id, p.index) for r in research.results
+                if r.status == "succeeded" and r.scope_origin == "doc_reader"
+                for ref in r.source_refs for p in ref.passages}
+    for r in research.results:
+        if r.scope_origin != "search_recovery":
+            continue
+        chunks = {(p.observation_id, p.index) for ref in r.source_refs for p in ref.passages}
+        only = chunks - selected
+
+        def citing(items: list[EvidenceItem]) -> int:
+            return sum(1 for i in items if any(_key(s) in only for s in i.supporting))
+
+        deps.log(owner_id, run_id, "document_recovery_outcome", subtask_id=r.subtask_id,
+                 recovered_chunks=len(chunks), recovered_only_chunks=len(only),
+                 validated_items=citing(validated), retained_items=citing(retained))
 
 
 def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Window]) -> list[_Candidate]:
@@ -327,20 +359,24 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
 
 def literal_problem(
     *, statement: str, entities: list[str], entity: str, passage_text: str,
-    common: frozenset[str] | None = None,
+    common: frozenset[str] | None = None, document_entity: str | None = None,
 ) -> str | None:
     """Every number and every name the statement asserts must appear in the Passage
     (`domain/provenance`, T18 CS1B: a model-written entity label counts only through the names
     the statement itself uses). Returns the reason it does not, or None. Lexical only: it says
     nothing about whether the Passage supports the statement. `common` is the lower-case
-    vocabulary of the Passages the Run read; without it, that of this Passage and statement."""
+    vocabulary of the Passages the Run read; without it, that of this Passage and statement.
+    `document_entity` (uploaded documents only, T18 CS2): the company the document speaks for,
+    accepted in a chunk of that document that names no one else."""
     missing_numbers = unsupported_numbers(statement, passage_text)
     if missing_numbers:
         return f"value not in Passage: {sorted(missing_numbers)}"
+    vocabulary = common if common is not None else common_words([passage_text, statement])
     names = missing_names(statement=statement, entities=entities, entity=entity,
-                          passage_text=passage_text,
-                          common=common if common is not None else common_words(
-                              [passage_text, statement])).missing
+                          passage_text=passage_text, common=vocabulary).missing
+    if names and credited_by_document(names, entity=document_entity, statement=statement,
+                                      chunk_text=passage_text, common=vocabulary):
+        names = []
     if names:
         return f"name not in Passage: {names}"
     return None
@@ -350,7 +386,7 @@ def _validate(
     deps: Deps, owner_id: str, run_id: str, c: _Candidate, source_by_obs: dict[str, Source],
     fetched_on: dict[str, date], facts_at: dict[tuple[str, int], list[ExtractedFact]],
     facts_by_group: dict[tuple[str, str, str], list[ExtractedFact]],
-    common: frozenset[str] | None = None,
+    common: frozenset[str] | None = None, entity_of: dict[str, str | None] | None = None,
 ) -> EvidenceItem | None:
     def drop(reason: str, **extra) -> None:
         deps.log(owner_id, run_id, "evidence_dropped", reason=reason, evidence_id=c.id,
@@ -379,7 +415,8 @@ def _validate(
             continue
         candidates.append(passage)
         problem = literal_problem(statement=c.statement, entities=c.entities,
-                                  entity=c.entity, passage_text=passage.text, common=common)
+                                  entity=c.entity, passage_text=passage.text, common=common,
+                                  document_entity=(entity_of or {}).get(ref.observation_id))
         if problem:
             reject(ref, problem)
         else:

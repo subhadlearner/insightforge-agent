@@ -642,3 +642,60 @@ def test_a_sentence_initial_wrong_company_is_dropped_with_empty_entity_fields(wo
     assert dropped["subtask_id"] == "s1"
     (ref,) = dropped["refs"]
     assert ref["index"] == 0 and ref["reason"] == "name not in Passage: ['Tesla']"
+
+
+# =============================== T18 CS2: an uploaded document's own company ================
+
+NORTHWIND_CHUNKS = [
+    "Northwind Health revenue reached 612 million dollars in fiscal 2025.",
+    "A single supplier provides the titanium used in orthopaedic implants. Pricing pressure "
+    "from hospital purchasing groups reduced average selling prices.",
+    "Medtronic reported that a single supplier provides the titanium used in its implants.",
+    "Northwind Health expects fiscal 2026 revenue growth of 9 to 11 percent.",
+]
+
+
+def northwind(world):
+    from insightforge_agent.stores.source_store import PassageDraft
+
+    obs = world.deps.store.ingest_document(
+        owner_id=OWNER, run_id=RUN, content_hash="nw", filename="northwind-health-annual-report-2025.pdf",
+        chunks=[PassageDraft(t, page=1) for t in NORTHWIND_CHUNKS], fetched_at=NOW,
+        credibility_score=0.7)
+    world.sources["nw"] = obs.source_id
+    return world.plan(("s1", "a1", 1)), world.research(s1=["nw"])
+
+
+def test_the_documents_own_company_may_be_named_for_its_own_chunks_only(world):
+    plan, research = northwind(world)
+    statement = "Northwind Health discloses that a single supplier provides the titanium."
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": statement, "passages": [n]} for n, t in ps
+                             if "single supplier" in t],
+        entail=all_supported)
+    (item,) = world.items(world.synth(plan, research))
+    assert [r.index for r in item.supporting] == [1]  # its own risk chunk, not Medtronic's
+    (dropped_ref,) = [r for d in world.events("evidence_dropped") for r in d.get("refs", [])] or [
+        None]
+    assert dropped_ref is None  # the item survived on chunk 1; chunk 2 only failed alone
+
+
+def test_a_chunk_about_another_company_is_never_attributed_to_the_documents_company(world):
+    plan, research = northwind(world)
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": "Northwind Health discloses that a single supplier "
+                                           "provides the titanium.",
+                              "passages": [n for n, t in ps if t.startswith("Medtronic")]}],
+        entail=all_supported)
+    assert world.items(world.synth(plan, research)) == []
+    (dropped,) = world.events("evidence_dropped")
+    assert "name not in Passage" in dropped["rejected"][0]
+
+
+def test_a_web_passage_never_gets_the_document_credit(world):
+    plan, research = one_source(world, body="A single supplier provides the titanium.")
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": "Northwind Health discloses that a single supplier "
+                                           "provides the titanium.", "passages": [1]}],
+        entail=all_supported)
+    assert world.items(world.synth(plan, research)) == []

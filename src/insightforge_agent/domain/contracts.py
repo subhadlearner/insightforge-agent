@@ -46,6 +46,9 @@ class SubTaskResult(BaseModel):
     subtask_id: str
     status: Literal["succeeded", "failed"]
     source_refs: list[SourceRef] = Field(default_factory=list)
+    # T18 CS2: "search_recovery" when a failed Document Reader's own search results were
+    # recovered as the scope (the Sub-task itself stays FAILED for the user).
+    scope_origin: Literal["doc_reader", "search_recovery"] = "doc_reader"
 
     def passage_scope(self) -> "PassageScope":
         """Per Source, the exact Passages this Sub-task retrieved (by Observation and index),
