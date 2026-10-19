@@ -515,3 +515,29 @@ def test_stage_c_command_exits_2_when_a_fact_rests_on_an_unverified_claim(tmp_pa
     rc, out = cli("stage-c", d)
     assert (rc, out["status"]) == (2, "inconclusive")
     assert "document-annual-report: revenue 612 million: unverified claim" in out["reasons"]
+
+
+# ---- Approval expected, not approval granted ------------------------------------------------
+
+APPROVAL = "Northwind expects regulatory approval for NW-200 in the first half of 2026."
+
+
+@pytest.mark.parametrize("claim, verdict", [
+    (APPROVAL, "covered"),
+    ("NW-200 is on track for regulatory approval in H1 2026.", "covered"),
+    ("Northwind anticipates that NW-200 will receive approval in the first half of 2026.",
+     "covered"),
+    ("Northwind expects NW-200 approval to be granted in the first half of 2026.", "covered"),
+    # Approval already granted is not the forecast the document states.
+    ("NW-200 received regulatory approval in the first half of 2026.", "mismatch"),
+    ("NW-200 was approved by regulators in the first half of 2026.", "mismatch"),
+    ("NW-200 was granted regulatory approval in H1 2026.", "mismatch"),
+    ("Northwind has obtained approval for NW-200 in the first half of 2026.", "mismatch"),
+    # Neither, or both: the rules cannot settle it.
+    ("NW-200 regulatory approval in the first half of 2026.", "candidate"),
+    ("NW-200 received approval in the first half of 2026, earlier than expected.", "candidate"),
+])
+def test_an_approval_already_granted_is_not_the_expected_approval(claim, verdict):
+    texts = [claim if s == APPROVAL else s for s in NORTHWIND]
+    assert document_coverage(body(NORTHWIND, claim_texts=texts))["facts"][
+        "NW-200 approval expected H1 2026"] == verdict

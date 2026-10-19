@@ -181,6 +181,14 @@ _SEGMENTS = {"cardiology": r"cardiolog\w*", "orthopaedic": r"orthop(?:a)?edic\w*
 _COMPARED = re.compile(r"(?:compared (?:with|to)|versus|vs\.?|relative to|against|than|from|over)"
                        r"\s+(?:the\s+)?(?:fiscal\s+(?:year\s+)?|FY\s?)?$", re.IGNORECASE)
 _NORTHWIND = re.compile(r"\bNorthwind\b", re.IGNORECASE)
+_PERIOD_LABEL = re.compile(r"(?:H[12]|Q[1-4]|FY\d*)$", re.IGNORECASE)  # never a company name
+# A forecast ("expects approval in H1 2026"), and the same event stated as already done.
+_FORECAST = re.compile(r"\b(?:expect\w*|anticipat\w*|forecast\w*|project(?:s|ed)|plan(?:s|ned)?|"
+                       r"target\w*|on track|aim\w*|due|scheduled|will|would|may|might|should|"
+                       r"likely|pending|awaiting)\b", re.IGNORECASE)
+_DONE = re.compile(r"\b(?:received|obtained|secured|won|gained|achieved|"
+                   r"(?:was|were|has been|have been|had been) (?:\w+ )?(?:approved|granted|cleared)|"
+                   r"(?<!be )granted)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -192,6 +200,7 @@ class Fact:
     years: frozenset[str] | None = None  # the measured period; another year is a mismatch
     segment: str | None = None  # whose figure: a segment, or "total" (no segment named)
     compared_with: frozenset[str] = frozenset()  # a comparison base, allowed only as one
+    expected: bool = False  # a forecast: stated as expected, never as already done
 
 
 NORTHWIND_FACTS = {
@@ -211,7 +220,7 @@ NORTHWIND_FACTS = {
                                             r"\b(?:6|six)\b", frozenset({"2025"})),
     "NW-200 pivotal trial": Fact((r"NW-200", r"pivotal", r"complet"), None, frozenset({"2025"})),
     "NW-200 approval expected H1 2026": Fact((r"NW-200", r"approv", r"first half|\bH1\b"), None,
-                                             frozenset({"2026"})),
+                                             frozenset({"2026"}), expected=True),
     "single titanium supplier risk": Fact((r"\b(?:single|sole|one)\b", r"supplier", r"titanium")),
     "hospital pricing pressure risk": Fact((r"pric", r"hospital|purchasing",
                                             r"pressure|reduc")),
@@ -247,6 +256,12 @@ def _judge_sentence(fact: Fact, sentence: str) -> str:
             return "mismatch"  # another segment's figure, or a segment's figure as the total
     if _NEGATION.search(sentence):
         return "mismatch"
+    if fact.expected:
+        done, forecast = _DONE.search(sentence), _FORECAST.search(sentence)
+        if done and not forecast:
+            return "mismatch"  # stated as already done ("NW-200 received approval")
+        if done or not forecast:
+            return "candidate"  # both, or neither: not settled
     if fact.years is not None:
         stated = [(m.group(), m.start()) for m in _YEAR.finditer(sentence)]
         # A comparison base ("compared with fiscal 2024") is not the measured period.
@@ -308,7 +323,8 @@ def _attributed(verdict: str, claim: str, item: dict | None, common: frozenset[s
         return verdict
     cited = item or {"statement": "", "entity": ""}
     known = {t.casefold() for t in tokens(f"{cited['statement']} {cited.get('entity') or ''}")}
-    if any(n.casefold() not in known for n in asserted_names(claim, common)):
+    if any(n.casefold() not in known and not _PERIOD_LABEL.match(n)
+           for n in asserted_names(claim, common)):
         return "mismatch"  # attributed to a company the cited Evidence does not name
     who = _attribution(item)
     if who == "other":
