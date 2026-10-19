@@ -38,7 +38,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from qdrant_client import QdrantClient
 
 from insightforge_agent.config import Settings
-from insightforge_agent.evaluation.judge import RUBRIC_VERSION
+from insightforge_agent.evaluation.judge import JUDGE_PROMPT_VERSION, RUBRIC_VERSION
 from insightforge_agent.evaluation.library import (
     LibraryError,
     library_fingerprint,
@@ -195,7 +195,7 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
             return _cannot_build(f"the {opts.judge_provider} judge", e)
         identity = JudgeIdentity(
             provider=opts.judge_provider, rubric_version=RUBRIC_VERSION,
-            model=configured_model_name(JUDGE_ROLE, judge_settings),
+            prompt_version=JUDGE_PROMPT_VERSION, model=configured_model_name(JUDGE_ROLE, judge_settings),
             runtime_model=_model_id(judge), role=JUDGE_ROLE, inference=_inference(judge))
     try:
         out = allocate_evaluation_dir(opts.out, started.strftime(STAMP_FORMAT))

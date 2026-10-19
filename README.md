@@ -492,6 +492,7 @@ T16 added a five-Brief sample library (`samples/briefs/`) and an `eval` command 
 ```bash
 uv run insightforge-agent eval --provider gemini --judge-provider none            # all five
 uv run insightforge-agent eval --provider anthropic --judge-provider anthropic --brief market-sizing-solar
+uv run insightforge-agent eval-judge --from eval-results/<timestamp> --judge-provider anthropic  # re-judge stored Reports into a separate report
 ```
 
 **This makes real, possibly paid, model and search calls.** It is never run by the test

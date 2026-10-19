@@ -28,6 +28,10 @@ from insightforge_agent.domain.models import Report
 from insightforge_agent.evaluation.library import SampleBrief
 
 RUBRIC_VERSION = "synthesis-rubric-v1"
+# The prompt around the rubric. judge-prompt-2 (T18 CS5) states the rationale's character limit,
+# which judge-prompt-1 (T16-T18 baseline) left unsaid; the criteria and scores are unchanged.
+JUDGE_PROMPT_VERSION = "judge-prompt-2"
+MAX_RATIONALE_CHARS = 600
 
 CRITERIA = {
     "coverage": "Answers every part of the Brief and fills the expected sections, or says in "
@@ -46,10 +50,10 @@ Score each criterion with a whole number from 1 (poor) to 5 (excellent):
 Do not judge factual accuracy or citations: those are measured separately. Judge only from the
 brief, the expected structure and the report text you are given.
 Reply with JSON only: {"coverage": int, "organisation": int, "synthesis": int,
-"calibration": int, "rationale": str (at most 3 sentences)}"""
+"calibration": int, "rationale": str (at most 3 sentences and at most """ + str(
+    MAX_RATIONALE_CHARS) + """ characters)}"""
 
 Score = Field(ge=1, le=5)
-MAX_RATIONALE_CHARS = 600
 # Required, a string, trimmed, then at least one character and at most the maximum: an
 # overlong one is refused, never cut.
 Rationale = Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1,
@@ -111,7 +115,9 @@ def judge_synthesis(model: BaseChatModel, sample: SampleBrief, report: Report) -
     try:
         sheet = ask_json(model, SYSTEM, user, ScoreSheet)
     except BadModelReply as e:
-        return SynthesisResult(status="error", reason=f"invalid judge reply: {e.brief}")
+        # The bounded diagnostic (error types, length, stop reason, 200-character head and
+        # tail), so a refusal is explained; the reply itself is never kept or scored.
+        return SynthesisResult(status="error", reason=f"invalid judge reply: {e}")
     except Exception as e:  # noqa: BLE001 - a provider failure is recorded, never scored
         return SynthesisResult(status="error", reason=f"judge call failed: {type(e).__name__}: {e}")
     scores = {name: getattr(sheet, name) for name in CRITERIA}

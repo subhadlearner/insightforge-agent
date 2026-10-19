@@ -33,6 +33,10 @@ def main() -> None:
         from insightforge_agent.benchmark.cli import main as bench
 
         raise SystemExit(bench(sys.argv[2:]))
+    if sys.argv[1:2] == ["eval-judge"]:
+        from insightforge_agent.evaluation.judge_only import main as judge_only
+
+        raise SystemExit(judge_only(sys.argv[2:]))
     if sys.argv[1:2] == ["eval"]:
         from insightforge_agent.evaluation.cli import main as evaluate
 

@@ -395,7 +395,8 @@ def test_provider_and_judge_identity_are_recorded_from_what_ran(full_run):
     assert report["judge"] == {"provider": "groq", "model": "openai/gpt-oss-120b",
                                "runtime_model": "TunedChat", "role": "writer",
                                "inference": {"temperature": 0.0, "max_tokens": 16000},
-                               "rubric_version": RUBRIC_VERSION}
+                               "rubric_version": RUBRIC_VERSION,
+                               "prompt_version": "judge-prompt-2"}
     assert {s["synthesis"]["status"] for s in result["samples"]} == {"judged"}
     assert result["totals"]["synthesis"]["mean_score"] == 4.0
 

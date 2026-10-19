@@ -97,6 +97,9 @@ class CodeVersion(BaseModel):
 class JudgeIdentity(BaseModel):
     provider: str  # a chat provider, or "none"
     rubric_version: str
+    # The judge prompt around the rubric; None in reports written before it was recorded
+    # (judge-prompt-1, as in the T18 baseline).
+    prompt_version: str | None = None
     model: str | None = None  # the configured model id
     runtime_model: str | None = None  # the class and model id that ran
     role: str | None = None  # whose Settings model the judge is

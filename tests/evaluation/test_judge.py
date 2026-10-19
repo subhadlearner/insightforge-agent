@@ -136,3 +136,28 @@ def test_a_judge_call_that_raises_is_an_error():
 def test_without_a_judge_synthesis_is_not_judged():
     result = not_judged("--judge-provider none")
     assert result.status == "not_judged" and result.score is None and result.scores is None
+
+
+# ---- T18 CS5: the judge is told the limit it is held to; a refusal says why -----------------
+
+def test_the_prompt_states_the_600_character_limit_and_has_its_own_version():
+    from insightforge_agent.evaluation.judge import JUDGE_PROMPT_VERSION, MAX_RATIONALE_CHARS, SYSTEM
+
+    assert MAX_RATIONALE_CHARS == 600 and "at most 600 characters" in SYSTEM
+    assert JUDGE_PROMPT_VERSION == "judge-prompt-2"
+    assert RUBRIC_VERSION == "synthesis-rubric-v1"  # the scoring rubric itself is unchanged
+    for text in CRITERIA.values():
+        assert text in SYSTEM
+
+
+@pytest.mark.parametrize("reply, error_type", [
+    (with_rationale("x" * 601), "string_too_long"),
+    (json.dumps(json.loads(sheet()) | {"accuracy": 5}), "extra_forbidden"),
+    ('{"coverage": 4, "organisation": 4, "synthesis": 4, "calibration": 4, "rationale": "cut',
+     "json_invalid"),
+], ids=["over-long rationale", "extra key", "cut off"])
+def test_an_invalid_reply_keeps_its_bounded_validation_error_type_and_length(reply, error_type):
+    result = judge_synthesis(judge(reply), SAMPLE, stored())
+    assert result.status == "error" and result.score is None and result.scores is None
+    assert error_type in result.reason and f"{len(reply)} chars" in result.reason
+    assert len(result.reason) < 1000  # bounded: head and tail only, never the whole reply
