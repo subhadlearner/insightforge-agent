@@ -6,6 +6,9 @@ evaluation:
     uv run python -m tests.t18_acceptance b3 <judge-report.json>
     uv run python -m tests.t18_acceptance stage-c <evaluation dir>
 
+Both commands print a JSON result and exit 0 only on pass: 1 failed, 2 inconclusive, 3 the input
+could not be read. They read their input and never write it.
+
 Each rule returns failures (or a status) with case-level detail. A rule never passes on a
 diagnostic alone: an error type, a logged reason or a Gap line explains a miss, it is not a
 success. External unavailability (the Run never fetched the facts) is kept apart from pipeline
@@ -15,6 +18,7 @@ import json
 import re
 import sqlite3
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # ---- Stage B-1: entailment calibration -------------------------------------------------------
@@ -127,28 +131,139 @@ def b3_outcome(judge_report: dict, expected_samples: int = 5) -> tuple[str, list
 
 
 # ---- Stage C: research coverage --------------------------------------------------------------
+#
+# Deterministic matching can show a fact is stated, or plainly misstated (another segment's
+# figure, a negated or other-period statement); it cannot prove meaning. So a fact is "covered"
+# only when a Report Claim's own text states it and cites retained Evidence that states it too;
+# anything the rules cannot settle is a "candidate" for manual adjudication, never a pass.
 
-# The facts the sample Northwind PDF states (samples/briefs/document-annual-report.yml and its
-# document): each must be retained Evidence and cited by a Report Claim.
+_SENTENCE = re.compile(r"(?<=[.!?;])\s+")
+_YEAR = re.compile(r"\b20\d\d\b")
+_NEGATION = re.compile(r"\b(?:not|no|never|without|denied|rejected|unlikely|cannot|can't|won't|"
+                       r"didn't|doesn't|isn't|wasn't|failed|fails)\b", re.IGNORECASE)
+_SEGMENTS = {"cardiology": r"cardiolog\w*", "orthopaedic": r"orthop(?:a)?edic\w*",
+             "diagnostics": r"diagnostic\w*"}
+
+
+@dataclass(frozen=True)
+class Fact:
+    """A fact the sample Northwind PDF states, as matchable parts of one sentence."""
+
+    terms: tuple[str, ...]  # each must appear in the sentence
+    figure: str | None = None  # the exact figure stated, if any
+    years: frozenset[str] | None = None  # allowed years; another year is a mismatch
+    segment: str | None = None  # whose figure: a segment, or "total" (no segment named)
+
+
 NORTHWIND_FACTS = {
-    "revenue 612 million": r"\b612 million\b",
-    "growth 14 percent": r"\b14 ?(?:percent|%)",
-    "cardiology segment 341 million": r"\b341 million\b",
-    "orthopaedic segment 187 million": r"\b187 million\b",
-    "diagnostics segment 84 million": r"\b84 million\b",
-    "R&D spending 71 million": r"\b71 million\b",
-    "6 programmes in clinical trials": r"\b(?:6|six) (?:clinical )?programmes?\b",
-    "NW-200 pivotal trial": r"NW-200.*pivotal|pivotal.*NW-200",
-    "NW-200 approval expected H1 2026": r"(?=.*NW-200)(?=.*approv)(?=.*2026)",  # any order
-    "single titanium supplier risk": r"titanium",
-    "hospital pricing pressure risk": r"pricing pressure|average selling prices?",
-    "NW-200 delay risk": r"delays? to the NW-200|NW-200.*delay|delay.*NW-200",
-    "fiscal 2026 outlook 9 to 11 percent": r"\b9 (?:to|-) ?11 ?(?:percent|%)",
+    "revenue 612 million": Fact((r"revenue",), r"\b612 million\b", frozenset({"2025"}), "total"),
+    "growth 14 percent": Fact((r"\bgr[eo]w|growth|increas|\brose\b",), r"\b14 ?(?:percent|%)",
+                              frozenset({"2024", "2025"}), "total"),
+    "cardiology segment 341 million": Fact((r"contribut|revenue|sales",), r"\b341 million\b",
+                                           frozenset({"2025"}), "cardiology"),
+    "orthopaedic segment 187 million": Fact((r"contribut|revenue|sales",), r"\b187 million\b",
+                                            frozenset({"2025"}), "orthopaedic"),
+    "diagnostics segment 84 million": Fact((r"contribut|revenue|sales",), r"\b84 million\b",
+                                           frozenset({"2025"}), "diagnostics"),
+    "R&D spending 71 million": Fact((r"research and development|R&D",
+                                     r"spen[dt]|expens|expenditure|invest"), r"\b71 million\b",
+                                    frozenset({"2025"})),
+    "6 programmes in clinical trials": Fact((r"programmes?|programs?", r"clinical|trial"),
+                                            r"\b(?:6|six)\b", frozenset({"2025"})),
+    "NW-200 pivotal trial": Fact((r"NW-200", r"pivotal", r"complet"), None, frozenset({"2025"})),
+    "NW-200 approval expected H1 2026": Fact((r"NW-200", r"approv", r"first half|\bH1\b"), None,
+                                             frozenset({"2026"})),
+    "single titanium supplier risk": Fact((r"\b(?:single|sole|one)\b", r"supplier", r"titanium")),
+    "hospital pricing pressure risk": Fact((r"pric", r"hospital|purchasing",
+                                            r"pressure|reduc")),
+    "NW-200 delay risk": Fact((r"delay", r"NW-200", r"defer|cardiology revenue")),
+    "fiscal 2026 outlook 9 to 11 percent": Fact((r"expect|outlook|guidance|forecast",),
+                                                r"\b9 ?(?:to|-) ?11 ?(?:percent|%)",
+                                                frozenset({"2026"}), "total"),
 }
+_RANK = {"match": 3, "candidate": 2, "mismatch": 1, "absent": 0}
+
+
+def _segment_of(sentence: str, at: int) -> str | None:
+    """The segment named nearest before position `at` (else nearest after), if any."""
+    found = [(m.start(), name) for name, pattern in _SEGMENTS.items()
+             for m in re.finditer(pattern, sentence, re.IGNORECASE)]
+    if not found:
+        return None
+    before = [f for f in found if f[0] <= at]
+    return (max(before) if before else min(found))[1]
+
+
+def _judge_sentence(fact: Fact, sentence: str) -> str:
+    # A figure is a whole number, never part of a decimal or a longer number ("6" in "6.34").
+    figure = (re.search(rf"(?<![\d.,]){fact.figure}(?![.,]?\d)", sentence, re.IGNORECASE)
+              if fact.figure else None)
+    if fact.figure and not figure:
+        return "absent"
+    if not all(re.search(t, sentence, re.IGNORECASE) for t in fact.terms):
+        return "absent"  # not about this fact at all
+    if fact.segment and figure:
+        named = _segment_of(sentence, figure.start())
+        if (fact.segment == "total" and named) or (fact.segment != "total" and named != fact.segment):
+            return "mismatch"  # another segment's figure, or a segment's figure as the total
+    if _NEGATION.search(sentence):
+        return "mismatch"
+    if fact.years is not None:
+        years = set(_YEAR.findall(sentence))
+        if years and not years & fact.years:
+            return "mismatch"  # another period
+        if not years:
+            return "candidate"  # the period is not stated: not established
+    return "match"
+
+
+def judge_fact(fact: Fact, text: str) -> str:
+    """'match', 'candidate', 'mismatch' or 'absent': the best verdict over the text's sentences."""
+    verdicts = [_judge_sentence(fact, s) for s in _SENTENCE.split(text.strip()) if s]
+    return max(verdicts or ["absent"], key=_RANK.__getitem__)
+
+
+def _claims_and_items(body: dict) -> tuple[list[dict], dict[str, str]]:
+    """Current Report Claims, and retained Evidence statements by id."""
+    claims = [c for s in body["draft"]["sections"] for c in s["claims"] if not c.get("historical")]
+    items = {i["id"]: i["statement"] for s in body["evidence"]["sections"] for i in s["items"]}
+    return claims, items
+
+
+def document_coverage(body: dict) -> dict:
+    """Per Northwind fact, in this order: 'mismatch' if any Claim misstates it (another
+    segment's figure, another period, negated), even beside a correct one; 'covered' if a Claim
+    states it and cites retained Evidence that states it; 'candidate' if only one side states it
+    or a side is unsettled (manual adjudication); 'retained, not claimed'; 'mismatch' if only
+    Evidence misstates it; else 'missing'. Gap lines are never read."""
+    claims, items = _claims_and_items(body)
+    facts = {}
+    for name, fact in NORTHWIND_FACTS.items():
+        on_items = {i: judge_fact(fact, s) for i, s in items.items()}
+        pairs = [(judge_fact(fact, c["text"]), on_items.get(c["evidence_id"], "absent"))
+                 for c in claims]
+        if any(claim == "mismatch" for claim, _ in pairs):
+            facts[name] = "mismatch"
+        elif ("match", "match") in pairs:
+            facts[name] = "covered"
+        elif any(claim in ("match", "candidate") or item in ("match", "candidate")
+                 for claim, item in pairs) or "candidate" in on_items.values():
+            facts[name] = "candidate"
+        elif "match" in on_items.values():
+            facts[name] = "retained, not claimed"
+        elif "mismatch" in on_items.values():
+            facts[name] = "mismatch"
+        else:
+            facts[name] = "missing"
+    values = set(facts.values())
+    status = ("failed" if values & {"missing", "mismatch", "retained, not claimed"} else
+              "inconclusive" if "candidate" in values else "pass")
+    return {"status": status, "facts": facts}
+
 
 # The regulatory Brief's core objective (Nvidia's China revenue and the H20 effect). Known facts
-# from the sources T18 fetched pass outright; any other China-revenue or H20-charge statement is a
-# candidate for manual review (a revenue-sharing arrangement is not China revenue).
+# from the sources T18 fetched pass outright; any other figure-bearing statement on the objective
+# is a candidate for manual review (a revenue-sharing arrangement is not China revenue).
 REGULATORY_OBJECTIVES = {
     "Nvidia China revenue": {
         "known": [r"17(?:\.1)? billion", r"\b13 ?%.*(?:revenue|sales)|(?:revenue|sales).*\b13 ?%",
@@ -165,79 +280,82 @@ REGULATORY_OBJECTIVES = {
 _FIGURE = re.compile(r"\$?\d[\d,.]*\s*(?:billion|million|%|percent)", re.IGNORECASE)
 
 
-def _retained_and_claimed(body: dict) -> list[tuple[str, bool]]:
-    """Each retained Evidence statement, and whether a current Report Claim cites it."""
-    cited = {c["evidence_id"] for s in body["draft"]["sections"] for c in s["claims"]
-             if not c.get("historical")}
-    return [(i["statement"], i["id"] in cited)
-            for s in body["evidence"]["sections"] for i in s["items"]]
-
-
-def document_coverage(body: dict) -> dict:
-    """Per Northwind fact: 'covered' (retained Evidence cited by a Claim), 'retained, not
-    claimed', or 'missing'. Gap lines are never read: they explain, they do not cover."""
-    items = _retained_and_claimed(body)
-    out = {}
-    for fact, pattern in NORTHWIND_FACTS.items():
-        hits = [claimed for statement, claimed in items
-                if re.search(pattern, statement, re.IGNORECASE)]
-        out[fact] = "covered" if any(hits) else ("retained, not claimed" if hits else "missing")
-    status = "pass" if all(v == "covered" for v in out.values()) else "failed"
-    return {"status": status, "facts": out}
-
-
 def regulatory_coverage(body: dict, fetched_texts: list[str]) -> dict:
-    """Per objective: 'covered' (a known fact retained and claimed), 'candidate' (another
-    figure-bearing statement on the objective, retained and claimed: manual review), or, when
-    absent, 'pipeline loss' if the Run's own fetched text stated it (a failure) or 'not fetched'
-    (external unavailability: inconclusive)."""
-    items = [(s, c) for s, c in _retained_and_claimed(body) if c]
+    """Per objective: 'covered' (a Claim states a known fact and cites retained Evidence that
+    does), 'candidate' (another figure-bearing statement on it: manual review), 'retained, not
+    claimed', or, when absent, 'pipeline loss' if the Run's own fetched text stated it (a
+    failure) or 'not fetched' (external unavailability: inconclusive)."""
+    claims, items = _claims_and_items(body)
     out = {}
     for name, o in REGULATORY_OBJECTIVES.items():
         def about(text: str) -> bool:
             return bool(re.search(o["about"], text, re.IGNORECASE)
                         and not re.search(o["not"], text, re.IGNORECASE)
-                        and _FIGURE.search(text))
-        if any(any(re.search(k, s, re.IGNORECASE) for k in o["known"]) and about(s)
-               for s, _ in items):
+                        and _FIGURE.search(text) and not _NEGATION.search(text))
+
+        def known(text: str) -> bool:
+            return about(text) and any(re.search(k, text, re.IGNORECASE) for k in o["known"])
+
+        pairs = [(c["text"], items.get(c["evidence_id"], "")) for c in claims]
+        if any(known(c) and known(i) for c, i in pairs):
             out[name] = "covered"
-        elif any(about(s) for s, _ in items):
+        elif any(about(c) and about(i) for c, i in pairs):
             out[name] = "candidate"
+        elif any(about(i) for i in items.values()):
+            out[name] = "retained, not claimed"
         elif any(about(t) for t in fetched_texts):
             out[name] = "pipeline loss"
         else:
             out[name] = "not fetched"
     values = set(out.values())
-    status = ("failed" if "pipeline loss" in values else
-              "pass" if values == {"covered"} else
-              "inconclusive")
+    status = ("failed" if values & {"pipeline loss", "retained, not claimed"} else
+              "pass" if values == {"covered"} else "inconclusive")
     return {"status": status, "objectives": out}
 
 
+STAGE_C_BRIEFS = ("document-annual-report", "regulatory-impact-semiconductors")
+_WORST = {"pass": 0, "inconclusive": 1, "failed": 2}
+
+
 def stage_c(evaluation_dir: Path) -> dict:
-    """Applies the Stage C coverage rules to a finished evaluation directory (read-only)."""
+    """The Stage C coverage rules over a finished evaluation directory, read-only. Each target
+    Brief must appear exactly once, as a complete sample; the overall status is the worst."""
     report = json.loads((evaluation_dir / "eval-report.json").read_text(encoding="utf-8"))
-    out = {}
-    for provider in report["providers"]:
-        db = evaluation_dir / provider["provider"] / "eval.db"
+    found = {b: [(p["provider"], s) for p in report["providers"] for s in p["samples"]
+                 if s["sample_id"] == b] for b in STAGE_C_BRIEFS}
+    briefs, reasons = {}, []
+    for brief, entries in found.items():
+        if len(entries) != 1:
+            briefs[brief] = {"status": "failed",
+                             "reason": "missing" if not entries else f"{len(entries)} results"}
+            reasons.append(f"{brief}: {briefs[brief]['reason']}")
+            continue
+        provider, s = entries[0]
+        if s["status"] != "complete" or not s.get("report_id"):
+            briefs[brief] = {"status": "failed", "reason": f"sample status {s['status']}"}
+            reasons.append(f"{brief}: sample status {s['status']}")
+            continue
+        db = evaluation_dir / provider / "eval.db"
         con = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
         try:
-            for s in provider["samples"]:
-                if s["sample_id"] not in ("document-annual-report",
-                                          "regulatory-impact-semiconductors"):
-                    continue
-                if s["status"] != "complete":
-                    out[s["sample_id"]] = {"status": "failed", "reason": s["status"]}
-                    continue
-                body = json.loads(con.execute("SELECT body FROM reports WHERE owner_id=? AND "
-                                              "id=?", (s["owner_id"], s["report_id"])).fetchone()[0])
-                if s["sample_id"] == "document-annual-report":
-                    out[s["sample_id"]] = document_coverage(body)
-                else:
-                    out[s["sample_id"]] = regulatory_coverage(body, fetched_texts(con, s["run_id"]))
+            row = con.execute("SELECT body FROM reports WHERE owner_id=? AND id=?",
+                              (s["owner_id"], s["report_id"])).fetchone()
+            if row is None:
+                briefs[brief] = {"status": "failed", "reason": "stored Report not found"}
+            elif brief == "document-annual-report":
+                briefs[brief] = document_coverage(json.loads(row[0]))
+            else:
+                briefs[brief] = regulatory_coverage(json.loads(row[0]),
+                                                    fetched_texts(con, s["run_id"]))
         finally:
             con.close()
-    return out
+        if briefs[brief]["status"] != "pass":
+            detail = briefs[brief].get("facts") or briefs[brief].get("objectives") or {}
+            reasons += [f"{brief}: {k}: {v}" for k, v in detail.items() if v != "covered"]
+            if "reason" in briefs[brief]:
+                reasons.append(f"{brief}: {briefs[brief]['reason']}")
+    status = max((b["status"] for b in briefs.values()), key=_WORST.__getitem__)
+    return {"status": status, "briefs": briefs, "reasons": reasons}
 
 
 def fetched_texts(con: sqlite3.Connection, run_id: str) -> list[str]:
@@ -249,12 +367,29 @@ def fetched_texts(con: sqlite3.Connection, run_id: str) -> list[str]:
         "ON ob.id = p.observation_id WHERE ob.run_id=?", (run_id,)) if o not in refetched]
 
 
+EXIT = {"pass": 0, "failed": 1, "inconclusive": 2}  # 3: the input could not be read
+
+
+def main(argv: list[str]) -> int:
+    """`b3 <judge-report.json>` or `stage-c <evaluation dir>`: prints a JSON result and exits
+    0 only on pass (1 failed, 2 inconclusive, 3 unreadable input or usage). Reads only."""
+    if len(argv) != 2 or argv[0] not in ("b3", "stage-c"):
+        print(json.dumps({"status": "error", "reasons": ["usage: b3 <judge-report.json> | "
+                                                         "stage-c <evaluation dir>"]}))
+        return 3
+    command, target = argv[0], Path(argv[1])
+    try:
+        if command == "b3":
+            status, detail = b3_outcome(json.loads(target.read_text(encoding="utf-8")))
+            result = {"status": status, "reasons": detail}
+        else:
+            result = stage_c(target)
+    except (OSError, ValueError, KeyError, sqlite3.Error) as e:
+        print(json.dumps({"status": "error", "reasons": [f"{type(e).__name__}: {e}"]}))
+        return 3
+    print(json.dumps(result, indent=1))
+    return EXIT[result["status"]]
+
+
 if __name__ == "__main__":
-    command, target = sys.argv[1], Path(sys.argv[2])
-    if command == "b3":
-        status, detail = b3_outcome(json.loads(target.read_text(encoding="utf-8")))
-        print(json.dumps({"status": status, "detail": detail}, indent=1))
-    elif command == "stage-c":
-        print(json.dumps(stage_c(target), indent=1))
-    else:
-        raise SystemExit(f"unknown command {command!r}")
+    sys.exit(main(sys.argv[1:]))

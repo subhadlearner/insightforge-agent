@@ -18,7 +18,9 @@ def test_the_t18_baseline_fails_stage_c_for_the_recorded_defects():
     if not DIR or not (Path(DIR) / "eval-report.json").is_file():
         pytest.skip("T18_EVAL_DIR is not set to the saved T18 evaluation directory")
     result = stage_c(Path(DIR))
-    document, regulatory = result["document-annual-report"], result["regulatory-impact-semiconductors"]
+    assert result["status"] == "failed" and result["reasons"]
+    briefs = result["briefs"]
+    document, regulatory = briefs["document-annual-report"], briefs["regulatory-impact-semiconductors"]
     assert document["status"] == "failed"
     assert {f for f, v in document["facts"].items() if v == "covered"} == {
         "revenue 612 million", "growth 14 percent", "NW-200 approval expected H1 2026",
