@@ -10,7 +10,9 @@ import { listReports } from "@/lib/api";
 import { STAGE_LABELS } from "@/lib/format";
 import type { RunProgress } from "@/lib/run-reducer";
 import { ClarificationCard } from "./clarification-card";
+import { ActivityLog, RunOverview, SubTaskList } from "./run-overview";
 import { StageProgress } from "./stage-progress";
+import { useElapsed } from "./use-elapsed";
 import { useRunProgress } from "./use-run-progress";
 
 type ReportLookup = { kind: "idle" | "looking" } | { kind: "found"; id: string } | { kind: "missing" };
@@ -58,6 +60,7 @@ function useReportFor(runId: string, complete: boolean): ReportLookup {
 export function RunView({ runId }: { runId: string }) {
   const { state, retry } = useRunProgress(runId);
   const report = useReportFor(runId, state.terminal === "COMPLETE");
+  const elapsed = useElapsed(runId, state);
   // Shown from the question until the end of the Run, and afterwards as a record of how it
   // was resolved (a timeout is not a failure; the Run went ahead without the answer).
   const asked = state.stage === "AWAITING_CLARIFICATION" || state.clarification.status !== "none";
@@ -74,6 +77,8 @@ export function RunView({ runId }: { runId: string }) {
         <StageProgress state={state} />
 
         <div className="run__detail">
+          <RunOverview state={state} elapsed={elapsed} />
+
           {state.connection === "RECONNECTING" && (
             <p className="notice notice--quiet" role="status" data-testid="reconnecting">
               Reconnecting to progress… The Run carries on meanwhile.
@@ -108,6 +113,9 @@ export function RunView({ runId }: { runId: string }) {
               <Link className="button" href="/">Write a new Brief</Link>
             </div>
           )}
+
+          <SubTaskList state={state} />
+          <ActivityLog state={state} />
         </div>
       </div>
     </div>

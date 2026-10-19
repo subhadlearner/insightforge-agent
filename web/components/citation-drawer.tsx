@@ -73,13 +73,13 @@ export function CitationDrawer({ claim, citation, total, onClose, onStep }: {
                 {citation.page != null && (
                   <div>
                     <dt>Page</dt>
-                    <dd>{citation.page}</dd>
+                    <dd data-testid="citation-page">{citation.page}</dd>
                   </div>
                 )}
                 {citation.section_heading && (
                   <div>
                     <dt>Section</dt>
-                    <dd>{citation.section_heading}</dd>
+                    <dd data-testid="citation-section">{citation.section_heading}</dd>
                   </div>
                 )}
               </dl>

@@ -7,6 +7,7 @@ export async function mockApi(importOriginal: () => Promise<unknown>) {
     ...real,
     getPersonas: vi.fn(), getSession: vi.fn(), selectPersona: vi.fn(),
     estimateRuntime: vi.fn(), submitRun: vi.fn(),
+    getRunTiming: vi.fn(() => new Promise<never>(() => {})), // pending unless a test answers it
     getClarification: vi.fn(), answerClarification: vi.fn(),
     listReports: vi.fn(), getReport: vi.fn(), getCitations: vi.fn(),
     listWatchlists: vi.fn(), getWatchlist: vi.fn(), listDiffs: vi.fn(),

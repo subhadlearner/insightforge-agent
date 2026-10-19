@@ -74,10 +74,13 @@ class Deps:
         if self.run_token_cap is not None and self._spent[key] > self.run_token_cap:
             raise RunFailed(f"the Run's token cap of {self.run_token_cap} was exceeded")
 
+    def event(self, owner_id: str, run_id: str, type_: str, **payload) -> RunEvent:
+        """A Run-log event stamped now, for a repository write that stores it with its change."""
+        return RunEvent(owner_id=owner_id, run_id=run_id, type=type_, payload=payload,
+                        created_at=self.now())
+
     def log(self, owner_id: str, run_id: str, type_: str, **payload) -> None:
-        self.repos.events.append(RunEvent(
-            owner_id=owner_id, run_id=run_id, type=type_, payload=payload, created_at=self.now(),
-        ))
+        self.repos.events.append(self.event(owner_id, run_id, type_, **payload))
 
     def completed(self, run: Run) -> Run:
         """Post-processing may never change the research outcome; startup repairs omissions."""

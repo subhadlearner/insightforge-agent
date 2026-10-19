@@ -533,6 +533,142 @@ a {
   color: var(--crimson);
 }
 
+/* T20 B6: the Run overview (milestones, Sub-task count, elapsed), Sub-tasks and activity. */
+.overview {
+  margin: 0 0 1.75rem;
+  padding: 1rem 1.15rem;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+.milestones {
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  overflow: hidden;
+}
+.milestones__fill {
+  display: block;
+  height: 100%;
+  background: var(--verdigris);
+  transition: width 0.4s ease;
+}
+.milestones--stopped .milestones__fill {
+  background: var(--crimson);
+}
+.overview__line {
+  margin: 0.6rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.overview__note {
+  color: var(--graphite);
+  font-size: var(--step--1);
+}
+.run__subtitle {
+  margin: 2rem 0 0.75rem;
+  font-family: var(--font-read);
+  font-size: var(--step-1);
+  font-weight: 500;
+}
+.subtasks__list,
+.activity__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.subtask {
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid var(--rule);
+  background: var(--sheet);
+  margin-bottom: 0.5rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.subtask__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.subtask__id {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere; /* an id may be any length */
+}
+.subtask__aspect {
+  color: var(--graphite);
+}
+.subtask__status {
+  margin-left: auto;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+.subtask__query {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--graphite);
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+.subtask--running,
+.subtask--retrying {
+  border-left-color: var(--verdigris);
+}
+.subtask--done {
+  border-left-color: var(--verdigris-deep);
+}
+.subtask--done .subtask__status {
+  color: var(--verdigris-deep);
+}
+.subtask--failed {
+  border-left-color: var(--crimson);
+}
+.subtask--failed .subtask__status {
+  color: var(--crimson);
+}
+.subtask--queued-for-repair,
+.subtask--not-completed,
+.subtask--outcome-unavailable {
+  border-left-color: var(--amber);
+}
+.subtasks__empty,
+.activity__empty,
+.activity__note {
+  color: var(--graphite);
+}
+.activity__log {
+  max-height: 22rem;
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--sheet);
+}
+.activity__entry {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+}
+.activity__entry:last-child {
+  border-bottom: 0;
+}
+.activity__time {
+  flex: none;
+  color: var(--graphite);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+}
+.activity__entry--done .activity__text {
+  color: var(--verdigris-deep);
+}
+.activity__entry--warn .activity__text {
+  color: var(--amber);
+}
+.activity__entry--failed .activity__text {
+  color: var(--crimson);
+  font-weight: 600;
+}
+
 @keyframes pulse {
   50% {
     box-shadow: 0 0 0 5px var(--verdigris-wash);
@@ -918,6 +1054,50 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* T20 B6: the Report's table of contents, sticky beside the Report on wide screens. */
+.report-layout {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) minmax(0, var(--measure));
+  gap: clamp(1.5rem, 4vw, 3rem);
+  justify-content: center;
+  align-items: start;
+}
+.report-toc {
+  position: sticky;
+  top: 1.5rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  font-size: var(--step--1);
+}
+.report-toc__title {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--graphite);
+}
+.report-toc__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-left: 2px solid var(--rule);
+}
+.report-toc__list a {
+  display: block;
+  padding: 0.3rem 0 0.3rem 0.75rem;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.report-toc__list a:hover,
+.report-toc__list a:focus-visible {
+  color: var(--verdigris-deep);
+  text-decoration: underline;
+}
+.report__heading {
+  scroll-margin-top: 1.5rem;
+}
+
 /* --- small screens and motion --------------------------------------------------------- */
 
 @media (max-width: 52rem) {
@@ -935,6 +1115,18 @@ a {
   }
   .report {
     font-size: 1.0625rem;
+  }
+  .report-layout {
+    display: block;
+  }
+  .report-toc {
+    position: static;
+    max-height: none;
+    margin: 0 0 1.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
   }
 }
 
@@ -1047,8 +1239,12 @@ a {
   }
   .masthead,
   .report-actions,
+  .report-toc,
   .skip-link {
     display: none !important;
+  }
+  .report-layout {
+    display: block;
   }
   .page {
     max-width: none;

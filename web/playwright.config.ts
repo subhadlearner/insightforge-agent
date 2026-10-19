@@ -31,7 +31,7 @@ export default defineConfig({
     {
       command: `npm run build && npm run start -- -p ${WEB_PORT}`,
       url: `http://localhost:${WEB_PORT}`,
-      env: { INSIGHTFORGE_API_ORIGIN: API_ORIGIN },
+      env: { INSIGHTFORGE_API_ORIGIN: API_ORIGIN, NEXT_TELEMETRY_DISABLED: "1" },
       timeout: 300_000,
       reuseExistingServer: false,
     },

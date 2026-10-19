@@ -71,11 +71,19 @@ class RunRepository(Protocol):
 
 @runtime_checkable
 class SubTaskRepository(Protocol):
-    def save_plan(self, owner_id: str, run_id: str, records: list[SubTaskRecord]) -> None: ...
+    """`event`, when given, is appended to the Run log in the same atomic write as the change:
+    both are stored or neither is, so the Run page (which reads the log) and the stored plan
+    or outcome never disagree."""
+
+    def save_plan(self, owner_id: str, run_id: str, records: list[SubTaskRecord],
+                  event: RunEvent | None = None) -> None: ...
     def list(self, owner_id: str, run_id: str) -> list[SubTaskRecord]: ...
     def set_status(
-        self, owner_id: str, run_id: str, subtask_id: str, status: SubTaskStatus
-    ) -> None: ...
+        self, owner_id: str, run_id: str, subtask_id: str, status: SubTaskStatus,
+        event: RunEvent | None = None,
+    ) -> None:
+        """Raises NotFoundError for an unknown Sub-task; nothing is stored then."""
+        ...
 
 
 @runtime_checkable

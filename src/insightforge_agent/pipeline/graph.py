@@ -101,6 +101,21 @@ def runnable_source_types(deps: Deps) -> list[str]:
     wired = {"web": True, "documents": deps.doc_index is not None and deps.chunker is not None,
              "memory": deps.report_index is not None}
     return [t for t in IMPLEMENTED_SOURCE_TYPES if wired[t]]
+
+# The Sub-task lifecycle the Run page shows (Queued, Running, Done, Failed), each written from
+# an authoritative point: the stored plan, an accepted dispatch, a validated outcome.
+PLAN_ACCEPTED = "plan_accepted"  # {sub_tasks: [{id, aspect, query, source_type}]}
+SUBTASK_STARTED = "subtask_started"  # {subtask_id, phase: research | repair}
+SUBTASK_FINISHED = "subtask_finished"  # {subtask_id, outcome: succeeded | failed}
+
+
+def plan_listing(plan: SubTaskPlan) -> list[dict]:
+    """The accepted plan as the Run page lists it: no time horizon, priority or prompt."""
+    aspect = {a.id: a.name for a in plan.aspects}
+    return [{"id": t.id, "aspect": aspect[t.aspect_id], "query": t.query,
+             "source_type": t.source_type} for t in plan.sub_tasks]
+
+
 DESCRIPTION_RULE = ('Each task description must be exactly "SUBTASK_ID=<id> <query>", with the '
                     "query copied verbatim and nothing added.")
 
@@ -222,6 +237,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
     recorded: set[str] = set()  # compaction_ids this process has seen in the Run log
     approved: dict[str, str] = {}  # Sub-task id -> query the Planner may dispatch right now
     agent_of: dict[str, str] = {}  # Sub-task id -> the subagent its source type needs
+    dispatch_round: list[str] = ["research"]  # the round an accepted dispatch belongs to: research or repair
 
     def planner_for(state: State):
         if "planner" not in holder:
@@ -253,7 +269,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                     lambda sid, why, text: log_locked(owner, run_id, "dispatch_rejected",
                                                       subtask_id=sid, reason=why,
                                                       description=text),
-                    agent_for=lambda sid: agent_of.get(sid, AGENT_FOR_SOURCE_TYPE["web"])),
+                    agent_for=lambda sid: agent_of.get(sid, AGENT_FOR_SOURCE_TYPE["web"]),
+                    on_accept=lambda sid: log_locked(owner, run_id, SUBTASK_STARTED,
+                                                     subtask_id=sid, phase=dispatch_round[0])),
                 on_compaction=lambda c: record_compaction(owner, run_id, c),
             )
         return holder["planner"]
@@ -374,8 +392,11 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 problems = plan_violations(plan, allowed)
         if plan is None or problems:
             raise RunFailed("; ".join(problems))
+        # The rows and their event in one write: the Run page shows as queued exactly the
+        # Sub-tasks of the stored plan.
         deps.repos.subtasks.save_plan(owner, run_id, [
-            SubTaskRecord(run_id=run_id, subtask=t) for t in plan.sub_tasks])
+            SubTaskRecord(run_id=run_id, subtask=t) for t in plan.sub_tasks],
+            event=deps.event(owner, run_id, PLAN_ACCEPTED, sub_tasks=plan_listing(plan)))
         limitations = []
         if clarification is not None and clarification["resolution"] == "timed_out":
             limitations.append(timeout_limitation(clarification["question"],
@@ -391,6 +412,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
     def researching(state: State) -> State:
         enter(state, RunState.RESEARCHING)
+        dispatch_round[0] = "research"
         approved.clear()
         approved.update({t["id"]: t["query"] for t in state["plan"]["sub_tasks"]})
         listing = listing_of(state, list(approved))
@@ -412,6 +434,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         listing = listing_of(state, state["missing"])
         approved.clear()
         approved.update({i: by_id[i]["query"] for i in state["missing"]})
+        dispatch_round[0] = "repair"
         deps.log(state["owner_id"], state["run_id"], "repair", missing=state["missing"])
         planner_for(state).invoke({"messages": [HumanMessage(
             f"REPAIR: dispatch only these missing Sub-tasks:\n{listing}\n{DESCRIPTION_RULE}")]}, cfg(state))
@@ -438,8 +461,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                              status=outcome.status)
                 results.append(SubTaskResult(subtask_id=sid,
                                              status="succeeded" if ok else "failed"))
-                deps.repos.subtasks.set_status(
-                    owner, run_id, sid, SubTaskStatus.SUCCEEDED if ok else SubTaskStatus.FAILED)
+                settle_subtask(owner, run_id, sid, ok)
                 continue
             if outcome.status == "succeeded" and source_type[sid] == "documents":
                 reply = outcome.dispatch.result or ""
@@ -460,12 +482,21 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 deps.log(owner, run_id, "subtask_failed", subtask_id=sid, status=outcome.status)
             results.append(SubTaskResult(
                 subtask_id=sid, status="succeeded" if ok else "failed", source_refs=refs))
-            deps.repos.subtasks.set_status(
-                owner, run_id, sid, SubTaskStatus.SUCCEEDED if ok else SubTaskStatus.FAILED)
+            settle_subtask(owner, run_id, sid, ok)
         if not any(r.status == "succeeded" for r in results):
             raise RunFailed("every Sub-task failed")
         return {"research": ResearchResults(results=results).model_dump(),
                 "historical": historical.context.model_dump(mode="json")}
+
+    def settle_subtask(owner: str, run_id: str, sid: str, ok: bool) -> None:
+        """Store the validated outcome and its event in one write, so a crash leaves both or
+        neither: the Run page never shows as not completed an outcome that is stored, nor an
+        outcome that is not."""
+        status = SubTaskStatus.SUCCEEDED if ok else SubTaskStatus.FAILED
+        deps.repos.subtasks.set_status(
+            owner, run_id, sid, status,
+            event=deps.event(owner, run_id, SUBTASK_FINISHED, subtask_id=sid,
+                             outcome=status.value.lower()))
 
     def memory_background(state: State, all_outcomes):
         """Historical items for the references each memory Sub-task named that its own

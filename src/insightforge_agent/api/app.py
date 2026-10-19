@@ -264,7 +264,8 @@ def create_app(runtime: Runtime) -> FastAPI:
                                        runtime.repos.events, runtime.settings.sse_poll_seconds,
                                        runtime.settings.sse_max_stream_seconds,
                                        runtime.closing,
-                                       _estimate_coefficients(runtime.settings)))
+                                       _estimate_coefficients(runtime.settings),
+                                       runtime.deps.now))
     app.include_router(clarification_router(runtime.clarifications, user_id))
     app.include_router(watchlist_router(runtime.watchlists, user_id))
     app.include_router(insights_router(runtime.repos, user_id))

@@ -113,21 +113,35 @@ class MemoryRunRepository:
 
 
 class MemorySubTaskRepository:
-    def __init__(self) -> None:
-        self._plans: dict[tuple[str, str], list[SubTaskRecord]] = {}
+    """`event` goes to `events` before the change is made, so an append that fails leaves both
+    unchanged (the SQLite repository uses one transaction)."""
 
-    def save_plan(self, owner_id: str, run_id: str, records: list[SubTaskRecord]) -> None:
+    def __init__(self, events: "MemoryRunEventRepository | None" = None) -> None:
+        self._plans: dict[tuple[str, str], list[SubTaskRecord]] = {}
+        self._events = events
+
+    def _log(self, event: RunEvent | None) -> None:
+        if event is not None:
+            if self._events is None:
+                raise ValueError("this repository was built without a Run log")
+            self._events.append(event)
+
+    def save_plan(self, owner_id: str, run_id: str, records: list[SubTaskRecord],
+                  event: RunEvent | None = None) -> None:
+        self._log(event)
         self._plans[(owner_id, run_id)] = list(records)
 
     def list(self, owner_id: str, run_id: str) -> list[SubTaskRecord]:
         return list(self._plans.get((owner_id, run_id), []))
 
     def set_status(
-        self, owner_id: str, run_id: str, subtask_id: str, status: SubTaskStatus
+        self, owner_id: str, run_id: str, subtask_id: str, status: SubTaskStatus,
+        event: RunEvent | None = None,
     ) -> None:
         records = self._plans.get((owner_id, run_id), [])
         for i, rec in enumerate(records):
             if rec.subtask.id == subtask_id:
+                self._log(event)
                 records[i] = rec.model_copy(update={"status": status})
                 return
         raise NotFoundError(f"sub-task {subtask_id}")
@@ -282,12 +296,12 @@ class MemoryRepos:
 
     def __init__(self) -> None:
         self.runs = MemoryRunRepository()
-        self.subtasks = MemorySubTaskRepository()
+        self.events = MemoryRunEventRepository()
+        self.subtasks = MemorySubTaskRepository(self.events)
         self.sources = MemorySourceRepository()
         self.observations = MemoryObservationRepository()
         self.passages = MemoryPassageRepository()
         self.reports = MemoryReportRepository()
-        self.events = MemoryRunEventRepository()
         self.entities = MemoryEntityRepository()
         self.summaries = MemoryRunSummaryRepository()
         self.lock = threading.RLock()  # same contract as SqliteRepos.lock

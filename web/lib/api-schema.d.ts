@@ -74,6 +74,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/research/{run_id}/timing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Timing */
+        get: operations["timing_research__run_id__timing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/research/status": {
         parameters: {
             query?: never;
@@ -1027,6 +1044,22 @@ export interface components {
          * @enum {string}
          */
         RunState: "INGESTING" | "PLANNING" | "AWAITING_CLARIFICATION" | "RESUMING" | "RESEARCHING" | "EXTRACTING" | "SYNTHESIZING" | "WRITING" | "FACT_CHECKING" | "COMPLETE" | "FAILED";
+        /** RunTimingOut */
+        RunTimingOut: {
+            /** Run Id */
+            run_id: string;
+            state: components["schemas"]["RunState"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Now
+             * Format: date-time
+             */
+            now: string;
+        };
         /** RuntimeEstimateIn */
         RuntimeEstimateIn: {
             /** Source Toggles */
@@ -1349,6 +1382,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuntimeEstimateOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    timing_research__run_id__timing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: {
+                insightforge_persona?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunTimingOut"];
                 };
             };
             /** @description Validation Error */
