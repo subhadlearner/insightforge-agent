@@ -742,6 +742,13 @@ export interface components {
              * @default false
              */
             temporally_ambiguous: boolean;
+            /** Published At */
+            published_at?: string | null;
+            /**
+             * Before Window
+             * @default false
+             */
+            before_window: boolean;
             /**
              * Conflicting
              * @default false
