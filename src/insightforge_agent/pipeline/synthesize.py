@@ -257,6 +257,8 @@ def synthesize(
                  credibility_high_threshold=deps.thresholds.credibility_high,
                  conflicting=item.conflicting,
                  source_ids=[s.id for s in supporting_sources])
+        item = item.model_copy(update={"before_window": before_window(
+            item, by_id[item.subtask_id].time_horizon_months, deps.now().date())})
         items.append(item)
 
     # 5. Rank, then 6. fit to the budget.
@@ -288,6 +290,17 @@ def synthesize(
                  evidence_id=item.id, confidence=item.confidence, rank=ranked.index(item) + 1)
     _log_recovery_outcome(deps, owner_id, run_id, research, items, kept)
     return build(kept)
+
+
+def before_window(item: EvidenceItem, horizon_months: int, today: date) -> bool:
+    """T18 CS4: an item with no stated period whose Source was published more than the
+    Sub-task's time horizon before today may predate the window it asked for. Never set for a
+    stated (or derived) period, and never a claim that the fact is outdated."""
+    p = item.published_at
+    if item.as_of_period != UNKNOWN or p is None:
+        return False
+    months = (today.year - p.year) * 12 + today.month - p.month - (today.day < p.day)
+    return months > horizon_months
 
 
 def _log_recovery_outcome(deps: Deps, owner_id: str, run_id: str, research: ResearchResults,
@@ -534,8 +547,10 @@ def _validate(
             linked += [f.id for f in facts_at.get(_key(ref), [])
                        if f.entity and group_key(f.entity, f.predicate, f.scope) == mine
                        and f.id not in linked]
+    published = source_by_obs[primary.observation_id].published_at
     return EvidenceItem(
         id=c.id, subtask_id=c.subtask.id, aspect_id=c.subtask.aspect_id, statement=c.statement,
+        published_at=published.date() if published else None,
         confidence="LOW", supporting=supported, primary=primary, entity=c.entity,
         predicate=c.predicate, scope=c.scope, value=value, as_of_period=period,
         derived_from=derived, temporally_ambiguous=ambiguous, conflicting=conflicting,

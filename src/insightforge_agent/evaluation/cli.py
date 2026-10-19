@@ -63,6 +63,7 @@ from insightforge_agent.llm import (
     configured_model_name,
 )
 from insightforge_agent.pipeline.deps import Deps
+from insightforge_agent.pipeline.write import WRITER_PROMPT_VERSION
 from insightforge_agent.pipeline.wiring import build_deps
 from insightforge_agent.stores.sqlite import SqliteRepos
 
@@ -148,6 +149,7 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         "draft_structured_output": "on" if deps.native_json is not None else "off",
         "draft_passage_cap": deps.draft_passage_cap,
         "fact_check_method": "f2+counterpart-v1" if deps.fact_check_counterpart else "f2",
+        "writer_prompt_version": WRITER_PROMPT_VERSION,
         # The effective Evidence thresholds: they set Confidence and ranking.
         "credibility_high": deps.thresholds.credibility_high,
         "credibility_medium": deps.thresholds.credibility_medium,

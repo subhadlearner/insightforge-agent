@@ -97,7 +97,7 @@ from insightforge_agent.pipeline.memory import (
     summaries_for_planner,
 )
 from insightforge_agent.pipeline.synthesize import synthesize
-from insightforge_agent.pipeline.write import write_report
+from insightforge_agent.pipeline.write import research_gaps, write_report
 
 IMPLEMENTED_SOURCE_TYPES = ["web", "documents", "memory"]
 
@@ -643,12 +643,21 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
     def writing(state: State) -> State:
         enter(state, RunState.WRITING)
+        owner, run_id = state["owner_id"], state["run_id"]
         research = ResearchResults.model_validate(state["research"])
-        by_id = {t.id: t for t in SubTaskPlan.model_validate(state["plan"]).sub_tasks}
-        gaps = list(state.get("limitations", []))
-        gaps += [f"Sub-task {r.subtask_id} ({by_id[r.subtask_id].query}) produced no usable "
-                 "sources." for r in research.results if r.status == "failed"]
         bundle = EvidenceBundle.model_validate(state["bundle"])
+        # T18 CS4: the gaps come from this Run's own records, in fixed wording.
+        log, cursor = [], 0
+        while batch := deps.repos.events.read_after(owner, run_id, cursor):
+            log += [{"type": e.type, "payload": e.payload} for e in batch]
+            cursor = batch[-1].seq
+        documents = []
+        for sid in state.get("documents", []):
+            contents = deps.store.read_run_source(owner, run_id, sid)
+            documents.append((contents.source.title, contents.passages))
+        gaps = list(state.get("limitations", [])) + research_gaps(
+            plan=SubTaskPlan.model_validate(state["plan"]), research=research, bundle=bundle,
+            events=log, documents=documents)
         draft = write_report(deps, state["owner_id"], state["run_id"], state["brief"], bundle,
                              gaps, historical_of(state))
         return {"draft": draft.model_dump()}

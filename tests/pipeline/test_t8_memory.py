@@ -125,7 +125,7 @@ def writer(mode: str = "good", bad_first: int = 0) -> ScriptedChat:
         state["n"] += 1
         bad = state["n"] <= bad_first
         sections: dict[str, list] = {}
-        for n, (eid, text) in enumerate(re.findall(r"- \[(ev_\w+)\] \(\w+\) (.+)", user)):
+        for n, (eid, text) in enumerate(re.findall(r"- \[(ev_\w+)\] \([^)]*\) (.+)", user)):
             historical = bad and mode == "mark_current" and n == 0
             sections.setdefault("Findings", []).append(
                 {"text": text, "evidence_id": eid, "historical": historical})

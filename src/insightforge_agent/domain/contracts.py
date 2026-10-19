@@ -157,6 +157,10 @@ class EvidenceItem(BaseModel):
     as_of_period: str = "UNKNOWN"
     derived_from: str | None = None  # "observation_date" when the period was derived
     temporally_ambiguous: bool = False
+    # T18 CS4: the primary Source's publication date, and whether an item with no stated period
+    # was published before the time window its Sub-task asked for (possibly stale, not wrong).
+    published_at: date | None = None
+    before_window: bool = False
     conflicting: bool = False
     contradicting: list[PassageRef] = Field(default_factory=list)
     conflict_fact_ids: list[str] = Field(default_factory=list)

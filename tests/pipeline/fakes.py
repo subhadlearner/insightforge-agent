@@ -111,7 +111,7 @@ def writer(bad_first: int = 0) -> ScriptedChat:
 
     def reply(messages) -> AIMessage:
         user = str(messages[-1].content)
-        items = re.findall(r"- \[(ev_\w+)\] \(\w+\) (.+)", user)
+        items = re.findall(r"- \[(ev_\w+)\] \([^)]*\) (.+)", user)
         state["n"] += 1
         bad = state["n"] <= bad_first
         claims = [{"text": t, "evidence_id": "ev_nope" if bad else eid} for eid, t in items]

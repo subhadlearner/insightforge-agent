@@ -27,6 +27,8 @@ from insightforge_agent.agents.llm_json import BadModelReply, ask_json
 from insightforge_agent.domain.contracts import (
     Claim,
     EvidenceBundle,
+    EvidenceItem,
+    ResearchResults,
     HistoricalContext,
     ReportDraft,
     ReportSection,
@@ -58,7 +60,17 @@ background as a current fact, and never set "historical": true on a bundle item.
 Summary: an executive summary of at most 150 words. Every number and name in it must appear
 in the evidence bundle; do not add totals, rates or names the evidence does not state. A
 summary sentence drawing on the historical background must show that item's report date
-inline exactly as "(reported YYYY-MM-DD)", as its historical claim does."""
+inline exactly as "(reported YYYY-MM-DD)", as its historical claim does.
+Each evidence item shows its period ("as of ...") or, when none was stated, its source's
+publication date; a publication date is not the period a figure measures.
+When the evidence or the research gaps do not cover something the brief asks for, say that
+this research did not establish it; never state that a source, document or company lacks or
+does not disclose information.
+Compare two figures directly only when they measure the same thing, in the same unit, for the
+same period and scope; otherwise state each with its period and say why they are not directly
+comparable."""
+# T18 CS4: writer-2 adds the temporal, absence and comparison rules above (writer-1 before).
+WRITER_PROMPT_VERSION = "writer-2"
 
 SUMMARY_MAX_WORDS = 150
 
@@ -156,11 +168,25 @@ def violations(draft: ReportDraft, bundle: EvidenceBundle,
     return problems
 
 
+def _when(item: EvidenceItem) -> str:
+    """What an Evidence line says about time (T18 CS4): the stated period; or that none was
+    stated, with the Source's publication date and, if so, that it may predate the window the
+    Sub-task asked for. Never "outdated"; a publication date is never shown as the period."""
+    if item.as_of_period != "UNKNOWN":
+        if item.derived_from == "observation_date":
+            return f"as of {item.as_of_period}, the date it was read; undated source"
+        return f"as of {item.as_of_period}"
+    when = "period not stated; " + (f"published {item.published_at:%Y-%m}"
+                                    if item.published_at else "undated")
+    return when + ("; may predate the requested window" if item.before_window else "")
+
+
 def render_bundle(bundle: EvidenceBundle) -> str:
+    """The bundle exactly as the Writer is shown it; the Evidence budget counts this text."""
     lines = []
     for s in bundle.sections:
         lines.append(f"## {s.heading} (confidence {s.confidence})")
-        lines += [f"- [{i.id}] ({i.confidence}) {i.statement}" for i in s.items]
+        lines += [f"- [{i.id}] ({i.confidence}; {_when(i)}) {i.statement}" for i in s.items]
     return "\n".join(lines)
 
 
@@ -408,9 +434,12 @@ def write_report(
 ) -> ReportDraft:
     historical = historical or HistoricalContext()
     background = ""
+    if gaps:  # T18 CS4: what this research did not establish, as the pipeline recorded it
+        background += ("\n\nResearch gaps (stated by the pipeline):\n"
+                       + "\n".join(f"- {g}" for g in gaps))
     if historical.items:
-        background = ("\n\nHistorical background (earlier reports, not current evidence):\n"
-                      + render_historical(historical))
+        background += ("\n\nHistorical background (earlier reports, not current evidence):\n"
+                       + render_historical(historical))
     constraint = ""
     last: list[str] = []
     usable: ReportDraft | None = None  # the latest draft whose Claims pass, for `_repair`
@@ -431,11 +460,99 @@ def write_report(
         except BadModelReply as e:
             last = [f"the reply was not valid report JSON: {e.brief}"]
         if not last:
+            _flag_absence(deps, owner_id, run_id, draft.summary)
             return draft.model_copy(update={"gaps": gaps})
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
         constraint = "\n\nYour previous draft broke these rules. Fix them:\n" + "\n".join(
             f"- {p}" for p in last)
     if usable is not None:
         draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief)
+        _flag_absence(deps, owner_id, run_id, draft.summary)
         return draft.model_copy(update={"gaps": gaps})
     raise RunFailed(f"the Writer broke the citation rules after {deps.writer_retries} retries")
+
+
+# T18 CS4: a summary sentence asserting that a source lacks something. Measured, never removed.
+_ABSENCE = re.compile(r"\b(no|only|not|lacks?|lacking|without|absent|none)\b", re.IGNORECASE)
+_ABOUT_SOURCES = re.compile(r"\b(evidence|sources?|documents?|report|filings?|disclos\w*)\b",
+                            re.IGNORECASE)
+_EVIDENCE_QUALIFIED = re.compile(r"\bresearch (?:did|does) not establish\b", re.IGNORECASE)
+
+
+def absence_sentences(summary: str) -> list[str]:
+    """Summary sentences that assert an absence about the evidence or a source, unless worded
+    as what this research did not establish. A measurement for review, not a validator."""
+    return [s for s in _SENTENCE_SPLIT.split(summary.strip())
+            if _ABSENCE.search(s) and _ABOUT_SOURCES.search(s)
+            and not _EVIDENCE_QUALIFIED.search(s)]
+
+
+def _flag_absence(deps: Deps, owner_id: str, run_id: str, summary: str) -> None:
+    found = absence_sentences(summary)
+    if found:
+        deps.log(owner_id, run_id, "summary_absence_flagged", sentences=found)
+
+
+_PROVENANCE_DROP = {"no Passage passes the provenance and literal-value checks",
+                    "draft cites no Passage"}
+
+
+def research_gaps(*, plan, research: ResearchResults, bundle: EvidenceBundle,
+                  events: list[dict], documents: list[tuple[str, list]]) -> list[str]:
+    """What this Run did not establish, from its own records, in fixed wording (T18 CS4):
+    a failed Sub-task with its reported reason; a recovered documents Sub-task with what was
+    kept; a Sub-task whose material produced no kept Evidence, with why; and the sections of an
+    uploaded document no Sub-task read. Never that a Source lacks something, and never that
+    retrieved material was verified."""
+    by_type: dict[str, list[dict]] = {}
+    for e in events:
+        by_type.setdefault(e["type"], []).append(e["payload"])
+
+    def of(type_: str, sid: str) -> list[dict]:
+        return [p for p in by_type.get(type_, []) if p.get("subtask_id") == sid]
+
+    results = {r.subtask_id: r for r in research.results}
+    with_items = {i.subtask_id for s in bundle.sections for i in s.items}
+    lines = []
+    for t in sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id)):
+        r, head = results.get(t.id), f"Sub-task {t.id} ({t.query})"
+        if r is not None and r.scope_origin == "search_recovery":
+            outcome = (of("document_recovery_outcome", t.id) or [{}])[-1]
+            kept = outcome.get("retained_items", 0)
+            lines.append(
+                f"{head}: the Document Reader failed (its search results showed no chunk text); "
+                f"{outcome.get('recovered_chunks', 0)} chunk(s) were recovered from its own "
+                "searches as candidates" + (
+                    f", and {kept} Evidence item(s) citing them were kept after the provenance, "
+                    "figure and entailment checks." if kept else
+                    "; none was kept after the provenance, figure and entailment checks."))
+        elif r is None or r.status == "failed":
+            reason = next((p.get("reason", "") for p in reversed(of("subtask_failed", t.id))), "")
+            if reason.startswith("FAILED:"):
+                lines.append(f"{head} failed: {reason[len('FAILED:'):].strip()[:200]}")
+            else:
+                lines.append(f"{head} produced no usable sources.")
+        elif t.source_type != "memory" and t.id not in with_items:
+            drops = of("evidence_dropped", t.id)
+            provenance = sum(p["reason"] in _PROVENANCE_DROP for p in drops)
+            unsupported = sum(p["reason"] == "no supported Passage" for p in drops)
+            failed_calls = len(of("draft_batch_failed", t.id))
+            line = f"{head}: this research did not establish it"
+            if drops:
+                line += (f"; {len(drops)} drafted item(s) were not kept ({provenance} failed the "
+                         f"provenance or figure checks, {unsupported} not supported by the "
+                         "entailment check)")
+            if failed_calls:
+                line += f"{',' if drops else ';'} and {failed_calls} drafting call(s) failed"
+            lines.append(line + ".")
+    used = {(p.observation_id, p.index) for r in research.results if r.status == "succeeded"
+            for ref in r.source_refs for p in ref.passages}
+    for title, passages in documents:
+        unused: dict[str, int | None] = {}
+        for p in passages:
+            if (p.observation_id, p.index) not in used:
+                unused.setdefault(p.section_heading or f"chunk {p.index}", p.page)
+        if unused:
+            lines.append(f"{title}: not used by this Run: " + ", ".join(
+                f"{h} (p{page})" if page else h for h, page in unused.items()) + ".")
+    return lines

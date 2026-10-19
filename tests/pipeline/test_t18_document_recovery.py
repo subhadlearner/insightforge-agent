@@ -273,3 +273,9 @@ def test_the_t18_northwind_chain_now_keeps_segments_rnd_and_risks(doc_deps):
     (outcome,) = [e.payload for e in events(deps, r, "document_recovery_outcome")]
     assert outcome["recovered_only_chunks"] == len(recovered - selected)
     assert outcome["retained_items"] >= len(only_recovered)
+    # CS4: the Report's gaps state the recovery factually, and nothing claims an absence.
+    report = deps.repos.reports.get_for_run("alice", r.id)
+    gaps = report.body["draft"]["gaps"]
+    assert any("recovered from its own searches as candidates" in g for g in gaps)
+    assert not any("produced no usable sources" in g for g in gaps)
+    assert not any("verified" in g.lower() for g in gaps)
