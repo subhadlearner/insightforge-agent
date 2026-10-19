@@ -10,10 +10,12 @@ from insightforge_agent.agents.llm_json import (
     HEAD_CHARS,
     TAIL_CHARS,
     BadModelReply,
+    StructuredOutputRejected,
     ask_json,
+    ask_structured,
 )
 from insightforge_agent.config import Settings
-from insightforge_agent.llm import build_chat_model
+from insightforge_agent.llm import build_chat_model, native_json
 from tests.scripted import ScriptedChat
 
 pytestmark = pytest.mark.scripted
@@ -237,3 +239,93 @@ def test_the_short_form_given_back_to_the_writer_is_the_old_message():
     assert failure(fenced).brief == f"Items: 1 problem(s) in {text!r}"
     long = '{"items": "' + "y" * 500 + '"}'
     assert failure(long).brief == f"Items: 1 problem(s) in {long[:200]!r}"
+
+
+# ---- T18 CS3: native structured output for drafting, same failure contract --------------------
+
+def structured_anthropic(monkeypatch, text, stop_reason="end_turn", output_tokens=40):
+    """The real installed ChatAnthropic with its HTTP call replaced; records each payload sent."""
+    model = build_chat_model("light", Settings(llm_provider="anthropic", anthropic_api_key="x",
+                                                    tavily_api_key="t"))
+    sent = []
+    usage = Usage.model_validate({"input_tokens": 900, "output_tokens": output_tokens})
+    content = [TextBlock(type="text", text=text)] if text else []
+    message = Message(id="msg_offline", type="message", role="assistant", model=model.model,
+                      content=content, stop_reason=stop_reason, stop_sequence=None, usage=usage)
+    raw = type("Raw", (), {"parse": lambda self: message})()
+
+    def create(self, payload):
+        sent.append(payload)
+        return raw
+
+    monkeypatch.setattr(type(model), "_create", create)
+    return model, sent
+
+
+def test_native_structured_output_sends_the_schema_and_changes_no_other_setting(monkeypatch):
+    model, sent = structured_anthropic(monkeypatch, '{"items": [1, 2]}')
+    assert ask_structured(model, "s", "u", Items, native_json(model, Items)) == Items(items=[1, 2])
+    (payload,) = sent
+    assert payload["output_config"]["format"]["type"] == "json_schema"
+    assert "items" in payload["output_config"]["format"]["schema"]["properties"]
+    assert payload["max_tokens"] == 4096 and "thinking" not in payload
+    assert payload["model"] == "claude-haiku-5-5"
+
+
+def test_without_a_native_path_ask_structured_is_exactly_ask_json():
+    assert ask_structured(chat('{"items": [3]}'), "s", "u", Items, None) == Items(items=[3])
+    with pytest.raises(BadModelReply) as info:
+        ask_structured(chat('{"items": [1,'), "s", "u", Items, None)
+    assert info.value.diagnostic.kind == "incomplete_json"
+
+
+@pytest.mark.parametrize("text, stop, kind", [
+    ('{"items": [1, 2', "max_tokens", "incomplete_json"),  # truncated: still cut off
+    ("", "refusal", "empty"),                              # a refusal has no JSON at all
+    ('{"items": "x"}', "end_turn", "schema"),
+])
+def test_a_native_reply_that_is_not_the_schema_fails_with_the_same_bounded_diagnostic(
+        monkeypatch, text, stop, kind):
+    model, sent = structured_anthropic(monkeypatch, text, stop)
+    with pytest.raises(BadModelReply) as info:
+        ask_structured(model, "s", "u", Items, native_json(model, Items))
+    d = info.value.diagnostic
+    assert (d.kind, d.stop_reason, d.max_tokens) == (kind, stop, 4096)
+    assert len(sent) == 1  # no retry
+
+
+def test_a_provider_rejection_of_the_schema_is_reported_not_retried(monkeypatch):
+    model, _ = structured_anthropic(monkeypatch, "{}")
+    calls = []
+
+    class Rejected(Exception):
+        status_code = 400
+
+    def reject(self, payload):
+        calls.append(payload)
+        raise Rejected("output_config.format: unsupported schema feature")
+
+    monkeypatch.setattr(type(model), "_create", reject)
+    with pytest.raises(StructuredOutputRejected, match="unsupported schema feature"):
+        ask_structured(model, "s", "u", Items, native_json(model, Items))
+    assert len(calls) == 1
+
+
+def test_any_other_provider_error_propagates_unchanged(monkeypatch):
+    model, _ = structured_anthropic(monkeypatch, "{}")
+
+    def boom(self, payload):
+        raise ConnectionError("network down")
+
+    monkeypatch.setattr(type(model), "_create", boom)
+    with pytest.raises(ConnectionError):
+        ask_structured(model, "s", "u", Items, native_json(model, Items))
+
+
+@pytest.mark.parametrize("provider", ["gemini", "groq", "fake"])
+def test_only_anthropic_has_a_native_path(monkeypatch, provider):
+    for key in ("GOOGLE_API_KEY", "GROQ_API_KEY"):
+        monkeypatch.setenv(key, "x")
+    model = build_chat_model("light", Settings(llm_provider=provider, tavily_api_key="t",
+                                                    google_api_key="x", groq_api_key="x"))
+    assert native_json(model, Items) is None

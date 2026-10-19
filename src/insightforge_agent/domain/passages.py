@@ -103,6 +103,25 @@ def batch_passages(
     return batches
 
 
+def split_by_passages(batch: list[Window], cap: int | None) -> list[list[Window]]:
+    """A batch cut, in order, into parts of at most `cap` distinct Passages (T18 CS3: bounded
+    drafting output). The windows of one Passage stay in one part; nothing is dropped or
+    repeated. `None` leaves the batch whole."""
+    if cap is None:
+        return [batch]
+    parts: list[list[Window]] = []
+    seen: list[tuple[str, int]] = []
+    for w in batch:
+        key = (w.passage.observation_id, w.passage.index)
+        if not parts or (key not in seen and len(seen) == cap):
+            parts.append([])
+            seen = []
+        if key not in seen:
+            seen.append(key)
+        parts[-1].append(w)
+    return parts
+
+
 MAX_SENTENCE_CHARS = 600  # a longer "sentence" (scraped text without stops) is cut into pieces
 
 # A word ending a sentence: "." "!" or "?", optionally followed by closing quotes or brackets.

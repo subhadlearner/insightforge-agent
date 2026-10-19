@@ -144,6 +144,9 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         "passage_token_cap": deps.passage_token_cap,
         "run_token_cap": deps.run_token_cap,
         "writer_retries": deps.writer_retries,
+        # T18 remediation behaviours: a run under them is never the T18 baseline.
+        "draft_structured_output": "on" if deps.native_json is not None else "off",
+        "draft_passage_cap": deps.draft_passage_cap,
         # The effective Evidence thresholds: they set Confidence and ranking.
         "credibility_high": deps.thresholds.credibility_high,
         "credibility_medium": deps.thresholds.credibility_medium,

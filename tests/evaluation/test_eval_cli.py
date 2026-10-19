@@ -388,6 +388,9 @@ def test_provider_and_judge_identity_are_recorded_from_what_ran(full_run):
     assert result["conditions"]["configured_embedding_model"] == "BAAI/bge-small-en-v1.5"
     assert (result["conditions"]["fact_check_rate"], result["conditions"]["clarification"]) == (
         0.2, "off")
+    # T18: each remediation behaviour is recorded, so a run is never mistaken for the baseline.
+    assert (result["conditions"]["draft_structured_output"],
+            result["conditions"]["draft_passage_cap"]) == ("off", None)
     assert [s.llm_provider for s in judges.built] == ["groq"]
     assert report["judge"] == {"provider": "groq", "model": "openai/gpt-oss-120b",
                                "runtime_model": "TunedChat", "role": "writer",

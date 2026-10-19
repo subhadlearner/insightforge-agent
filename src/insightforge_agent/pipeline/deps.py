@@ -51,6 +51,11 @@ class Deps:
     fact_check_rate: float = 0.2
     fact_check_minimum: int = 5
     similarity_threshold: float = 0.85
+    # T18 CS3. `native_json` (llm.native_json in production) gives drafting the provider's
+    # native structured output; None keeps plain JSON. Injected so this package never imports
+    # the model layer. `draft_passage_cap` bounds the Passages per drafting call; None: no bound.
+    native_json: Callable[[BaseChatModel, type], Any] | None = None
+    draft_passage_cap: int | None = None
     recursion_limit: int = 60
     # Uploaded documents (T7). Without both, the documents source type cannot be researched.
     doc_index: DocChunkIndex | None = None

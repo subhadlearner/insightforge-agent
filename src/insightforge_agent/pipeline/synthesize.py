@@ -21,7 +21,12 @@ from datetime import date
 
 from pydantic import BaseModel, Field
 
-from insightforge_agent.agents.llm_json import BadModelReply, ask_json
+from insightforge_agent.agents.llm_json import (
+    BadModelReply,
+    StructuredOutputRejected,
+    ask_json,
+    ask_structured,
+)
 from insightforge_agent.domain.contracts import (
     EvidenceBundle,
     EvidenceItem,
@@ -53,6 +58,7 @@ from insightforge_agent.domain.passages import (
     named_entities_in,
     numbers_in,
     render_batch,
+    split_by_passages,
     value_in_text,
 )
 from insightforge_agent.domain.periods import (
@@ -179,7 +185,8 @@ def synthesize(
     for task in sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id)):
         passages = [p for sid in sources_of[task.id] for p in passages_for(task.id, sid)]
         for batch in batch_passages(passages, deps.passage_token_cap):
-            drafted += _draft(deps, owner_id, run_id, task, batch)
+            for part in split_by_passages(batch, deps.draft_passage_cap):
+                drafted += _draft(deps, owner_id, run_id, task, part)
 
     # 2. Merge candidates that say the same thing; the most important Sub-task keeps the item.
     merged: dict[str, _Candidate] = {}
@@ -276,10 +283,15 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
     numbered = render_batch(batch)
     user = f"Sub-task: {task.query}\n\n{numbered}"
     deps.spend(owner_id, run_id, DRAFT_SYSTEM, user)
+    native = deps.native_json(deps.light_model, _Drafts) if deps.native_json else None
     try:
-        reply = ask_json(deps.light_model, DRAFT_SYSTEM, user, _Drafts)
+        reply = ask_structured(deps.light_model, DRAFT_SYSTEM, user, _Drafts, native)
     except BadModelReply as e:
         deps.log(owner_id, run_id, "draft_batch_failed", subtask_id=task.id, detail=str(e))
+        return []
+    except StructuredOutputRejected as e:  # the schema itself refused: visible, never retried
+        deps.log(owner_id, run_id, "draft_batch_failed", subtask_id=task.id,
+                 detail=f"provider rejected structured output: {e}")
         return []
     out: list[_Candidate] = []
     for d in reply.items:

@@ -93,3 +93,43 @@ def test_spans_are_deterministic_and_bounded():
     assert len(widest) == 4 * 50 - 6  # windows that would run past the end are not made
     assert all(len(s.text) <= 4 * (MAX_SENTENCE_CHARS + 1) for s in widest)
     assert candidate_spans([]) == []
+
+
+# ---- T18 CS3: a drafting batch split by Passage count ------------------------------------------
+
+def test_a_batch_is_split_by_passage_count_keeping_one_passages_windows_together():
+    from insightforge_agent.domain.models import Passage
+    from insightforge_agent.domain.passages import Window, split_by_passages
+
+    p = [Passage(observation_id="o", index=i, text=f"t{i}") for i in range(4)]
+    batch = [Window(p[0], "a"), Window(p[1], "b1", 1, 2), Window(p[1], "b2", 2, 2),
+             Window(p[2], "c"), Window(p[3], "d")]
+    parts = split_by_passages(batch, 2)
+    assert [[w.text for w in part] for part in parts] == [["a", "b1", "b2"], ["c", "d"]]
+    assert split_by_passages(batch, None) == [batch]
+
+
+def test_t18_drafting_inputs_batch_as_recorded_and_as_the_cap_options_were_costed():
+    """Golden: the exact T18 drafting inputs (Passage lengths only; the token estimate depends
+    on length alone) give the 144 draft calls T18 made. The cap options were costed at 210 and
+    244 calls (analysis-v3/rebatch_out.txt) by counting windows; keeping one Passage's windows
+    together, as split_by_passages does, saves one call at 150."""
+    import json
+    from pathlib import Path
+
+    from insightforge_agent.domain.models import Passage
+    from insightforge_agent.domain.passages import batch_passages, split_by_passages
+
+    doc = json.loads((Path(__file__).parents[1] / "fixtures" / "t18" /
+                      "drafting_passage_lengths.json").read_text())
+
+    def calls(cap):
+        n = 0
+        for st in doc["subtasks"]:
+            ps = [Passage(observation_id="o", index=i, text=("x " * length)[:length].rstrip() or "x")
+                  if length > 1 else Passage(observation_id="o", index=i, text="x")
+                  for i, length in enumerate(st["lengths"])]
+            n += sum(len(split_by_passages(b, cap)) for b in batch_passages(ps, 3000))
+        return n
+
+    assert (calls(None), calls(150), calls(120)) == (144, 209, 244)

@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     fact_check_rate: float = 0.2
     fact_check_minimum: int = 5
     similarity_threshold: float = 0.85
+    # T18 CS3: drafting through the provider's native structured output (where one exists),
+    # and an optional bound on Passages per drafting call (None: only the token cap bounds it).
+    draft_structured_output: bool = True
+    draft_passage_cap: int | None = Field(default=None, gt=0)
     credibility_high: float = 0.65
     credibility_medium: float = 0.4
     recency_fresh_days: int = 365

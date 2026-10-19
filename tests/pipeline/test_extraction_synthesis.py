@@ -552,3 +552,65 @@ def test_a_derived_as_of_period_is_used_for_the_contradiction_check(world):
              "asserts_present_state": True} for n, t in ps])
     (item,) = world.items(world.synth(plan, research, extraction))
     assert item.derived_from == "observation_date" and item.conflicting
+
+
+# =============================== T18 CS3: drafting reliability ==============================
+
+class Native:
+    """A stand-in for `llm.native_json`: records which schemas asked for a native path and
+    answers through the same scripted model, as the real binding answers through the model."""
+
+    def __init__(self, reject=False):
+        self.schemas, self.reject = [], reject
+
+    def __call__(self, model, schema):
+        self.schemas.append(schema.__name__)
+        reject = self.reject
+
+        class Bound:
+            def invoke(self, messages):
+                if reject:
+                    raise type("BadRequest", (Exception,), {"status_code": 400})("schema refused")
+                return {"raw": model.invoke(messages), "parsed": None, "parsing_error": None}
+        return Bound()
+
+
+def test_only_drafting_uses_the_native_structured_path(world):
+    plan, research = one_source(world)
+    world.deps.light_model = light(draft=draft_all(), entail=all_supported)
+    world.deps.native_json = native = Native()
+    assert len(world.items(world.synth(plan, research))) == 1
+    assert native.schemas == ["_Drafts"]  # entailment and extraction keep plain JSON
+
+
+def test_a_provider_rejection_fails_that_batch_visibly_and_is_never_retried(world):
+    plan, research = one_source(world)
+    model = light(draft=draft_all(), entail=all_supported)
+    world.deps.light_model, world.deps.native_json = model, Native(reject=True)
+    assert world.items(world.synth(plan, research)) == []
+    (failed,) = world.events("draft_batch_failed")
+    assert failed["detail"].startswith("provider rejected structured output: ")
+    assert model.calls("You draft evidence") == []  # no fallback to plain JSON
+
+
+def test_a_passage_cap_splits_a_drafting_batch_in_order_and_loses_nothing(world):
+    body = "\n\n".join(f"BYD sold {n}.5 million vehicles in 2025." for n in range(1, 6))
+    world.page("https://a.test/x", body)
+    plan, research = world.plan(("s1", "a1", 1)), world.research(s1=["https://a.test/x"])
+    model = light(draft=draft_all(), entail=all_supported)
+    world.deps.light_model, world.deps.draft_passage_cap = model, 2
+    items = world.items(world.synth(plan, research))
+    drafts = model.calls("You draft evidence")
+    assert [len(re.findall(r"^\[\d+\]", d, re.MULTILINE)) for d in drafts] == [2, 2, 1]
+    assert "1.5 million" in drafts[0] and "5.5 million" in drafts[2]
+    assert len(items) == 5
+
+
+def test_without_a_passage_cap_batching_is_unchanged(world):
+    body = "\n\n".join(f"BYD sold {n}.5 million vehicles in 2025." for n in range(1, 6))
+    world.page("https://a.test/x", body)
+    plan, research = world.plan(("s1", "a1", 1)), world.research(s1=["https://a.test/x"])
+    model = light(draft=draft_all(), entail=all_supported)
+    world.deps.light_model = model
+    world.synth(plan, research)
+    assert len(model.calls("You draft evidence")) == 1
