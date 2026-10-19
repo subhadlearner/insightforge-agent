@@ -68,10 +68,14 @@ from insightforge_agent.pipeline.synthesize import literal_problem  # noqa: E402
      "BYD sold 4.27 million vehicles in 2025.", None),
     ("BYD sold 5.00 million vehicles.", [], "BYD",
      "BYD sold 4.27 million vehicles in 2025.", "value not in Passage: ['5.00']"),
+    # T18 CS1B: a listed entity the statement does not name is a label, never a name it
+    # asserts (entailment judges the statement); a sentence-initial company is now asserted.
     ("BYD sold 4.27 million vehicles.", ["Tesla"], "BYD",
+     "BYD sold 4.27 million vehicles.", None),
+    ("Tesla sold 4.27 million vehicles.", ["Tesla"], "Tesla",
      "BYD sold 4.27 million vehicles.", "name not in Passage: ['Tesla']"),
     ("Tesla Motors sold 4.27 million vehicles.", [], "",
-     "BYD sold 4.27 million vehicles.", "name not in Passage: ['Motors']"),
+     "BYD sold 4.27 million vehicles.", "name not in Passage: ['Motors', 'Tesla']"),
     # Names compare case-insensitively; an exact quantity in another form is accepted.
     ("byd sold 4,270,000 vehicles.", [], "byd", "BYD sold 4.27 million vehicles.", None),
     ("Revenue grew 12% in Germany.", [], "", "Revenue grew 12% in Germany.", None),

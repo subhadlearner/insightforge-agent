@@ -55,12 +55,12 @@ from insightforge_agent.domain.models import Passage, Source
 from insightforge_agent.domain.passages import (
     Window,
     batch_passages,
-    named_entities_in,
     numbers_in,
     render_batch,
     split_by_passages,
     value_in_text,
 )
+from insightforge_agent.domain.provenance import common_words, missing_names
 from insightforge_agent.domain.periods import (
     UNKNOWN,
     parse_period,
@@ -215,12 +215,15 @@ def synthesize(
             texts_of[source.id] = [p.text for p in contents[source.id].passages]
         return texts_of[source.id]
 
+    # The lower-case vocabulary of everything this Run read: tells a common word from a name
+    # at the start of a statement (domain/provenance).
+    common = common_words(p.text for c in contents.values() for p in c.passages)
     brief_vector = deps.embedder.embed([brief])[0]
     items: list[EvidenceItem] = []
     scores: dict[str, float] = {}
     for c in merged.values():
         item = _validate(deps, owner_id, run_id, c, source_by_obs, fetched_on, facts_at,
-                         facts_by_group)
+                         facts_by_group, common)
         if item is None:
             continue
         supporting_sources = list(dict.fromkeys(source_by_obs[r.observation_id] for r in item.supporting))
@@ -324,18 +327,22 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
 
 def literal_problem(
     *, statement: str, entities: list[str], entity: str, passage_text: str,
+    common: frozenset[str] | None = None,
 ) -> str | None:
-    """Every number and named entity of the item must appear in the Passage. Returns the
-    reason it does not, or None. Lexical only: it says nothing about whether the Passage
-    supports the statement."""
-    text = passage_text.casefold()
+    """Every number and every name the statement asserts must appear in the Passage
+    (`domain/provenance`, T18 CS1B: a model-written entity label counts only through the names
+    the statement itself uses). Returns the reason it does not, or None. Lexical only: it says
+    nothing about whether the Passage supports the statement. `common` is the lower-case
+    vocabulary of the Passages the Run read; without it, that of this Passage and statement."""
     missing_numbers = unsupported_numbers(statement, passage_text)
     if missing_numbers:
         return f"value not in Passage: {sorted(missing_numbers)}"
-    names = {*entities, *([entity] if entity else []), *named_entities_in(statement)}
-    missing_names = sorted(n for n in names if n.casefold() not in text)
-    if missing_names:
-        return f"name not in Passage: {missing_names}"
+    names = missing_names(statement=statement, entities=entities, entity=entity,
+                          passage_text=passage_text,
+                          common=common if common is not None else common_words(
+                              [passage_text, statement])).missing
+    if names:
+        return f"name not in Passage: {names}"
     return None
 
 
@@ -343,10 +350,11 @@ def _validate(
     deps: Deps, owner_id: str, run_id: str, c: _Candidate, source_by_obs: dict[str, Source],
     fetched_on: dict[str, date], facts_at: dict[tuple[str, int], list[ExtractedFact]],
     facts_by_group: dict[tuple[str, str, str], list[ExtractedFact]],
+    common: frozenset[str] | None = None,
 ) -> EvidenceItem | None:
     def drop(reason: str, **extra) -> None:
         deps.log(owner_id, run_id, "evidence_dropped", reason=reason, evidence_id=c.id,
-                 statement=c.statement[:120], **extra)
+                 subtask_id=c.subtask.id, statement=c.statement[:120], **extra)
 
     # Deterministic checks first. Provenance gates every candidate. The literal-value check
     # decides which candidates may support the item; a Passage that fails it may still
@@ -354,24 +362,31 @@ def _validate(
     candidates: list[Passage] = []
     can_support: set[tuple[str, int]] = set()
     rejected: list[str] = []
+    refs: list[dict] = []  # each cited Passage with why it cannot support: replayable offline
+
+    def reject(ref: PassageRef, why: str) -> None:
+        rejected.append(why)
+        refs.append({**ref.model_dump(), "reason": why})
+
     for ref in c.refs:
         if ref.observation_id not in source_by_obs:
-            rejected.append("not from this Run's Sources")
+            reject(ref, "not from this Run's Sources")
             continue
         try:
             passage = deps.store.get_passages(owner_id, ref.observation_id, [ref.index])[0]
         except NotFoundError:
-            rejected.append("no such Passage")
+            reject(ref, "no such Passage")
             continue
         candidates.append(passage)
         problem = literal_problem(statement=c.statement, entities=c.entities,
-                                  entity=c.entity, passage_text=passage.text)
+                                  entity=c.entity, passage_text=passage.text, common=common)
         if problem:
-            rejected.append(problem)
+            reject(ref, problem)
         else:
             can_support.add(_key(ref))
     if not can_support:
-        drop("no Passage passes the provenance and literal-value checks", rejected=rejected)
+        drop("no Passage passes the provenance and literal-value checks", rejected=rejected,
+             refs=refs)
         return None
     text_of = {(p.observation_id, p.index): p.text for p in candidates}
 

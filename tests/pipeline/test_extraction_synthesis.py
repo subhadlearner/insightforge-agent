@@ -614,3 +614,31 @@ def test_without_a_passage_cap_batching_is_unchanged(world):
     world.deps.light_model = model
     world.synth(plan, research)
     assert len(model.calls("You draft evidence")) == 1
+
+
+# =============================== T18 CS1B: provenance name classes ==========================
+
+def test_a_descriptive_entity_label_no_longer_drops_a_supported_statement(world):
+    body = "Azure generated $75 billion in Microsoft’s fiscal year 2025, up 34%."
+    plan, research = one_source(world, body=body)
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": "Azure generated $75 billion in Microsoft's fiscal "
+                                           "year 2025, up 34%.", "passages": [1],
+                              "entities": ["Microsoft Azure"], "entity": "Microsoft Azure"}],
+        entail=all_supported)
+    (item,) = world.items(world.synth(plan, research))
+    assert item.statement.startswith("Azure generated")
+    assert world.events("evidence_dropped") == []
+
+
+def test_a_sentence_initial_wrong_company_is_dropped_with_empty_entity_fields(world):
+    plan, research = one_source(world)  # "BYD sold 4.27 million vehicles in 2025."
+    world.deps.light_model = light(
+        draft=lambda ps, u: [{"statement": "Tesla sold 4.27 million vehicles in 2025.",
+                              "passages": [1]}],
+        entail=all_supported)
+    assert world.items(world.synth(plan, research)) == []
+    (dropped,) = world.events("evidence_dropped")
+    assert dropped["subtask_id"] == "s1"
+    (ref,) = dropped["refs"]
+    assert ref["index"] == 0 and ref["reason"] == "name not in Passage: ['Tesla']"

@@ -139,8 +139,9 @@ def test_quoted_span_with_an_unsupported_name_is_not_grounded():
 
 
 def test_a_quoted_span_that_passes_the_lexical_check_is_not_applicable():
+    # The span names the Claim's company: since T18 CS1B a sentence-initial name is checked.
     v = judge(ground("QUOTED_SPAN", "Acme revenue grew 10%.", "Acme revenue grew 10% in 2024.",
-                     span="revenue grew 10%"))
+                     span="Acme revenue grew 10%"))
     assert v.status is JudgeStatus.NOT_APPLICABLE and v.label is None
     assert v.diagnostics["span_in_passage"] is True
 
