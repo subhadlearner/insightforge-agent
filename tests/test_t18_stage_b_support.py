@@ -157,5 +157,23 @@ def test_stage_b_needs_an_output_directory_before_any_call(tmp_path, monkeypatch
     with pytest.raises(pytest.fail.Exception, match="T18_STAGE_B_OUT"):
         write("b1", {"x": 1})
     monkeypatch.setenv("T18_STAGE_B_OUT", str(tmp_path / "out"))
+    assert require_out().is_dir() and list((tmp_path / "out").iterdir()) == []  # created, no probe
     write("b1", {"x": 1})
     assert json.loads((tmp_path / "out" / "b1.json").read_text(encoding="utf-8")) == {"x": 1}
+
+
+@pytest.mark.parametrize("case", ["a file", "under a file", "not writable"])
+def test_stage_b_refuses_an_unusable_output_directory_before_any_call(tmp_path, monkeypatch,
+                                                                     case):
+    blocker = tmp_path / "taken"
+    blocker.write_text("a file, not a directory", encoding="utf-8")
+    target = {"a file": blocker, "under a file": blocker / "out",
+              "not writable": tmp_path / "out"}[case]
+    if case == "not writable":
+        def refuse(self, *args, **kwargs):
+            raise PermissionError("access denied")
+
+        monkeypatch.setattr(Path, "write_text", refuse)
+    monkeypatch.setenv("T18_STAGE_B_OUT", str(target))
+    with pytest.raises(pytest.fail.Exception, match="not a writable directory"):
+        require_out()

@@ -96,6 +96,13 @@ def require_out() -> Path:
     out = os.environ.get("T18_STAGE_B_OUT")
     if not out:
         pytest.fail("T18_STAGE_B_OUT must name the directory for the Stage B records")
+    try:  # created and proven writable now, before any paid call
+        Path(out).mkdir(parents=True, exist_ok=True)
+        probe = Path(out) / ".write-check"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as e:
+        pytest.fail(f"T18_STAGE_B_OUT {out!r} is not a writable directory: {e}")
     return Path(out)
 
 
