@@ -329,3 +329,13 @@ def test_only_anthropic_has_a_native_path(monkeypatch, provider):
     model = build_chat_model("light", Settings(llm_provider=provider, tavily_api_key="t",
                                                     google_api_key="x", groq_api_key="x"))
     assert native_json(model, Items) is None
+
+
+def test_a_wrapped_anthropic_model_is_refused_never_silently_given_plain_json(monkeypatch):
+    """R3-01: `with_config` wraps the model in a RunnableBinding; native output must then be
+    built on the chat model itself. Refusing loudly stops a silent fall-back to plain JSON."""
+    model, _ = structured_anthropic(monkeypatch, '{"items": [1]}')
+    with pytest.raises(TypeError, match="the chat model itself"):
+        native_json(model.with_config(callbacks=[]), Items)
+    fake = build_chat_model("light", Settings(llm_provider="fake", tavily_api_key="t"))
+    assert native_json(fake.with_config(callbacks=[]), Items) is None  # no native path anyway
