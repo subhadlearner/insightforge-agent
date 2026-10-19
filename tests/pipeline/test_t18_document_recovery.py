@@ -78,7 +78,7 @@ def test_a_metadata_only_failure_is_recovered_from_its_own_searches(doc_deps):
         2, len(set(recovered)))
     rec = failed[1].payload
     assert (rec["trigger"], rec["lexicon"]) == ("metadata_only_limitation",
-                                                "DOC_READER_LIMITATION_V1")
+                                                "DOC_READER_LIMITATION_V2")
     assert rec["recovered"] == recovered and rec["cap"] == 16
     # The user-visible Sub-task stays failed: the Document Reader did fail.
     status = {s.subtask.id: s.status for s in deps.repos.subtasks.list("alice", r.id)}
@@ -98,7 +98,10 @@ def test_recovered_chunks_are_candidates_and_their_outcome_is_counted(doc_deps):
     ("FAILED: none of the chunks are relevant to the research pipeline.", 2),
     ("FAILED: the uploaded file is not an annual report.", 2),
     (T18_REPLY, 0),  # it never searched: nothing of its own to recover
-], ids=["relevance judgment", "other reason", "no search"])
+    ("FAILED: doc_search raised an error: connection timed out.", 2),
+    ("FAILED: doc_search returned only metadata, and the chunks are not relevant to R&D.", 2),
+], ids=["relevance judgment", "other reason", "no search", "tool error",
+        "metadata-only but irrelevant"])
 def test_any_other_failure_stays_failed_as_before(doc_deps, reply, searches):
     deps, r, results, _ = run(doc_deps, reply, searches)
     assert (results["s2"]["status"], results["s2"]["source_refs"]) == ("failed", [])
