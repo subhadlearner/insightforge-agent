@@ -39,6 +39,9 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.domain.errors import NotFoundError
 from insightforge_agent.domain.evidence import (
+    DROP_LITERAL,
+    DROP_NO_CITATION,
+    DROP_UNSUPPORTED,
     compress_to_budget,
     confidence_of,
     credibility_bucket,
@@ -287,7 +290,8 @@ def synthesize(
         ranked, lambda chosen: bundle_tokens(build(chosen)) <= deps.evidence_budget_tokens)
     for item in cut:
         deps.log(owner_id, run_id, "evidence_cut", reason="over evidence budget",
-                 evidence_id=item.id, confidence=item.confidence, rank=ranked.index(item) + 1)
+                 evidence_id=item.id, subtask_id=item.subtask_id, confidence=item.confidence,
+                 rank=ranked.index(item) + 1)
     _log_recovery_outcome(deps, owner_id, run_id, research, items, kept)
     return build(kept)
 
@@ -346,7 +350,7 @@ def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Wi
         statement = d.statement.strip()
         cited = list(dict.fromkeys(refs[n] for n in d.passages if n in refs))
         if not statement or not cited:
-            deps.log(owner_id, run_id, "evidence_dropped", reason="draft cites no Passage",
+            deps.log(owner_id, run_id, "evidence_dropped", reason=DROP_NO_CITATION,
                      statement=statement[:120])
             continue
         # A period the cited text does not state is model output only: it must not decide Merge.
@@ -435,7 +439,7 @@ def _validate(
         else:
             can_support.add(_key(ref))
     if not can_support:
-        drop("no Passage passes the provenance and literal-value checks", rejected=rejected,
+        drop(DROP_LITERAL, rejected=rejected,
              refs=refs)
         return None
     text_of = {(p.observation_id, p.index): p.text for p in candidates}
@@ -495,7 +499,7 @@ def _validate(
     contradicted = [PassageRef(observation_id=o, index=i) for (o, i), vs in verdicts.items()
                     if "CONTRADICTED" in vs and not ("SUPPORTED" in vs and (o, i) in can_support)]
     if not supported:
-        drop("no supported Passage", verdicts={"contradicted": len(contradicted)})
+        drop(DROP_UNSUPPORTED, verdicts={"contradicted": len(contradicted)})
         return None
     if period != UNKNOWN and not any(period_stated_in(period, text_of[_key(r)]) for r in supported):
         deps.log(owner_id, run_id, "period_rejected", evidence_id=c.id, period=period)

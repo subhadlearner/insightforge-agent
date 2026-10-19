@@ -194,17 +194,23 @@ def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str
     return returned_by_subtask(deps, owner_id, run_id, DOC_SEARCH_EVENT, "chunk_ids")
 
 
+def run_log(deps: Deps, owner_id: str, run_id: str) -> list:
+    """Every event of the Run, in order."""
+    out, cursor = [], 0
+    while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
+        out += batch
+        cursor = batch[-1].seq
+    return out
+
+
 def search_rankings(deps: Deps, owner_id: str, run_id: str) -> dict[str, list[list[str]]]:
     """Per Sub-task, each of its own Doc Reader searches in this Run, in order, as the chunk ids
     it returned in rank order (T18 CS2 recovery). A search with no Sub-task authorises nothing;
     a search that raised wrote no event."""
     found: dict[str, list[list[str]]] = {}
-    cursor = 0
-    while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
-        for e in batch:
-            if e.type == DOC_SEARCH_EVENT and e.payload.get("subtask_id"):
-                found.setdefault(e.payload["subtask_id"], []).append(list(e.payload["chunk_ids"]))
-        cursor = batch[-1].seq
+    for e in run_log(deps, owner_id, run_id):
+        if e.type == DOC_SEARCH_EVENT and e.payload.get("subtask_id"):
+            found.setdefault(e.payload["subtask_id"], []).append(list(e.payload["chunk_ids"]))
     return found
 
 
@@ -544,7 +550,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         deps.log(owner, run_id, "document_scope_recovered", subtask_id=sid,
                  trigger="metadata_only_limitation", lexicon=LIMITATION_LEXICON,
                  matched_phrases=phrases, irrelevance_stated=irrelevance_stated(reply),
-                 reply_head=reply[:300], searches=len(searches), recovered=kept,
+                 reply_head=reply_head(outcome), searches=len(searches), recovered=kept,
                  excluded_by_trust_checks=[c for c in chosen if c not in set(kept)],
                  cap=RECOVERY_CAP)
         if not refs:
@@ -647,10 +653,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         research = ResearchResults.model_validate(state["research"])
         bundle = EvidenceBundle.model_validate(state["bundle"])
         # T18 CS4: the gaps come from this Run's own records, in fixed wording.
-        log, cursor = [], 0
-        while batch := deps.repos.events.read_after(owner, run_id, cursor):
-            log += [{"type": e.type, "payload": e.payload} for e in batch]
-            cursor = batch[-1].seq
+        log = [{"type": e.type, "payload": e.payload} for e in run_log(deps, owner, run_id)]
         documents = []
         for sid in state.get("documents", []):
             contents = deps.store.read_run_source(owner, run_id, sid)

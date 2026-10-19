@@ -266,7 +266,8 @@ def test_gap_lines_are_factual_templates_by_category():
         "chunk text); 2 chunk(s) were recovered from its own searches as candidates, and 1 "
         "Evidence item(s) citing them were kept after the provenance, figure and entailment "
         "checks.",
-        "Sub-task s3 (risks) failed: the file is not an annual report.",
+        "Sub-task s3 (risks) failed: its researcher reported that it could not complete it (the "
+        "reply is kept in the Run log).",
         "Sub-task s4 (market growth): this research did not establish it; 2 drafted item(s) were "
         "not kept (1 failed the provenance or figure checks, 1 not supported by the entailment "
         "check), and 1 drafting call(s) failed.",
@@ -287,3 +288,24 @@ def test_a_recovery_that_kept_nothing_says_so_and_full_coverage_adds_no_line():
                      "showed no chunk text); 2 chunk(s) were recovered from its own searches as "
                      "candidates; none was kept after the provenance, figure and entailment "
                      "checks."]
+
+
+def test_the_researchers_own_words_never_reach_a_gap_line():
+    """Model prose may claim a source lacks something; code never repeats it."""
+    results = [scope("s1", 0, 1, 2, 3), scope("s2"), SubTaskResult(subtask_id="s3", status="failed"),
+               scope("s4")]
+    items = [item("ev_a", subtask="s1"), item("ev_b", subtask="s2"), item("ev_c", subtask="s4")]
+    lines = gaps_for(results, items, [ev("subtask_failed", subtask_id="s3",
+                                         reason="FAILED: the annual report does not disclose risks.")])
+    assert lines == ["Sub-task s3 (risks) failed: its researcher reported that it could not "
+                     "complete it (the reply is kept in the Run log)."]
+    assert "disclose" not in lines[0]
+
+
+def test_items_cut_by_the_budget_are_not_called_unestablished():
+    results = [scope("s1", 0, 1, 2, 3), scope("s2"), scope("s3"), scope("s4")]
+    items = [item("ev_a", subtask="s1"), item("ev_b", subtask="s2"), item("ev_c", subtask="s3")]
+    lines = gaps_for(results, items, [ev("evidence_cut", subtask_id="s4", rank=9),
+                                      ev("evidence_cut", subtask_id="s4", rank=10)])
+    assert lines == ["Sub-task s4 (market growth): its 2 Evidence item(s) were cut by the evidence "
+                     "budget, below higher-ranked Evidence."]

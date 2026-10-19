@@ -97,7 +97,7 @@ def test_zero_eligible_candidates_and_an_unchanged_cited_passage_reach_the_entai
     assert v.verdict == "verified" and v.matched.index == 1
     assert len(sent) == 1 and CITED in sent[0]
     assert v.similarity == pytest.approx(0.10)  # the counterpart's own cosine, reported as is
-    assert (event["match"], event["used"], event["verified"]) == ("unique", True, True)
+    assert (event["match"], event["entered_top_k"], event["verified_by_counterpart"]) == ("unique", True, True)
     assert event["original"]["index"] == 0 and event["counterpart"]["index"] == 1
 
 
@@ -111,14 +111,14 @@ def test_the_counterpart_still_needs_an_unambiguous_supported_judgment(make_deps
     v, sent, (event,) = run(make_deps, CITED, model=model)
     assert v.verdict == "unverified" and len(sent) == 1
     assert "no candidate span was judged SUPPORTED" in v.reason
-    assert (event["used"], event["verified"]) == (True, False)
+    assert (event["entered_top_k"], event["verified_by_counterpart"]) == (True, False)
 
 
 def test_a_malformed_entailment_reply_leaves_it_unverified(make_deps):
     model = ScriptedChat(reply=lambda m: AIMessage(content="not json"))
     v, _, (event,) = run(make_deps, CITED, model=model)
     assert v.verdict == "unverified" and "entailment check failed" in v.reason
-    assert event["used"] is True and event["verified"] is False
+    assert event["entered_top_k"] is True and event["verified_by_counterpart"] is False
 
 
 @pytest.mark.parametrize("page, match", [
@@ -130,7 +130,7 @@ def test_an_unusable_counterpart_leaves_the_f2_verdict_exactly_as_it_was(make_de
     off, sent_off, _ = run(make_deps, page, flag=False)
     assert same_verdict(on, off) and on.verdict == "unverified"
     assert sent == sent_off == []
-    assert (event["match"], event["used"]) == (match, False)
+    assert (event["match"], event["entered_top_k"]) == (match, False)
 
 
 def test_a_counterpart_with_no_span_stating_the_figures_makes_no_call(make_deps):
@@ -138,7 +138,7 @@ def test_a_counterpart_with_no_span_stating_the_figures_makes_no_call(make_deps)
     on, sent, (event,) = run(make_deps, CITED, claim=claim_off)
     off, _, _ = run(make_deps, CITED, claim=claim_off, flag=False)
     assert same_verdict(on, off) and sent == []
-    assert (event["match"], event["used"]) == ("unique", False)
+    assert (event["match"], event["entered_top_k"]) == ("unique", False)
 
 
 def test_a_refetch_stored_under_another_source_is_never_a_counterpart(make_deps):
@@ -155,7 +155,7 @@ def test_a_refetch_stored_under_another_source_is_never_a_counterpart(make_deps)
     on, sent, (event,) = run(make_deps, CITED, store=Elsewhere)
     off, _, _ = run(make_deps, CITED, flag=False, store=Elsewhere)
     assert same_verdict(on, off) and sent == []
-    assert (event["match"], event["used"]) == ("source_mismatch", False)
+    assert (event["match"], event["entered_top_k"]) == ("source_mismatch", False)
 
 
 # ---- never when F2 has candidates ------------------------------------------------------------
@@ -220,3 +220,22 @@ def test_a_historical_web_claim_uses_the_counterpart_of_its_original_passage(mak
                       EvidenceBundle(sections=[]), hist).verdicts
     assert (v.verdict, v.check, v.original) == ("verified", "historical_web_refetch", original)
     assert v.matched.observation_id != obs.id and v.matched.index == 1  # the new fetch
+
+
+def test_a_cited_passage_that_is_gone_leaves_the_f2_verdict(make_deps):
+    from insightforge_agent.domain.errors import NotFoundError
+
+    class Forgetful:
+        def __init__(self, store):
+            self._store = store
+
+        def __getattr__(self, name):
+            return getattr(self._store, name)
+
+        def get_passages(self, owner_id, observation_id, indices):
+            raise NotFoundError("passage removed")
+
+    on, sent, (event,) = run(make_deps, CITED, store=Forgetful)
+    off, _, _ = run(make_deps, CITED, flag=False, store=Forgetful)
+    assert same_verdict(on, off) and sent == []
+    assert (event["match"], event["entered_top_k"]) == ("cited_missing", False)

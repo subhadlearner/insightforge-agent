@@ -119,3 +119,18 @@ def test_a_directory_without_a_published_evaluation_is_refused(tmp_path):
     empty.mkdir()
     code, out = run(tmp_path, empty, Judges())
     assert code == 2 and not out.exists()
+
+
+def test_a_missing_provider_database_is_an_error_result_not_a_crash(tmp_path, source):
+    import shutil
+
+    copy = tmp_path / "copy"
+    shutil.copytree(source, copy)
+    for db in copy.rglob("eval.db"):
+        db.unlink()
+    code, out = run(tmp_path, copy, Judges())
+    [judged_dir] = list(out.iterdir())
+    results = json.loads((judged_dir / "judge-report.json").read_text())["results"]
+    assert code == 0 and results
+    assert {r["synthesis"]["status"] for r in results} == {"error"}
+    assert all("could not be found" in r["synthesis"]["reason"] for r in results)

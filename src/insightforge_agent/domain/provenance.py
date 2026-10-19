@@ -167,9 +167,10 @@ def _capitalised_runs(text: str) -> list[list[str]]:
 
 def document_entity(filename: str, chunk_texts: list[str]) -> str | None:
     """The company an uploaded document speaks for (T18 CS2), when the document itself
-    establishes it: a run of capitalised words its own text uses in at least two chunks (one,
-    for a one-chunk document), every word of which is in the file name, and which is not only
-    generic document words. The longest such run if it is the only one that long, else None."""
+    establishes it: a run of capitalised words its own text uses in at least two chunks, every
+    word of which is in the file name, and which is not only generic document words (so a title
+    such as "Annual Report" never qualifies). The longest such run if it is the only one that
+    long, else None: a one-chunk document never establishes one."""
     stem = {w.casefold() for w in _FILENAME_WORDS.split(filename) if w}
     seen: dict[tuple[str, ...], set[int]] = {}
     for n, text in enumerate(chunk_texts):
@@ -180,7 +181,7 @@ def document_entity(filename: str, chunk_texts: list[str]) -> str | None:
                     if all(w.casefold() in stem for w in words) and not all(
                             w.casefold() in _GENERIC_DOCUMENT_WORDS for w in words):
                         seen.setdefault(words, set()).add(n)
-    found = [w for w, chunks in seen.items() if len(chunks) >= min(2, len(chunk_texts))]
+    found = [w for w, chunks in seen.items() if len(chunks) >= 2]
     if not found:
         return None
     longest = max(len(w) for w in found)

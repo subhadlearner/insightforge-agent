@@ -75,7 +75,7 @@ def test_with_the_counterpart_fallback_the_unchanged_cited_passage_goes_to_the_j
     assert v.verdict == "unverified" and len(model.seen) == 1
     assert "no candidate span was judged SUPPORTED" in v.reason
     (attempt,) = events(deps, "fact_check_counterpart")
-    assert (attempt["used"], attempt["verified"]) == (True, False)
+    assert (attempt["entered_top_k"], attempt["verified_by_counterpart"]) == (True, False)
 
 
 def test_no_entailment_call_when_the_numeric_guard_rejects_every_candidate(make_deps):

@@ -145,11 +145,16 @@ def main(argv: list[str], *, make_judge: MakeJudge | None = None, root: Path | N
         for s in provider.samples:
             if s.status != "complete" or not s.report_id:
                 continue
-            report = _stored_report(db, s.owner_id, s.report_id)
+            try:
+                report = _stored_report(db, s.owner_id, s.report_id)
+            except sqlite3.Error as e:
+                report, unreadable = None, f"{type(e).__name__}: {e}"
+            else:
+                unreadable = ""
             synthesis = (judge_synthesis(judge, samples[s.sample_id], report)
                          if report is not None and s.sample_id in samples else
                          SynthesisResult(status="error", reason="the stored Report or its "
-                                         "sample brief could not be found"))
+                                         f"sample brief could not be found {unreadable}".strip()))
             results.append(JudgedReport(provider=provider.provider, sample_id=s.sample_id,
                                         report_id=s.report_id, synthesis=synthesis))
     out_report = JudgeOnlyReport(

@@ -15,7 +15,7 @@ from insightforge_agent.domain.models import Run, RunState
 from insightforge_agent.evaluation.judge import judge_synthesis, not_judged
 from insightforge_agent.evaluation.library import SampleBrief
 from insightforge_agent.evaluation.metrics import MetricError, citation_metrics, fact_check_metrics
-from insightforge_agent.evaluation.report import SampleResult
+from insightforge_agent.evaluation.report import FactCheckPaths, SampleResult
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.graph import run_brief
 
@@ -76,6 +76,14 @@ def evaluate_sample(deps: Deps, sample: SampleBrief, root: Path,
         result.fact_check = fact_check_metrics(report)
     except MetricError as e:
         result.metric_errors.append(str(e))
+    attempts, cursor = [], 0
+    while batch := deps.repos.events.read_after(owner, run.id, cursor):
+        attempts += [e.payload for e in batch if e.type == "fact_check_counterpart"]
+        cursor = batch[-1].seq
+    result.fact_check_paths = FactCheckPaths(
+        counterpart_looked_up=len(attempts),
+        counterpart_judged=sum(bool(a.get("entered_top_k")) for a in attempts),
+        verified_by_counterpart=sum(bool(a.get("verified_by_counterpart")) for a in attempts))
     try:
         result.citations = citation_metrics(deps.store, owner, report)
     except MetricError as e:

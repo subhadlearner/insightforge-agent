@@ -138,3 +138,7 @@ def test_only_the_chunk_sentences_the_statement_draws_on_are_checked_for_other_n
     mixed = "Medtronic reported that a single supplier provides the titanium. Its plant is in Cork."
     assert literal_problem(statement=risk1, entities=[], entity="", passage_text=mixed,
                            common=tiny, document_entity="Northwind Health") is not None
+
+
+def test_a_one_chunk_document_never_establishes_an_entity():
+    assert document_entity(FILE, ["Northwind Health revenue reached 612 million dollars."]) is None

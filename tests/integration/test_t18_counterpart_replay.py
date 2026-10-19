@@ -8,12 +8,14 @@ T18_EVAL_DB to its path (T18-evidence-package/raw/eval.db) to run this, else it 
 
 import json
 import os
+from datetime import date
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from insightforge_agent.domain.contracts import UNVERIFIED_MARK
+from insightforge_agent.domain.memory import without_report_date
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.embeddings import FastEmbedEmbedder
 from insightforge_agent.pipeline.fact_check import counterpart, screen
@@ -63,3 +65,27 @@ def test_the_eleven_t18_unverified_claims_reach_entailment_only_through_the_coun
         assert f2.candidates == [], key  # F2 had nothing: this is where the fallback applies
         assert match == "unique", key  # the cited text is on the re-fetched page, once
         assert bool(fallback.candidates) is (key != FIGURES_TOO_FAR_APART), key
+
+
+def test_the_twenty_seven_t18_verified_claims_never_reach_the_fallback(t18, make_deps):
+    """R7: every Claim T18 verified had an eligible F2 candidate, so the fallback, which runs
+    only when F2 has none, cannot change them."""
+    deps = make_deps(embedder=FastEmbedEmbedder("BAAI/bge-small-en-v1.5"))
+    checked = 0
+    for _, body in t18.execute("SELECT run_id, body FROM reports"):
+        report = json.loads(body)
+        for v in report["verified"]["verdicts"]:
+            if v["verdict"] != "verified":
+                continue
+            claim = report["draft"]["sections"][v["section"]]["claims"][v["claim"]]["text"]
+            claim = claim.replace(UNVERIFIED_MARK, "").strip()
+            if v["check"].startswith("historical_"):  # checked without its report date
+                item = next(i for i in report["historical"]["items"]
+                            if i["primary"] == v["original"])
+                claim = without_report_date(claim, date.fromisoformat(item["report_date"]))
+            if v["check"].endswith("document_passages"):
+                continue  # documents keep their own check
+            refetched = passages(t18, v["matched"]["observation_id"])
+            assert screen(deps, claim, refetched).candidates, (v["check"], claim)
+            checked += 1
+    assert checked >= 20

@@ -177,3 +177,14 @@ def test_the_writer_saw_period_or_publication_date_on_every_evidence_line(on):
     lines = [ln for p in payloads for ln in p.splitlines() if ln.startswith("- [ev_")]
     assert lines and all(re.match(r"- \[ev_\w+\] \((HIGH|MEDIUM|LOW); (as of |period not stated)",
                                    ln) for ln in lines)
+
+
+
+def test_the_report_states_the_fact_check_paths_beside_the_pass_rate(on, off):
+    for report in (on[0], off[0]):
+        for s in samples(report).values():
+            paths = s["fact_check_paths"]
+            assert paths["verified_by_counterpart"] <= paths["counterpart_judged"] <= paths[
+                "counterpart_looked_up"]
+    assert all(s["fact_check_paths"]["counterpart_looked_up"] == 0
+               for s in samples(off[0]).values())

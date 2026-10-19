@@ -28,17 +28,21 @@ from insightforge_agent.domain.contracts import (
     Claim,
     EvidenceBundle,
     EvidenceItem,
-    ResearchResults,
     HistoricalContext,
     ReportDraft,
     ReportSection,
+    ResearchResults,
 )
+from insightforge_agent.domain.document_recovery import FAILED_PREFIX
+from insightforge_agent.domain.evidence import DROP_LITERAL, DROP_NO_CITATION, DROP_UNSUPPORTED
 from insightforge_agent.domain.memory import (
     report_date_text,
     strip_report_date,
     without_report_date,
 )
 from insightforge_agent.domain.passages import named_entities_in, numbers_in
+from insightforge_agent.domain.models import Passage
+from insightforge_agent.domain.plan import SubTaskPlan
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.errors import RunFailed
 
@@ -493,12 +497,11 @@ def _flag_absence(deps: Deps, owner_id: str, run_id: str, summary: str) -> None:
         deps.log(owner_id, run_id, "summary_absence_flagged", sentences=found)
 
 
-_PROVENANCE_DROP = {"no Passage passes the provenance and literal-value checks",
-                    "draft cites no Passage"}
+_PROVENANCE_DROP = {DROP_LITERAL, DROP_NO_CITATION}
 
 
-def research_gaps(*, plan, research: ResearchResults, bundle: EvidenceBundle,
-                  events: list[dict], documents: list[tuple[str, list]]) -> list[str]:
+def research_gaps(*, plan: SubTaskPlan, research: ResearchResults, bundle: EvidenceBundle,
+                  events: list[dict], documents: list[tuple[str, list[Passage]]]) -> list[str]:
     """What this Run did not establish, from its own records, in fixed wording (T18 CS4):
     a failed Sub-task with its reported reason; a recovered documents Sub-task with what was
     kept; a Sub-task whose material produced no kept Evidence, with why; and the sections of an
@@ -508,7 +511,7 @@ def research_gaps(*, plan, research: ResearchResults, bundle: EvidenceBundle,
     for e in events:
         by_type.setdefault(e["type"], []).append(e["payload"])
 
-    def of(type_: str, sid: str) -> list[dict]:
+    def logged(type_: str, sid: str) -> list[dict]:
         return [p for p in by_type.get(type_, []) if p.get("subtask_id") == sid]
 
     results = {r.subtask_id: r for r in research.results}
@@ -517,7 +520,7 @@ def research_gaps(*, plan, research: ResearchResults, bundle: EvidenceBundle,
     for t in sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id)):
         r, head = results.get(t.id), f"Sub-task {t.id} ({t.query})"
         if r is not None and r.scope_origin == "search_recovery":
-            outcome = (of("document_recovery_outcome", t.id) or [{}])[-1]
+            outcome = (logged("document_recovery_outcome", t.id) or [{}])[-1]
             kept = outcome.get("retained_items", 0)
             lines.append(
                 f"{head}: the Document Reader failed (its search results showed no chunk text); "
@@ -527,16 +530,23 @@ def research_gaps(*, plan, research: ResearchResults, bundle: EvidenceBundle,
                     "figure and entailment checks." if kept else
                     "; none was kept after the provenance, figure and entailment checks."))
         elif r is None or r.status == "failed":
-            reason = next((p.get("reason", "") for p in reversed(of("subtask_failed", t.id))), "")
-            if reason.startswith("FAILED:"):
-                lines.append(f"{head} failed: {reason[len('FAILED:'):].strip()[:200]}")
+            # Fixed wording: the researcher's own words are model prose, and could claim that
+            # a source lacks something; they stay in the Run log, never in the Report.
+            reason = next((p.get("reason", "") for p in reversed(logged("subtask_failed", t.id))),
+                          "")
+            if reason.startswith(FAILED_PREFIX):
+                lines.append(f"{head} failed: its researcher reported that it could not complete "
+                             "it (the reply is kept in the Run log).")
             else:
                 lines.append(f"{head} produced no usable sources.")
+        elif t.source_type != "memory" and t.id not in with_items and logged("evidence_cut", t.id):
+            lines.append(f"{head}: its {len(logged('evidence_cut', t.id))} Evidence item(s) were "
+                         "cut by the evidence budget, below higher-ranked Evidence.")
         elif t.source_type != "memory" and t.id not in with_items:
-            drops = of("evidence_dropped", t.id)
+            drops = logged("evidence_dropped", t.id)
             provenance = sum(p["reason"] in _PROVENANCE_DROP for p in drops)
-            unsupported = sum(p["reason"] == "no supported Passage" for p in drops)
-            failed_calls = len(of("draft_batch_failed", t.id))
+            unsupported = sum(p["reason"] == DROP_UNSUPPORTED for p in drops)
+            failed_calls = len(logged("draft_batch_failed", t.id))
             line = f"{head}: this research did not establish it"
             if drops:
                 line += (f"; {len(drops)} drafted item(s) were not kept ({provenance} failed the "

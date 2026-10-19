@@ -11,6 +11,11 @@ from urllib.parse import urlparse
 from insightforge_agent.domain.contracts import CONFIDENCE_ORDER, Confidence, EvidenceItem
 from insightforge_agent.domain.periods import period_end
 
+# Why a drafted candidate was not kept: logged by Synthesis, counted by the Report's gap lines.
+DROP_NO_CITATION = "draft cites no Passage"
+DROP_LITERAL = "no Passage passes the provenance and literal-value checks"
+DROP_UNSUPPORTED = "no supported Passage"
+
 
 @dataclass(frozen=True)
 class Thresholds:

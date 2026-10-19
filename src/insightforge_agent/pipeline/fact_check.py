@@ -299,20 +299,24 @@ def _counterpart_verdict(
 
     if not refetched or {deps.repos.observations.get(owner_id, p.observation_id).source_id
                          for p in refetched} != {source.id}:
-        log("source_mismatch", used=False)
+        log("source_mismatch", entered_top_k=False)
         return None
-    cited = deps.store.get_passages(owner_id, original.observation_id, [original.index])[0]
+    try:
+        cited = deps.store.get_passages(owner_id, original.observation_id, [original.index])[0]
+    except NotFoundError:  # the cited Passage is gone: nothing to match, F2's verdict stands
+        log("cited_missing", entered_top_k=False)
+        return None
     found, match = counterpart(cited, refetched)
     if found is None:
-        log(match, used=False)
+        log(match, entered_top_k=False)
         return None
     s = screen(deps, text, [found], vectors, floor=-1.0)
     if not s.candidates:  # no span of it states every figure of the Claim
-        log(match, found, used=False, reason=s.reason)
+        log(match, found, entered_top_k=False, reason=s.reason)
         return None
     supported, reason = _entailed(deps, owner_id, run_id, text, s.candidates, section=section,
                                   claim=index)
-    log(match, found, used=True, verified=supported is not None,
+    log(match, found, entered_top_k=True, verified_by_counterpart=supported is not None,
         counterpart_similarity=round(s.similarity, 6))
     if supported is None:
         return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
