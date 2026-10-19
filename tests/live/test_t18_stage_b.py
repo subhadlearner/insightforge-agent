@@ -35,8 +35,11 @@ from tests.t18_stage_b_support import (
     drafting_runner,
     judged,
     passages,
+    require_out,
     require_t18_db,
     run_b2,
+    run_identity,
+    settle,
     verdicts,
     write,
 )
@@ -49,47 +52,57 @@ def test_b1_entailment_calibration():
     from insightforge_agent.pipeline.fact_check import counterpart, screen
 
     con = require_t18_db()
+    require_out()
     cases = json.loads((FIXTURES / "stage_b1_cases.json").read_text(encoding="utf-8"))
     bound, budget = checker_model("b1")
     deps = checker_deps(bound)
     stored = verdicts(con)
-    record = {"positives": [], "negatives": [], "verified": []}
-    for g in cases["groups"]:
-        v, _ = stored[g["ref"]]
-        cited = next(p for p in passages(con, v["original"]["observation_id"])
-                     if p.index == v["original"]["index"])
-        found, match = counterpart(cited, passages(con, v["matched"]["observation_id"]))
-        assert found is not None, (g["ref"], match)
-        for case in [{"id": "P", "kind": "positive", "text": g["positive"]}] + g["negatives"]:
-            s = screen(deps, case["text"], [found], floor=-1.0)
-            outcome = (judged(deps, budget, case["text"], s.candidates) if s.candidates
-                       else f"blocked before entailment: {s.reason}")
-            row = {"ref": g["ref"], "id": case["id"], "kind": case["kind"], "outcome": outcome}
-            if case["id"] == "P":
-                row["adjudication"] = cases["adjudication"][g["ref"]]
-                record["positives"].append(row)
-            else:
-                record["negatives"].append(row)
-    for key, (v, claim) in stored.items():
-        if v["verdict"] != "verified":
-            continue
-        s = screen(deps, claim, passages(con, v["matched"]["observation_id"]))
-        outcome = judged(deps, budget, claim, s.candidates) if s.candidates else "no candidate"
-        record["verified"].append({"ref": key, "outcome": outcome})
-    record["spent_estimate_usd"], record["calls"] = round(budget.spent, 4), budget.calls
-    write("b1", record)
+    record = {"positives": [], "negatives": [], "verified": [], "finished": False}
+    try:
+        for g in cases["groups"]:
+            v, _ = stored[g["ref"]]
+            cited = next(p for p in passages(con, v["original"]["observation_id"])
+                         if p.index == v["original"]["index"])
+            found, match = counterpart(cited, passages(con, v["matched"]["observation_id"]))
+            assert found is not None, (g["ref"], match)
+            for case in [{"id": "P", "kind": "positive", "text": g["positive"]}] + g["negatives"]:
+                s = screen(deps, case["text"], [found], floor=-1.0)
+                outcome = (judged(deps, budget, case["text"], s.candidates) if s.candidates
+                           else f"blocked before entailment: {s.reason}")
+                row = {"ref": g["ref"], "id": case["id"], "kind": case["kind"],
+                       "outcome": outcome}
+                if case["id"] == "P":
+                    row["adjudication"] = cases["adjudication"][g["ref"]]
+                    record["positives"].append(row)
+                else:
+                    record["negatives"].append(row)
+        for key, (v, claim) in stored.items():
+            if v["verdict"] != "verified":
+                continue
+            s = screen(deps, claim, passages(con, v["matched"]["observation_id"]))
+            outcome = judged(deps, budget, claim, s.candidates) if s.candidates else "no candidate"
+            record["verified"].append({"ref": key, "outcome": outcome})
+        record["finished"] = True
+    finally:  # a stopped run keeps every result and call it paid for
+        write("b1", settle(record, budget, run_identity("b1", bound.bound)))
     failures = b1_failures(record, cases)
     assert not failures, "\n".join(failures)
 
 
 def test_b2_drafting_smoke():
     con = require_t18_db()
+    require_out()
     spec = json.loads((FIXTURES / "stage_b2_batches.json").read_text(encoding="utf-8"))
     texts = {}
     for obs in {o for b in spec["batches"] for o, _ in b}:
         texts.update({(obs, p.index): p.text for p in passages(con, obs)})
     model, native, budget = drafting_runner("b2")  # raises unless native output is active
-    record = run_b2(texts, spec, model, native, budget)
+    record = {"finished": False}
+    try:
+        run_b2(texts, spec, model, native, budget, record)
+        record["finished"] = True
+    finally:  # a stopped run keeps every result and call it paid for
+        write("b2", settle(record, budget, run_identity("b2", model)))
     assert record["native_structured_output"] is True
     record["summary"], record["cap_decision"] = b2_summary(record), b2_cap_decision(record)
     write("b2", record)
