@@ -59,7 +59,16 @@ def native_json(model: BaseChatModel, schema: type[BaseModel]) -> Runnable | Non
     through the public `with_structured_output(method="json_schema")`; its `raw` reply is parsed
     by `agents.llm_json` exactly like any other reply. No setting of the model changes."""
     from langchain_anthropic import ChatAnthropic
+    from langchain_core.runnables import RunnableBinding
 
     if isinstance(model, ChatAnthropic):
         return model.with_structured_output(schema, method="json_schema", include_raw=True)
+    inner = model
+    while isinstance(inner, RunnableBinding):
+        inner = inner.bound
+    if isinstance(inner, ChatAnthropic):
+        # A wrapped model (e.g. `with_config(callbacks=...)`) would silently get plain JSON;
+        # build native output on the chat model and wrap that instead.
+        raise TypeError("native_json needs the chat model itself, not a wrapped one: build "
+                        "it on the ChatAnthropic and attach configuration to the result")
     return None
