@@ -305,6 +305,14 @@ Built as a tracer bullet (`pipeline/graph.py`, `run_brief`). Minimal forms that 
 - **Knock-on:** a Source with a publication date no longer has a present-state As-of derived from the Observation date (section 5 rule, unchanged).
 - **Limitation:** a Source row is written once (first ingest wins), so a Source stored before F1 keeps its old score and no date, and a later fetch or Fact-Checker re-fetch does not update it. Use a fresh database for evaluation runs. Plausibility is checked against the wall clock at parse time, the score against the Run's clock; they differ only with an injected clock.
 
+### T18 notes: remediation (#19)
+
+The T18 Anthropic evaluation pooled 20/30 = 66.7% on fact-checking (the baseline, kept as recorded). The remediation was designed from that run's stored evidence and approved per change set; each behaviour is recorded in the evaluation `conditions`, so a remediation run is never mistaken for the baseline.
+
+- **Structured drafting (CS3).** Synthesis drafting uses the provider's native structured output where one exists (`llm.native_json`, Anthropic `output_config` JSON schema), injected as `Deps.native_json` so the pipeline never imports the model layer. The reply is parsed and diagnosed exactly like plain JSON (`agents/llm_json.ask_structured`); a provider rejection of the schema is a logged `draft_batch_failed`, never retried. `DRAFT_PASSAGE_CAP` (default off) bounds Passages per drafting call. Entailment, extraction and the Writer keep plain JSON.
+- **Judge (CS5).** See section 11 (judge-prompt-2, bounded diagnostics, `eval-judge`).
+- **Fact-Checker counterpart fallback (CS1A).** Only when F2's gates leave no candidate for a web Claim: the re-fetched Passage whose normalised text equals the cited Passage's (one, or the one at the cited index; never a near match; never another Source's) is screened without the similarity floor, with the numeric gate, grouping, TOP_K, the token cap and the one entailment call unchanged; only an unambiguous SUPPORTED verifies. Absent, ambiguous, other-Source or figure-less counterparts leave the F2 verdict exactly as it was. An F2 candidate is never evicted. Documents keep `document_passages`. Every attempt is logged (`fact_check_counterpart`). Consequence, by design: below the floor, a Claim's own unchanged cited Passage now goes to the judge, and the judge, not the floor, rejects an unsupported Claim.
+
 ### F2 notes: Fact-Checker verification (owner-approved policy change)
 
 - **Why.** With the production `bge-small` embedder, similarity cannot separate a correct paraphrase (0.961) from a wrong-measure Claim with the right figures (0.963; g-ma-02 0.948), and whole-paragraph matching rejected true Claims (0.81-0.84). The owner approved span matching plus an entailment judgment instead of any threshold change (`docs/audits/2026-10-11-f2-fact-checker.md`, ledger row 13).

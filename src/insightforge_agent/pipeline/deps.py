@@ -56,6 +56,8 @@ class Deps:
     # the model layer. `draft_passage_cap` bounds the Passages per drafting call; None: no bound.
     native_json: Callable[[BaseChatModel, type], Any] | None = None
     draft_passage_cap: int | None = None
+    # T18 CS1A: the cited-Passage counterpart fallback of the Fact-Checker (fact_check.py).
+    fact_check_counterpart: bool = True
     recursion_limit: int = 60
     # Uploaded documents (T7). Without both, the documents source type cannot be researched.
     doc_index: DocChunkIndex | None = None

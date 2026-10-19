@@ -97,6 +97,17 @@ def test_drafting_reliability_settings_reach_the_pipeline(monkeypatch):
     assert (deps.native_json, deps.draft_passage_cap) == (None, 150)
 
 
+def test_the_counterpart_fallback_is_on_by_default_and_can_be_switched_off(monkeypatch):
+    from insightforge_agent.pipeline.wiring import build_deps
+    from insightforge_agent.stores.memory import MemoryRepos
+
+    on = build_deps(make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t"), MemoryRepos(),
+                    checkpointer=None)
+    off = build_deps(make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t",
+                          FACT_CHECK_COUNTERPART="false"), MemoryRepos(), checkpointer=None)
+    assert (on.fact_check_counterpart, off.fact_check_counterpart) == (True, False)
+
+
 def test_documents_are_wired_with_the_configured_local_embedding_model(monkeypatch):
     """T7: production wiring builds the Doc Reader's pieces without loading a model or opening a
     connection; the one embedding model serves documents, relevance and the Fact-Checker."""

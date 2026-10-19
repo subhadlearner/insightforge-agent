@@ -14,12 +14,21 @@ Verification (F2, owner-approved; docs/audits/2026-10-11-f2-fact-checker.md):
    is verified only if a span is judged SUPPORTED. No span left, or a failed or unusable reply,
    leaves it unverified (fail closed: never unchecked, which the pass rate leaves out).
 
+Counterpart fallback (T18 CS1A): only when steps 2-3 leave no candidate for a web Claim, the
+re-fetched Passage whose normalised text equals the cited Passage's (one, or the one at the
+cited index; never a near match) is screened again without the similarity floor, keeping the
+figure gate, grouping, TOP_K and step 4 unchanged. If it is absent, ambiguous, stored under
+another Source, or has no span stating the figures, the verdict is exactly the F2 one. Uploaded
+documents keep their own check. Each attempt is logged as `fact_check_counterpart`.
+
 A Historical Claim (T8) goes through the same steps against its original Sources: its
 Historical item carries the earlier Report's primary Passage, and the verdict's check kind is
 `historical_web_refetch` or `historical_document_passages`."""
 
 import math
 import random
+import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -106,14 +115,17 @@ class Vectors:
 
 
 def screen(deps: Deps, claim: str, passages: list[Passage],
-           vectors: Vectors | None = None) -> Screened:
+           vectors: Vectors | None = None, *, floor: float | None = None) -> Screened:
+    """Steps 1-3. `floor` replaces the similarity threshold (the counterpart fallback screens
+    its one Passage with no floor); every other step is the same."""
     spans = candidate_spans(passages, window_width(claim))
     if not spans:
         return Screened(0.0, None, [], "the Source has no Passages")
     claim_vector, *span_vectors = (vectors or Vectors(deps)).of([claim] + [s.text for s in spans])
     scores = [cosine(claim_vector, v) for v in span_vectors]
     ranked = sorted(zip(scores, range(len(spans)), spans), key=lambda x: (-x[0], x[1]))
-    similar = [(score, span) for score, _, span in ranked if score >= deps.similarity_threshold]
+    threshold = deps.similarity_threshold if floor is None else floor
+    similar = [(score, span) for score, _, span in ranked if score >= threshold]
     if not similar:
         best, _, span = ranked[0]
         return Screened(best, _ref(span), [], "no Passage is similar enough to the Claim")
@@ -189,6 +201,23 @@ def _entailed(deps: Deps, owner_id: str, run_id: str, statement: str,
     return None, f"no candidate span was judged SUPPORTED ({dict(sorted(counts.items()))})"
 
 
+def _normalised(text: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip().casefold()
+
+
+def counterpart(original: Passage, refetched: list[Passage]) -> tuple[Passage | None, str]:
+    """The re-fetched Passage that is the cited one, by content: the only one whose normalised
+    text (NFKC, whitespace, case) equals it, or among several equal ones the one at the cited
+    index. Returns it with how it was found, or None with "absent" or "ambiguous"."""
+    same = [p for p in refetched if _normalised(p.text) == _normalised(original.text)]
+    if len(same) == 1:
+        return same[0], "unique"
+    at_index = [p for p in same if p.index == original.index]
+    if len(at_index) == 1:
+        return at_index[0], "unique_by_index"
+    return None, "ambiguous" if same else "absent"
+
+
 class _Refetcher:
     """Re-fetches each cited web Source at most once per fact-check."""
 
@@ -241,6 +270,11 @@ def _verdict(
             return ClaimVerdict(**base, verdict="unchecked", check=check,
                                 reason="the Source could not be re-fetched")
     s = screen(deps, text, passages, vectors)
+    if not s.candidates and source.kind != "pdf" and deps.fact_check_counterpart:
+        fallback = _counterpart_verdict(deps, vectors, owner_id, run_id, section, index, text,
+                                        original, source, passages, check, base)
+        if fallback is not None:
+            return fallback
     supported, reason = (None, s.reason) if not s.candidates else _entailed(  # no call if none
         deps, owner_id, run_id, text, s.candidates, section=section, claim=index)
     if supported is None:
@@ -249,6 +283,47 @@ def _verdict(
     similarity, span = supported
     return ClaimVerdict(**base, verdict="verified", check=check, similarity=similarity,
                         matched=_ref(span))
+
+
+def _counterpart_verdict(
+    deps: Deps, vectors: Vectors, owner_id: str, run_id: str, section: int, index: int,
+    text: str, original: PassageRef, source: Source, refetched: list[Passage], check: str,
+    base: dict,
+) -> ClaimVerdict | None:
+    """The fallback's verdict, or None when the counterpart cannot be used (the caller then
+    returns F2's verdict unchanged). Logged either way."""
+    def log(match: str, found: Passage | None = None, **extra) -> None:
+        deps.log(owner_id, run_id, "fact_check_counterpart", section=section, claim=index,
+                 original=original.model_dump(), match=match,
+                 counterpart=_ref_of(found).model_dump() if found else None, **extra)
+
+    if not refetched or {deps.repos.observations.get(owner_id, p.observation_id).source_id
+                         for p in refetched} != {source.id}:
+        log("source_mismatch", used=False)
+        return None
+    cited = deps.store.get_passages(owner_id, original.observation_id, [original.index])[0]
+    found, match = counterpart(cited, refetched)
+    if found is None:
+        log(match, used=False)
+        return None
+    s = screen(deps, text, [found], vectors, floor=-1.0)
+    if not s.candidates:  # no span of it states every figure of the Claim
+        log(match, found, used=False, reason=s.reason)
+        return None
+    supported, reason = _entailed(deps, owner_id, run_id, text, s.candidates, section=section,
+                                  claim=index)
+    log(match, found, used=True, verified=supported is not None,
+        counterpart_similarity=round(s.similarity, 6))
+    if supported is None:
+        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
+                            matched=s.matched, reason=reason)
+    similarity, span = supported
+    return ClaimVerdict(**base, verdict="verified", check=check, similarity=similarity,
+                        matched=_ref(span))
+
+
+def _ref_of(p: Passage) -> PassageRef:
+    return PassageRef(observation_id=p.observation_id, index=p.index)
 
 
 def _historical_verdict(

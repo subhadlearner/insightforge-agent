@@ -43,8 +43,8 @@ def replying(content: str) -> ScriptedChat:
     return ScriptedChat(reply=lambda messages: AIMessage(content=content))
 
 
-def check(make_deps, model, claim=SALES, page=SALES, kind="web"):
-    deps = make_deps(fetcher=Fetcher({URL: page}), light_model=model)
+def check(make_deps, model, claim=SALES, page=SALES, kind="web", **deps_overrides):
+    deps = make_deps(fetcher=Fetcher({URL: page}), light_model=model, **deps_overrides)
     obs, bundle = evidence(deps, [page], kind=kind)
     result = fact_check(deps, "alice", "run_1", draft_of([claim]), bundle)
     (v,) = result.verdicts
@@ -58,11 +58,24 @@ def events(deps, type_):
 # --- no model call when the deterministic gates leave no span ---------------------------------
 
 def test_no_entailment_call_when_no_span_clears_the_threshold(make_deps):
+    """F2 alone (the T18 counterpart fallback off): the floor stops the call."""
     model = judge("SUPPORTED")
-    v, deps, _ = check(make_deps, model, claim="Tesla opened a factory in Berlin.")
+    v, deps, _ = check(make_deps, model, claim="Tesla opened a factory in Berlin.",
+                       fact_check_counterpart=False)
     assert v.verdict == "unverified" and v.similarity < 0.85
     assert v.reason == "no Passage is similar enough to the Claim"
     assert model.seen == [] and events(deps, "fact_check_entailment") == []
+
+
+def test_with_the_counterpart_fallback_the_unchanged_cited_passage_goes_to_the_judge(make_deps):
+    """T18 CS1A, by design: below the floor, the Claim's own unchanged cited Passage is judged,
+    and the judge, not the floor, rejects an unsupported Claim."""
+    model = judge("INSUFFICIENT_EVIDENCE")
+    v, deps, _ = check(make_deps, model, claim="Tesla opened a factory in Berlin.")
+    assert v.verdict == "unverified" and len(model.seen) == 1
+    assert "no candidate span was judged SUPPORTED" in v.reason
+    (attempt,) = events(deps, "fact_check_counterpart")
+    assert (attempt["used"], attempt["verified"]) == (True, False)
 
 
 def test_no_entailment_call_when_the_numeric_guard_rejects_every_candidate(make_deps):

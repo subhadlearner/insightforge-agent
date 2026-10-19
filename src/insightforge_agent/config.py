@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     # and an optional bound on Passages per drafting call (None: only the token cap bounds it).
     draft_structured_output: bool = True
     draft_passage_cap: int | None = Field(default=None, gt=0)
+    # T18 CS1A: the Fact-Checker's cited-Passage counterpart fallback.
+    fact_check_counterpart: bool = True
     credibility_high: float = 0.65
     credibility_medium: float = 0.4
     recency_fresh_days: int = 365

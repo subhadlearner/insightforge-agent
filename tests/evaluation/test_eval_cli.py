@@ -391,6 +391,7 @@ def test_provider_and_judge_identity_are_recorded_from_what_ran(full_run):
     # T18: each remediation behaviour is recorded, so a run is never mistaken for the baseline.
     assert (result["conditions"]["draft_structured_output"],
             result["conditions"]["draft_passage_cap"]) == ("off", None)
+    assert result["conditions"]["fact_check_method"] == "f2+counterpart-v1"
     assert [s.llm_provider for s in judges.built] == ["groq"]
     assert report["judge"] == {"provider": "groq", "model": "openai/gpt-oss-120b",
                                "runtime_model": "TunedChat", "role": "writer",

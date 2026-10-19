@@ -563,7 +563,9 @@ evaluation has been run yet. That is T18.**
   Confidence reflects source count and credibility, not truth.
 - **Fact-checking is a sample.** It checks 20% of Claims (at least 5). A `verified` Claim had a
   supporting span at or above the 0.85 similarity threshold, containing the Claim's figures, that the
-  light model judged SUPPORTED. Unsampled Claims are not checked, and `[UNVERIFIED]` means only
+  light model judged SUPPORTED. Since T18, when no span clears the threshold, the Claim's own cited
+  Passage, if it is still on the re-fetched page word for word, is judged the same way (figures
+  and the SUPPORTED judgment still required). Unsampled Claims are not checked, and `[UNVERIFIED]` means only
   that the check found no support.
 - **Data handling.** Everything is stored locally: SQLite files (`*.db`, git-ignored), Qdrant,
   and the model cache. Fetched web pages and uploaded PDFs are kept for as long as a Report

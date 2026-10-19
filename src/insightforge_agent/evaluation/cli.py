@@ -147,6 +147,7 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         # T18 remediation behaviours: a run under them is never the T18 baseline.
         "draft_structured_output": "on" if deps.native_json is not None else "off",
         "draft_passage_cap": deps.draft_passage_cap,
+        "fact_check_method": "f2+counterpart-v1" if deps.fact_check_counterpart else "f2",
         # The effective Evidence thresholds: they set Confidence and ranking.
         "credibility_high": deps.thresholds.credibility_high,
         "credibility_medium": deps.thresholds.credibility_medium,
