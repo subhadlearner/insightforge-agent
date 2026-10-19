@@ -27,8 +27,8 @@ T18_S2_SEARCHES = [[f"{O}:{i}" for i in (0, 10, 7, 3, 1, 4, 6, 2)],
 
 def test_the_t18_s2_failure_is_the_recognised_limitation():
     ok, phrases = recoverable(T18_S2, T18_S2_SEARCHES)
-    assert ok and LIMITATION_LEXICON == "DOC_READER_LIMITATION_V1"
-    assert {"metadata", "no text", "can't confirm", "need to be read"} <= set(phrases)
+    assert ok and LIMITATION_LEXICON == "DOC_READER_LIMITATION_V2"
+    assert phrases == ["returned only metadata", "no text content"]
 
 
 @pytest.mark.parametrize("reason, searches", [
@@ -44,9 +44,9 @@ def test_other_failures_are_never_recovered(reason, searches):
     assert recoverable(reason, searches)[0] is False
 
 
-def test_a_relevance_judgment_is_recovered_only_when_the_reply_blames_missing_text():
+def test_a_relevance_judgment_is_never_recovered_even_beside_the_limitation():
     both = "FAILED: no relevant content, but doc_search returned only metadata without text."
-    assert recoverable(both, T18_S2_SEARCHES)[0] is True
+    assert recoverable(both, T18_S2_SEARCHES)[0] is False
 
 
 # ---- which chunks ----------------------------------------------------------------------------
@@ -138,3 +138,22 @@ def test_only_the_chunk_sentences_the_statement_draws_on_are_checked_for_other_n
     mixed = "Medtronic reported that a single supplier provides the titanium. Its plant is in Cork."
     assert literal_problem(statement=risk1, entities=[], entity="", passage_text=mixed,
                            common=tiny, document_entity="Northwind Health") is not None
+
+
+# ---- review fix: only the metadata-only limitation itself is recoverable ---------------------
+
+@pytest.mark.parametrize("reason", [
+    "FAILED: doc_search raised an error: connection timed out after 30 seconds.",
+    "FAILED: doc_search returned an exception, so I cannot verify the chunks.",
+    "FAILED: I am not authorized to access this document; permission denied.",
+    "FAILED: I cannot verify the R&D figures because the report covers 2019, not 2025.",
+    "FAILED: I can't confirm the pipeline stages from these results.",
+    "FAILED: the PDF metadata shows it is a draft, so it cannot be used.",
+    "FAILED: doc_search returned only metadata, and these chunks are not relevant to R&D.",
+    "FAILED: doc_search returned only metadata after a timeout error.",
+    "FAILED: the results show no text about the R&D pipeline at all.",
+], ids=["tool error", "exception then cannot verify", "authorisation", "cannot verify, other reason",
+        "can't confirm alone", "metadata in another sense", "metadata-only but irrelevant",
+        "metadata-only after an error", "no text about the topic"])
+def test_a_failure_that_is_not_the_metadata_only_limitation_is_never_recovered(reason):
+    assert recoverable(reason, T18_S2_SEARCHES) == (False, [])
