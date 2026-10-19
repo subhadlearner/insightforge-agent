@@ -11,11 +11,14 @@ published Claude Haiku 5.5 prices, to the next call's worst case (estimated inpu
 max_tokens) and stops the part if that would pass its allocation. This bounds what the harness
 sends; it is not a billing control (check the Console balance before and after).
 
-B-1 pass rule (fixed in advance): no adversarial negative judged SUPPORTED, and none of T18's
-27 verified Claims lost. The 10 positives are reported against the recorded adjudication, with
-no threshold. One run is a minimum regression gate, not statistical proof.
-B-2 pass rule: no syntax failure (invalid JSON, schema, empty) under native structured output;
-truncations, items and output tokens are reported per Passage cap (None, 150, 120)."""
+The pass rules are fixed in advance in tests/t18_acceptance.py and unit-tested offline:
+B-1 (`b1_failures`): no adversarial negative judged SUPPORTED; each of the 8 positives
+adjudicated clearly supported judged SUPPORTED (the partly supported Germany Claim and the
+doubtful H20 Claim are reported, not gated); none of T18's 27 verified Claims lost; no case
+missing. One run is a minimum regression gate, not statistical proof.
+B-2 (`b2_failures`): for every cap configuration (None, 150, 120) independently, no reply that
+is not the schema unless the provider stopped it at max_tokens (truncation, reported). Each
+configuration's results and the cap decision (`b2_cap_decision`) are recorded."""
 
 import json
 import os
@@ -34,6 +37,7 @@ from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.llm import build_chat_model, native_json
 from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM
 from insightforge_agent.pipeline.synthesize import DRAFT_SYSTEM, _Drafts
+from tests.t18_acceptance import b1_failures, b2_cap_decision, b2_failures, b2_summary
 
 pytestmark = pytest.mark.live
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "t18"
@@ -149,11 +153,8 @@ def test_b1_entailment_calibration():
         record["verified"].append({"ref": key, "outcome": outcome})
     record["spent_estimate_usd"], record["calls"] = round(budget.spent, 4), budget.calls
     write("b1", record)
-    false_support = [r for r in record["negatives"] if r["outcome"] == "SUPPORTED"]
-    lost = [r for r in record["verified"] if r["outcome"] != "SUPPORTED"]
-    assert len(record["verified"]) == 27
-    assert not false_support, false_support
-    assert not lost, lost
+    failures = b1_failures(record, cases)
+    assert not failures, "\n".join(failures)
 
 
 def test_b2_drafting_smoke():
@@ -186,9 +187,7 @@ def test_b2_drafting_smoke():
                 rows.append({"kind": "rejected", "detail": str(e)})
         record[str(cap)] = rows
     record["spent_estimate_usd"], record["calls"] = round(budget.spent, 4), budget.calls
+    record["summary"], record["cap_decision"] = b2_summary(record), b2_cap_decision(record)
     write("b2", record)
-    # A reply cut off at max_tokens (even one that is all reasoning, so empty) is truncation,
-    # reported above; anything else that is not the schema is a syntax failure.
-    syntax = [r for r in record["None"] if r.get("kind") in ("invalid_json", "schema", "rejected")
-              or (r.get("kind") == "empty" and r.get("stop_reason") != "max_tokens")]
-    assert not syntax, syntax
+    failures = b2_failures(record)
+    assert not failures, "\n".join(failures)
