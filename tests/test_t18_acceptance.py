@@ -12,9 +12,9 @@ import pytest
 
 from tests.t18_acceptance import (
     b1_breakdown,
+    b1_decision,
     b1_failures,
     b1_outcome_kind,
-    b1_proposed_reliability_failures,
     b2_cap_decision,
     b2_classify,
     b2_failures,
@@ -92,16 +92,92 @@ def test_each_b1_outcome_is_classified_by_how_it_was_reached(outcome, kind):
     assert b1_outcome_kind(outcome) == kind
 
 
-def test_a_malformed_negative_still_passes_the_unchanged_rule_but_is_reported_apart():
-    """The rule run 2 was decided by is unchanged (N28 is not SUPPORTED, so it passes); the
-    breakdown shows it was not a semantic rejection, and the proposed rule would name it."""
+def test_a_malformed_negative_passes_the_old_rule_but_is_reported_apart():
+    """Runs 1 and 2 were decided by `b1_failures`, unchanged: N28 is not SUPPORTED, so it
+    passed that rule. The breakdown shows it was not a semantic rejection."""
     record = b1_record(negative=lambda n: MALFORMED if n["id"] == "N28" else
                        "blocked before entailment: x" if n["id"] == "N31" else JUDGED)
     assert b1_failures(record, CASES) == []
     assert b1_breakdown(record)["negatives"] == {"judged": 38, "screened": 1, "unusable": 1}
-    assert b1_proposed_reliability_failures(record) == [
-        f"negative run_f388cc91cf2a 2.1 N28: {MALFORMED}"]
-    assert b1_proposed_reliability_failures(b1_record(negative=lambda n: JUDGED)) == []
+
+
+# ---- B-1 decision from run 3 (GPT-6 decision on 773cb65): 3.3 adjudicated, unusable replies
+# ---- are INCONCLUSIVE --------------------------------------------------------------------------
+
+ADJUDICATED = json.loads((Path(__file__).resolve().parent / "fixtures" / "t18" /
+                          "stage_b1_verified_adjudication.json").read_text(encoding="utf-8"))
+BYD_33 = "run_06105d324454 3.3"
+INSUFFICIENT = ("not supported: no candidate span was judged SUPPORTED "
+                "({'INSUFFICIENT_EVIDENCE': 1})")
+
+
+def b1_run3(negative=lambda n: "blocked before entailment: x" if n["id"] == "N31" else JUDGED,
+            positive=lambda ref: "SUPPORTED", byd=INSUFFICIENT, other=lambda ref: "SUPPORTED"):
+    record = b1_record(positive=positive, negative=negative)
+    record["verified"] = [{"ref": BYD_33, "outcome": byd}] + [
+        {"ref": f"v{i}", "outcome": other(f"v{i}")} for i in range(26)]
+    return record
+
+
+def test_the_adjudication_names_only_3_3_and_leaves_the_case_file_unchanged():
+    assert {ref: a["expected"] for ref, a in ADJUDICATED["verified"].items()} == {
+        BYD_33: "INSUFFICIENT_EVIDENCE"}
+    assert "Source title" in ADJUDICATED["verified"][BYD_33][
+        "why_the_saved_verified_is_not_authoritative"]
+    raw = (Path(__file__).resolve().parent / "fixtures" / "t18" / "stage_b1_cases.json")
+    assert hashlib.sha256(raw.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == (
+        "704bbe19215dafb90f7e452d109b8c066cae03b94612175fc72455d8ad217b72")  # as runs 1-2 used
+
+
+def test_b1_passes_only_with_26_supported_and_3_3_validly_judged_insufficient():
+    assert b1_decision(b1_run3(), CASES, ADJUDICATED) == {
+        "status": "PASS", "failures": [], "inconclusive": []}
+
+
+@pytest.mark.parametrize("byd", [
+    "SUPPORTED",
+    "not supported: no candidate span was judged SUPPORTED ({'CONTRADICTED': 1})",
+    "not supported: no candidate span was judged SUPPORTED "
+    "({'CONTRADICTED': 1, 'INSUFFICIENT_EVIDENCE': 1})",
+    "no candidate",  # fail-closed by the gates, but not a judgment
+])
+def test_3_3_fails_on_anything_but_a_valid_insufficient_judgment(byd):
+    decision = b1_decision(b1_run3(byd=byd), CASES, ADJUDICATED)
+    assert decision["status"] == "FAIL" and BYD_33 in decision["failures"][0]
+
+
+def test_3_3_with_an_unusable_reply_is_inconclusive_and_its_absence_fails():
+    assert b1_decision(b1_run3(byd=MALFORMED), CASES, ADJUDICATED)["status"] == "INCONCLUSIVE"
+    record = b1_run3()
+    record["verified"] = record["verified"][1:] + [{"ref": "v26", "outcome": "SUPPORTED"}]
+    decision = b1_decision(record, CASES, ADJUDICATED)
+    assert decision["status"] == "FAIL"
+    assert decision["failures"] == [f"adjudicated T18-verified Claim {BYD_33}: no result recorded"]
+
+
+def test_an_unusable_reply_never_satisfies_a_clean_calibration():
+    """N28's shape: a malformed reply to a negative is no semantic rejection. Run 3 cannot pass
+    on it; it is INCONCLUSIVE, and a definite miss elsewhere still makes it FAIL."""
+    n28 = b1_run3(negative=lambda n: MALFORMED if n["id"] == "N28" else
+                  "blocked before entailment: x" if n["id"] == "N31" else JUDGED)
+    decision = b1_decision(n28, CASES, ADJUDICATED)
+    assert decision["status"] == "INCONCLUSIVE" and decision["failures"] == []
+    assert decision["inconclusive"] == [
+        f"negative N28 (unsupported detail, run_f388cc91cf2a 2.1): no valid judgment ({MALFORMED})"]
+    unsent = "not supported: the entailment request (3100 tokens) exceeds the per-call cap of 3000"
+    assert b1_decision(b1_run3(positive=lambda r: unsent if r == "run_0b45a66fd66d 2.6" else
+                               "SUPPORTED"), CASES, ADJUDICATED)["status"] == "INCONCLUSIVE"
+    worse = b1_run3(negative=lambda n: MALFORMED if n["id"] == "N28" else
+                    "SUPPORTED" if n["id"] == "N25" else JUDGED)
+    assert b1_decision(worse, CASES, ADJUDICATED)["status"] == "FAIL"
+
+
+def test_run_2s_shape_still_fails_under_the_new_decision():
+    """Two Claims lost by valid judgments are definite failures, not inconclusive."""
+    lost = {"v1", "v2"}
+    decision = b1_decision(b1_run3(other=lambda ref: INSUFFICIENT if ref in lost else
+                                   "SUPPORTED"), CASES, ADJUDICATED)
+    assert decision["status"] == "FAIL" and len(decision["failures"]) == 2
 
 
 # ---- B-2 ---------------------------------------------------------------------------------------

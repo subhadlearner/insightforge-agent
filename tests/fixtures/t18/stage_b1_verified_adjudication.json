@@ -1,0 +1,11 @@
+{
+  "_note": "T18 Stage B-1, prospective from B-1 run 3 (GPT-6 review decision on commit 773cb65, accepted by the owner). Adjudicates T18-verified Claims whose saved 'verified' verdict is not authoritative under the current cited-Passage contract. Every one of the 27 T18-verified Claims is still assessed and reported; a Claim listed here must receive the stated valid model judgment instead of SUPPORTED, and any other outcome (SUPPORTED, CONTRADICTED, screened before the call, or an unusable reply) does not satisfy it. stage_b1_cases.json, the saved eval.db and the B-1 run 1 and run 2 records are unchanged and were decided by the earlier rule.",
+  "verified": {
+    "run_06105d324454 3.3": {
+      "expected": "INSUFFICIENT_EVIDENCE",
+      "claim": "BYD is targeting 400 Wh/kg with 5C charging for its solid-state battery, with initial production in 2027.",
+      "cited_passage": "obs_a61d15cce53c78b8 index 44: 'BYD: Targeting 400 Wh/kg with 5C charging, initial production 2027'",
+      "why_the_saved_verified_is_not_authoritative": "The cited Passage states BYD, 400 Wh/kg, 5C charging and initial production in 2027, but not 'solid-state'. That topic is supplied only by the Source title ('Solid-State Batteries 2026: ...'); neither the Passage nor its neighbours (indices 37-46) state it. T18 verified the Claim with the earlier, looser entailment instruction (SUPPORTED: 'the passage states the statement'), which did not require every assertion to be stated. Under the current contract (the whole statement, judged on the cited Passage only, never the Source title) the Passage does not establish the Claim, so the correct judgment is INSUFFICIENT_EVIDENCE."
+    }
+  }
+}

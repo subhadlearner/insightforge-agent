@@ -107,10 +107,19 @@ def test_with_same_passage_context_the_judge_sees_the_antecedents_and_nothing_mo
         return shown(claim, screen(deps, claim, passages(t18, v["matched"]["observation_id"]))
                      .candidates)
 
-    assert "the LFP battery industry faces challenges" in verified("run_06105d324454 2.6")
-    assert "China dominated the regional market" in verified("run_7be9b5b129d0 3.1")
-    assert verified("run_06105d324454 3.3") == (
+    def whole(key):  # the matched Passage, complete, as the judge's one numbered item
+        v, _ = stored[key]
+        text = next(p.text for p in passages(t18, v["matched"]["observation_id"])
+                    if p.index == v["matched"]["index"])
+        return "[1] " + " ".join(text.split())
+
+    for key, antecedent in (("run_06105d324454 2.6", "the LFP battery industry faces"),
+                            ("run_7be9b5b129d0 3.1", "China dominated the regional market")):
+        assert verified(key) == whole(key) and antecedent in verified(key), key
+    # 3.3: its own complete Passage, which never says "solid-state" (adjudicated INSUFFICIENT)
+    assert verified("run_06105d324454 3.3") == whole("run_06105d324454 3.3") == (
         "[1] BYD: Targeting 400 Wh/kg with 5C charging, initial production 2027")
+    assert "solid" not in verified("run_06105d324454 3.3").casefold()
 
     negatives = {n["id"]: (g["ref"], n["text"]) for g in CASES["groups"] for n in g["negatives"]}
     for case, absent in (("N25", ("IEA", "World Energy Outlook")),

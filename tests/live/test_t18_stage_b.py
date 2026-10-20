@@ -12,10 +12,13 @@ max_tokens) and stops the part if that would pass its allocation. This bounds wh
 sends; it is not a billing control (check the Console balance before and after).
 
 The pass rules are fixed in advance in tests/t18_acceptance.py and unit-tested offline:
-B-1 (`b1_failures`): no adversarial negative judged SUPPORTED; each of the 8 positives
-adjudicated clearly supported judged SUPPORTED (the partly supported Germany Claim and the
-doubtful H20 Claim are reported, not gated); none of T18's 27 verified Claims lost; no case
-missing. One run is a minimum regression gate, not statistical proof.
+B-1 (`b1_decision`, from run 3; runs 1 and 2 were decided by `b1_failures`): no adversarial
+negative judged SUPPORTED; each of the 8 positives adjudicated clearly supported judged
+SUPPORTED (the partly supported Germany Claim and the doubtful H20 Claim are reported, not
+gated); all 27 of T18's verified Claims assessed, 26 SUPPORTED and 3.3 validly judged
+INSUFFICIENT_EVIDENCE (stage_b1_verified_adjudication.json); no case missing. A case with no
+valid judgment (an unusable reply) makes the run INCONCLUSIVE, never a pass. One run is a
+minimum regression gate, not statistical proof.
 B-2 (`b2_failures`): for every cap configuration (None, 150, 120) independently, no reply that
 is not the schema unless the provider stopped it at max_tokens (truncation, reported). Each
 configuration's results and the cap decision (`b2_cap_decision`) are recorded. B-2 drafts
@@ -30,8 +33,7 @@ import pytest
 
 from tests.t18_acceptance import (
     b1_breakdown,
-    b1_failures,
-    b1_proposed_reliability_failures,
+    b1_decision,
     b2_cap_decision,
     b2_failures,
     b2_summary,
@@ -61,6 +63,8 @@ def test_b1_entailment_calibration():
     con = require_t18_db()
     require_out()
     cases = json.loads((FIXTURES / "stage_b1_cases.json").read_text(encoding="utf-8"))
+    adjudicated = json.loads((FIXTURES / "stage_b1_verified_adjudication.json")
+                             .read_text(encoding="utf-8"))
     bound, budget = checker_model("b1")
     deps = checker_deps(bound)
     stored = verdicts(con)
@@ -91,13 +95,13 @@ def test_b1_entailment_calibration():
             record["verified"].append({"ref": key, "outcome": outcome})
         record["finished"] = True
     finally:  # a stopped run keeps every result and call it paid for
-        # Diagnostic only: how each result was reached, and the proposed (not gating) rule
-        # that every reply must be readable. Neither changes the pass rule below.
+        # How each result was reached, and the decision, kept even when the run stopped.
         record["breakdown"] = b1_breakdown(record)
-        record["proposed_reliability_failures"] = b1_proposed_reliability_failures(record)
+        record["decision"] = b1_decision(record, cases, adjudicated)
         write("b1", settle(record, budget, run_identity("b1", bound.bound)))
-    failures = b1_failures(record, cases)
-    assert not failures, "\n".join(failures)
+    decision = record["decision"]
+    assert decision["status"] == "PASS", "\n".join(
+        [decision["status"]] + decision["failures"] + decision["inconclusive"])
 
 
 def test_b2_drafting_smoke():

@@ -199,8 +199,9 @@ def in_context(span: Span, token_budget: int) -> str:
     """The span with as much of its own Passage around it as fits `token_budget` tokens: the
     preceding sentences first, where a subject or place is usually named ("the LFP battery
     industry faces...", "China dominated..."), then the following ones. Only the span's own
-    Passage is ever added, never a neighbouring Passage or the Source's title, and the span
-    itself is always shown whole, whatever the budget."""
+    Passage is ever added, never a neighbouring Passage or the Source's title. The budget is a
+    target for the added context only: the span itself is always shown whole, even when it alone
+    is longer than the budget; the caller's per-call cap is the hard limit."""
     sentences = sentences_of(span.passage.text)
     first, last = span.first, span.last
 

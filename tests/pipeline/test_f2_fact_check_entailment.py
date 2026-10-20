@@ -429,3 +429,25 @@ def test_a_long_passage_is_cut_to_the_context_budget_around_the_span():
     assert SALES in shown and estimate_tokens(shown) <= CONTEXT_TOKENS
     assert filler[199] in shown and filler[0] not in shown  # the nearest sentences, before first
     assert in_context(span, 1) == SALES  # the span itself is always shown whole
+
+
+def test_context_never_lets_a_request_pass_the_hard_cap(make_deps):
+    """The context target is soft, the per-call cap is not: a span whose Passage context would
+    take the request over the cap is not sent (fail closed), never sent over it."""
+    from insightforge_agent.domain.passages import in_context
+    from insightforge_agent.pipeline.fact_check import CONTEXT_TOKENS
+
+    page = " ".join([f"Filler sentence number {n} says nothing about the claim." for n in
+                     range(60)] + [SALES])
+    (span,) = [s for s in candidate_spans([Passage(observation_id="o", index=0, text=page)], 1)
+               if s.text == SALES]
+    with_context = (estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(
+        f"Statement: {SALES}\n\n[1] {in_context(span, CONTEXT_TOKENS)}"))
+    alone = estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(f"Statement: {SALES}\n\n[1] {SALES}")
+    assert alone < with_context
+    model = judge("SUPPORTED")
+    deps = make_deps(fetcher=Fetcher({URL: page}), light_model=model,
+                     passage_token_cap=with_context - 1)
+    _, bundle = evidence(deps, [page])
+    (v,) = fact_check(deps, "alice", "run_1", draft_of([SALES]), bundle).verdicts
+    assert model.seen == [] and v.verdict == "unverified" and "exceeds the per-call cap" in v.reason

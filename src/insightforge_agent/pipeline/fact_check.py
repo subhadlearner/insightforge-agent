@@ -65,7 +65,11 @@ from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM, EntailmentVerdicts
 
 TOP_K = 3  # spans judged by the one entailment call per Claim
-CONTEXT_TOKENS = 800  # the most of its own Passage one judged span is shown with (TOP_K fit)
+# The context target per judged span: context is added only while the span and its context fit
+# it. A span longer than it is still shown whole (a span is indivisible), so this is a target,
+# not a limit; the hard limit is `passage_token_cap` on the whole request, which `_entailed`
+# enforces by dropping candidates, or making no call at all.
+CONTEXT_TOKENS = 800
 
 
 def sample_size(claims: int, rate: float, minimum: int) -> int:

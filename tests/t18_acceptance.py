@@ -14,6 +14,7 @@ diagnostic alone: an error type, a logged reason or a Gap line explains a miss, 
 success. External unavailability (the Run never fetched the facts) is kept apart from pipeline
 loss (the Run fetched them and lost them): the first is inconclusive, the second a failure."""
 
+import ast
 import json
 import re
 import sqlite3
@@ -31,7 +32,8 @@ EXPECTED_VERIFIED = 27
 
 
 def b1_failures(record: dict, cases: dict) -> list[str]:
-    """Every negative judged not SUPPORTED; each of the 8 positives adjudicated "yes" judged
+    """The rule B-1 runs 1 and 2 were decided by, kept unchanged for those records (from run 3,
+    `b1_decision` decides). Every negative judged not SUPPORTED; each of the 8 positives adjudicated "yes" judged
     SUPPORTED (Germany "partly" and the doubtful H20 Claim are reported only); all 27 of T18's
     verified Claims still SUPPORTED; and no case missing."""
     failures = []
@@ -92,13 +94,75 @@ def b1_breakdown(record: dict) -> dict:
     return out
 
 
-def b1_proposed_reliability_failures(record: dict) -> list[str]:
-    """PROPOSED, NOT GATING (prospective only; it needs owner approval before it may decide a
-    run, and never re-decides an earlier one): every call B-1 makes must return a reply the
-    production parser can read. Lists each case whose result came from an unusable reply."""
-    return [f"{group[:-1]} {r['ref']} {r.get('id', '')}: {r['outcome']}".replace("  ", " ")
-            for group in ("positives", "negatives", "verified") for r in record.get(group, [])
-            if b1_outcome_kind(r["outcome"]) == "unusable"]
+INCONCLUSIVE_KINDS = ("unusable", "not_sent")  # no valid judgment was obtained
+
+
+def judged_verdicts(outcome: str) -> set[str]:
+    """The verdicts a valid reply gave, read from a 'judged' outcome ("... judged SUPPORTED
+    ({'INSUFFICIENT_EVIDENCE': 1})"); empty for any other outcome."""
+    found = re.search(r"\((\{[^()]*\})\)$", outcome)
+    if b1_outcome_kind(outcome) != "judged" or not found:
+        return set()
+    return set(ast.literal_eval(found.group(1)))
+
+
+def b1_decision(record: dict, cases: dict, adjudicated: dict) -> dict:
+    """The clean-calibration decision for B-1 from run 3 on (GPT-6 decision on 773cb65; runs 1
+    and 2 were decided by `b1_failures`, which is unchanged). 'FAIL' on any definite miss;
+    else 'INCONCLUSIVE' if any gated case got no valid judgment (an unusable reply or a request
+    not sent: never counted as a semantic rejection); else 'PASS'.
+    - Negatives: never SUPPORTED, each rejected by a valid judgment or the deterministic gates.
+    - The 8 positives adjudicated "yes": SUPPORTED.
+    - All 27 T18-verified Claims are assessed and reported. Those in `adjudicated["verified"]`
+      need a valid judgment giving exactly the expected verdict (any other outcome, screened
+      included, fails); every other one is SUPPORTED."""
+    failures, inconclusive = [], []
+
+    def no_judgment(what: str, outcome: str) -> bool:
+        if b1_outcome_kind(outcome) in INCONCLUSIVE_KINDS:
+            inconclusive.append(f"{what}: no valid judgment ({outcome})")
+            return True
+        return False
+
+    by_case = {(r["ref"], r["id"]): r for r in record.get("negatives", [])}
+    for g in cases["groups"]:
+        for n in g["negatives"]:
+            row = by_case.get((g["ref"], n["id"]))
+            what = f"negative {n['id']} ({n['kind']}, {g['ref']})"
+            if row is None:
+                failures.append(f"{what}: no result recorded")
+            elif row["outcome"] == "SUPPORTED":
+                failures.append(f"{what} was judged SUPPORTED: {n['text']!r}")
+            else:
+                no_judgment(what, row["outcome"])
+    positives = {r["ref"]: r for r in record.get("positives", [])}
+    for g in cases["groups"]:
+        if cases["adjudication"][g["ref"]] != CLEARLY_SUPPORTED:
+            continue
+        row, what = positives.get(g["ref"]), f"positive {g['ref']}"
+        if row is None:
+            failures.append(f"{what}: no result recorded")
+        elif row["outcome"] != "SUPPORTED" and not no_judgment(what, row["outcome"]):
+            failures.append(f"{what} (adjudicated clearly supported) was not SUPPORTED: "
+                            f"{row['outcome']}; Claim {g['positive']!r}")
+    verified = {r["ref"]: r for r in record.get("verified", [])}
+    if len(verified) != EXPECTED_VERIFIED:
+        failures.append(f"{len(verified)} of the {EXPECTED_VERIFIED} T18-verified Claims recorded")
+    expected = {ref: a["expected"] for ref, a in adjudicated["verified"].items()}
+    failures += [f"adjudicated T18-verified Claim {ref}: no result recorded"
+                 for ref in expected if ref not in verified]
+    for ref, row in verified.items():
+        outcome, what = row["outcome"], f"T18-verified Claim {ref}"
+        if ref in expected:
+            if judged_verdicts(outcome) == {expected[ref]}:
+                continue
+            if not no_judgment(what, outcome):
+                failures.append(f"{what} (adjudicated {expected[ref]}) was not validly judged "
+                                f"{expected[ref]}: {outcome}")
+        elif outcome != "SUPPORTED" and not no_judgment(what, outcome):
+            failures.append(f"{what} lost: {outcome}")
+    status = "FAIL" if failures else "INCONCLUSIVE" if inconclusive else "PASS"
+    return {"status": status, "failures": failures, "inconclusive": inconclusive}
 
 
 # ---- Stage B-2: drafting smoke test ----------------------------------------------------------
