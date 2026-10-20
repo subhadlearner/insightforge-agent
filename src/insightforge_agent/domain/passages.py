@@ -195,6 +195,25 @@ def candidate_spans(passages: list[Passage], width: int = 2) -> list[Span]:
     return spans
 
 
+def in_context(span: Span, token_budget: int) -> str:
+    """The span with as much of its own Passage around it as fits `token_budget` tokens: the
+    preceding sentences first, where a subject or place is usually named ("the LFP battery
+    industry faces...", "China dominated..."), then the following ones. Only the span's own
+    Passage is ever added, never a neighbouring Passage or the Source's title, and the span
+    itself is always shown whole, whatever the budget."""
+    sentences = sentences_of(span.passage.text)
+    first, last = span.first, span.last
+
+    def fits(a: int, b: int) -> bool:
+        return estimate_tokens(" ".join(sentences[a:b + 1])) <= token_budget
+
+    while first > 0 and fits(first - 1, last):
+        first -= 1
+    while last + 1 < len(sentences) and fits(first, last + 1):
+        last += 1
+    return " ".join(sentences[first:last + 1])
+
+
 _SPACE_CURRENCY = re.compile(r"([$€£])\s*(\d[\d,]*(?:\.\d+)?)")
 _CURRENCY = {"$": "dollar", "€": "euro", "£": "pound"}
 _VALUE_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?|[^\W\d_]+|%")

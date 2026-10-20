@@ -62,6 +62,45 @@ def b1_failures(record: dict, cases: dict) -> list[str]:
     return failures
 
 
+def b1_outcome_kind(outcome: str) -> str:
+    """How a B-1 result was reached (diagnostic; `b1_failures` is unchanged):
+    'supported'; 'judged' (a valid reply judged no span SUPPORTED); 'screened' (stopped by the
+    deterministic gates, no call); 'unusable' (a call was made but its reply could not be read
+    or judged nothing); 'not_sent' (over the per-call cap, no call). Unknown text is
+    'unusable', never 'judged'."""
+    if outcome == "SUPPORTED":
+        return "supported"
+    if outcome.startswith("not supported: no candidate span was judged SUPPORTED"):
+        return "judged"
+    if outcome.startswith("blocked before entailment") or outcome == "no candidate":
+        return "screened"
+    if outcome.startswith("not supported: the entailment request"):
+        return "not_sent"
+    return "unusable"
+
+
+def b1_breakdown(record: dict) -> dict:
+    """Per group, how many results were reached each way: a negative 'judged' is a valid
+    semantic rejection; 'screened' and 'unusable' negatives passed the rule without one."""
+    out = {}
+    for group in ("positives", "negatives", "verified"):
+        counts: dict[str, int] = {}
+        for r in record.get(group, []):
+            kind = b1_outcome_kind(r["outcome"])
+            counts[kind] = counts.get(kind, 0) + 1
+        out[group] = dict(sorted(counts.items()))
+    return out
+
+
+def b1_proposed_reliability_failures(record: dict) -> list[str]:
+    """PROPOSED, NOT GATING (prospective only; it needs owner approval before it may decide a
+    run, and never re-decides an earlier one): every call B-1 makes must return a reply the
+    production parser can read. Lists each case whose result came from an unusable reply."""
+    return [f"{group[:-1]} {r['ref']} {r.get('id', '')}: {r['outcome']}".replace("  ", " ")
+            for group in ("positives", "negatives", "verified") for r in record.get(group, [])
+            if b1_outcome_kind(r["outcome"]) == "unusable"]
+
+
 # ---- Stage B-2: drafting smoke test ----------------------------------------------------------
 
 CAPS = ("None", "150", "120")

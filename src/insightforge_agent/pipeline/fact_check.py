@@ -10,7 +10,10 @@ Verification (F2, owner-approved; docs/audits/2026-10-11-f2-fact-checker.md):
 2. Relevance: the embedder scores the Claim against every span; spans under the similarity
    threshold are dropped.
 3. Figures: a span that does not state every figure of the Claim is dropped.
-4. Support: one light-model entailment call judges the best `TOP_K` remaining spans. The Claim
+4. Support: one light-model entailment call judges the best `TOP_K` remaining spans, each
+   shown in the context of its own Passage (`in_context`, up to `CONTEXT_TOKENS`; never another
+   Passage or the Source title), so a span is judged with the subject or place its Passage names
+   before it. The gates of steps 2-3 still apply to the span alone. The Claim
    is verified only if a span is judged SUPPORTED. No span left, or a failed or unusable reply,
    leaves it unverified (fail closed: never unchecked, which the pass rate leaves out).
 
@@ -51,6 +54,7 @@ from insightforge_agent.domain.passages import (
     Span,
     Window,
     candidate_spans,
+    in_context,
     render_batch,
     window_width,
 )
@@ -61,6 +65,7 @@ from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM, EntailmentVerdicts
 
 TOP_K = 3  # spans judged by the one entailment call per Claim
+CONTEXT_TOKENS = 800  # the most of its own Passage one judged span is shown with (TOP_K fit)
 
 
 def sample_size(claims: int, rate: float, minimum: int) -> int:
@@ -155,15 +160,37 @@ def screen(deps: Deps, claim: str, passages: list[Passage],
     return Screened(chosen[0][0], _ref(chosen[0][1]), chosen)  # stable sort: ties keep order
 
 
+def judged_candidates(candidates: list[tuple[float, Span]]) -> list[tuple[float, Span]]:
+    """The candidates the judge is shown, best first: one per distinct text in context, so two
+    spans of a short Passage, each shown as the whole Passage, take one place."""
+    seen: set[tuple[str, int, str]] = set()
+    out = []
+    for score, span in candidates:
+        key = (span.passage.observation_id, span.passage.index, in_context(span, CONTEXT_TOKENS))
+        if key not in seen:
+            seen.add(key)
+            out.append((score, span))
+    return out
+
+
+def entailment_request(statement: str, candidates: list[tuple[float, Span]]) -> str:
+    """Step 4's user message, exactly as sent: each candidate span in the context of its own
+    Passage (`in_context`, at most `CONTEXT_TOKENS`). The gates have already passed the span
+    itself; the context only lets the judge see what the span is about (T18 B-1 run 2)."""
+    return f"Statement: {statement}\n\n" + render_batch(
+        [Window(span.passage, in_context(span, CONTEXT_TOKENS)) for _, span in candidates])
+
+
 def _entailed(deps: Deps, owner_id: str, run_id: str, statement: str,
               candidates: list[tuple[float, Span]],
               **where) -> tuple[tuple[float, Span] | None, str]:
     """Step 4: the best candidate judged SUPPORTED, or None and the reason none is. The
     request is held to the per-call cap by dropping the weakest candidates; if even the best
     one alone does not fit, no call is made. `where` names the Claim in the logged events."""
+    candidates = judged_candidates(candidates)
+
     def payload(cands: list[tuple[float, Span]]) -> str:
-        return f"Statement: {statement}\n\n" + render_batch(
-            [Window(span.passage, span.text) for _, span in cands])
+        return entailment_request(statement, cands)
 
     system_tokens = estimate_tokens(ENTAIL_SYSTEM)
 

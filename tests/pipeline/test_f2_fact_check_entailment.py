@@ -98,13 +98,15 @@ def test_qualifying_spans_are_judged_in_one_call_bounded_to_top_k(make_deps):
     assert str(model.seen[0][-1].content).startswith(f"Statement: {SALES}\n\n")
 
 
-def test_a_claim_inside_a_paragraph_is_judged_against_its_sentence_not_the_paragraph(make_deps):
+def test_a_claim_inside_a_paragraph_is_matched_by_its_window_and_judged_in_its_paragraph(
+        make_deps):
     model = judge("SUPPORTED")
     v, deps, _ = check(make_deps, model, page=PARAGRAPH)
     texts = [t for _, t in numbered(model.seen[0])]
-    # The sentence, widened to the window with its neighbour; never the whole paragraph.
+    # Matched and scored by the window (the sentence and its neighbour); since T18 B-1 run 2
+    # the judge reads that window within its own Passage, here the whole short paragraph.
     window = f"{SALES} Plug-in hybrids made up about half of those sales."
-    assert texts == [window]
+    assert texts == [PARAGRAPH]
     a, b = deps.embedder.embed([SALES, window])
     assert v.verdict == "verified" and v.similarity == pytest.approx(cosine(a, b))
     assert v.similarity < 1.0  # the window's own score, not the exact sentence's
@@ -348,6 +350,10 @@ def test_no_supported_span_leaves_the_claim_unverified_and_marked(make_deps, ver
     "not json at all",
     '{"verdicts": [{"passage": 1, "verdict": "MAYBE"}]}',
     '{"verdicts": "nope"}',
+    # T18 B-1 run 2, N28: a malformed reply, then a "corrected" one in the same message. Not
+    # read, whichever verdict the second one gives: the reply as a whole is not the schema.
+    '{"verdicts": [{"passage": 1, "verdict": "CONTRADICTED"}, {"verdicts": null}]}\n\nWait, '
+    'here is the corrected reply:\n\n{"verdicts": [{"passage": 1, "verdict": "SUPPORTED"}]}',
 ])
 def test_a_malformed_reply_leaves_the_claim_unverified_and_is_logged(make_deps, content):
     v, deps, result = check(make_deps, replying(content))
@@ -382,3 +388,44 @@ def test_a_span_judged_both_supported_and_contradicted_does_not_verify(make_deps
             '{"passage": 1, "verdict": "CONTRADICTED"}]}')
     v, _, _ = check(make_deps, replying(both))
     assert v.verdict == "unverified"
+
+
+# --- the judged span in the context of its own Passage (T18 B-1 run 2) -----------------------
+
+def test_the_judge_sees_the_subject_its_passage_names_before_the_span(make_deps):
+    page = ("The LFP battery industry faces challenges. Energy density is lower than NMC. "
+            f"{SALES}")
+    model = judge("SUPPORTED")
+    check(make_deps, model, page=page)
+    assert [t for _, t in numbered(model.seen[0])] == [page]
+
+
+def test_the_context_never_comes_from_a_neighbouring_passage(make_deps):
+    """Unrelated-neighbour contamination: the Passages before and after the span's own one are
+    never shown with it, however short they are."""
+    before, after = "Tesla is targeting solid-state cells.", "All exports are exempt."
+    model = judge("SUPPORTED")
+    check(make_deps, model, page=f"{before}\n\n{SALES}\n\n{after}")
+    shown = [t for _, t in numbered(model.seen[0])]
+    assert SALES in shown and all(before not in t and after not in t for t in shown)
+
+
+def test_spans_of_one_short_passage_take_one_place_in_the_call(make_deps):
+    page = f"{SALES} Unrelated filler sentence here. Another unrelated sentence. {SALES}"
+    model = judge("SUPPORTED")
+    check(make_deps, model, page=page)
+    assert [t for _, t in numbered(model.seen[0])] == [page]  # shown once, not twice
+
+
+def test_a_long_passage_is_cut_to_the_context_budget_around_the_span():
+    from insightforge_agent.domain.passages import in_context
+    from insightforge_agent.pipeline.fact_check import CONTEXT_TOKENS
+
+    filler = [f"Filler sentence number {n} says nothing about the claim." for n in range(400)]
+    passage = Passage(observation_id="o", index=0,
+                      text=" ".join(filler[:200] + [SALES] + filler[200:]))
+    (span,) = [s for s in candidate_spans([passage], 1) if s.text == SALES]
+    shown = in_context(span, CONTEXT_TOKENS)
+    assert SALES in shown and estimate_tokens(shown) <= CONTEXT_TOKENS
+    assert filler[199] in shown and filler[0] not in shown  # the nearest sentences, before first
+    assert in_context(span, 1) == SALES  # the span itself is always shown whole

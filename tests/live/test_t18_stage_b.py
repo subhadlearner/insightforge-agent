@@ -28,7 +28,14 @@ from pathlib import Path
 
 import pytest
 
-from tests.t18_acceptance import b1_failures, b2_cap_decision, b2_failures, b2_summary
+from tests.t18_acceptance import (
+    b1_breakdown,
+    b1_failures,
+    b1_proposed_reliability_failures,
+    b2_cap_decision,
+    b2_failures,
+    b2_summary,
+)
 from tests.t18_stage_b_support import (
     checker_deps,
     checker_model,
@@ -84,6 +91,10 @@ def test_b1_entailment_calibration():
             record["verified"].append({"ref": key, "outcome": outcome})
         record["finished"] = True
     finally:  # a stopped run keeps every result and call it paid for
+        # Diagnostic only: how each result was reached, and the proposed (not gating) rule
+        # that every reply must be readable. Neither changes the pass rule below.
+        record["breakdown"] = b1_breakdown(record)
+        record["proposed_reliability_failures"] = b1_proposed_reliability_failures(record)
         write("b1", settle(record, budget, run_identity("b1", bound.bound)))
     failures = b1_failures(record, cases)
     assert not failures, "\n".join(failures)

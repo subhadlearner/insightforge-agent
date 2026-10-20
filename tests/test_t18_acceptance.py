@@ -11,7 +11,10 @@ from pathlib import Path
 import pytest
 
 from tests.t18_acceptance import (
+    b1_breakdown,
     b1_failures,
+    b1_outcome_kind,
+    b1_proposed_reliability_failures,
     b2_cap_decision,
     b2_classify,
     b2_failures,
@@ -65,6 +68,40 @@ def test_b1_fails_on_a_supported_negative_a_lost_verified_claim_or_a_missing_cas
     incomplete["negatives"] = incomplete["negatives"][1:]
     assert b1_failures(incomplete, CASES) == [
         "negative N01 (run_06105d324454 0.1): no result recorded"]
+
+
+
+# ---- B-1 diagnostics (T18 B-1 run 2, N28): how each result was reached, never gating ----------
+
+JUDGED = "not supported: no candidate span was judged SUPPORTED ({'INSUFFICIENT_EVIDENCE': 2})"
+MALFORMED = "not supported: the entailment check failed (BadModelReply)"
+
+
+@pytest.mark.parametrize(("outcome", "kind"), [
+    ("SUPPORTED", "supported"),
+    (JUDGED, "judged"),
+    ("blocked before entailment: the matched Passage does not state ['2022']", "screened"),
+    ("no candidate", "screened"),
+    (MALFORMED, "unusable"),
+    ("not supported: the entailment reply judged none of the candidate spans", "unusable"),
+    ("not supported: the entailment request (3100 tokens) exceeds the per-call cap of 3000",
+     "not_sent"),
+    ("something new", "unusable"),  # never counted as a valid semantic rejection
+])
+def test_each_b1_outcome_is_classified_by_how_it_was_reached(outcome, kind):
+    assert b1_outcome_kind(outcome) == kind
+
+
+def test_a_malformed_negative_still_passes_the_unchanged_rule_but_is_reported_apart():
+    """The rule run 2 was decided by is unchanged (N28 is not SUPPORTED, so it passes); the
+    breakdown shows it was not a semantic rejection, and the proposed rule would name it."""
+    record = b1_record(negative=lambda n: MALFORMED if n["id"] == "N28" else
+                       "blocked before entailment: x" if n["id"] == "N31" else JUDGED)
+    assert b1_failures(record, CASES) == []
+    assert b1_breakdown(record)["negatives"] == {"judged": 38, "screened": 1, "unusable": 1}
+    assert b1_proposed_reliability_failures(record) == [
+        f"negative run_f388cc91cf2a 2.1 N28: {MALFORMED}"]
+    assert b1_proposed_reliability_failures(b1_record(negative=lambda n: JUDGED)) == []
 
 
 # ---- B-2 ---------------------------------------------------------------------------------------

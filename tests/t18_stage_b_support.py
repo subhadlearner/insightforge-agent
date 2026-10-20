@@ -166,9 +166,10 @@ def checker_deps(model):
 
 def judged(deps, budget, claim: str, candidates) -> str:
     """One entailment call through the production step 4; its outcome as a word."""
-    from insightforge_agent.pipeline.fact_check import _entailed
+    from insightforge_agent.pipeline.fact_check import _entailed, entailment_request
 
-    if not budget.allow(ENTAIL_SYSTEM + claim + " ".join(s.text for _, s in candidates)):
+    # The guard sizes the request as sent: each span in the context of its own Passage.
+    if not budget.allow(ENTAIL_SYSTEM + entailment_request(claim, candidates)):
         pytest.fail(f"stopped by the budget guard after ${budget.spent:.4f}")
     supported, reason = _entailed(deps, "t18-stage-b", "b", claim, candidates, section=0, claim=0)
     return "SUPPORTED" if supported else f"not supported: {reason}"
