@@ -22,7 +22,9 @@ Run 3 otherwise met every rule:
 
 ## Why the failure is excepted, not fixed
 
-An offline audit labelled all 27 historical verified Claims against the single-Passage F2 contract ([audit report](2026-10-21-t18-b1-historical-claim-audit.md), SHA-256 `3f8f100c8d57e5c9c4f72771e6183f4d6c24e0e3f310e8f5df1bb4eaf8f52da3`). It found that 24 are supported and 3 are not (`1.5`, `2.9`, `3.3`). Each of the 3 carries a qualifier that appears only outside its cited Passage.
+An offline audit labelled all 27 historical verified Claims against the single-Passage F2 contract ([audit report](2026-10-21-t18-b1-historical-claim-audit.md)). The report has two SHA-256 hashes, one per line-ending form:
+- `3f8f100c8d57e5c9c4f72771e6183f4d6c24e0e3f310e8f5df1bb4eaf8f52da3`: the reviewed copy, with Windows (CRLF) line endings, as a Windows checkout restores it;
+- `de054c640ecc54017d215cb41d6a8a9e26a9f87aff7f7253539eb4df1d0d03b8`: LF line endings, as git stores it. It found that 24 are supported and 3 are not (`1.5`, `2.9`, `3.3`). Each of the 3 carries a qualifier that appears only outside its cited Passage.
 
 - **`1.5` was correctly rejected.** Its historical VERIFIED label is defective: the Passage gives Microsoft's 20% share but never says it is of cloud infrastructure services. B-1 failed for asking the verifier to reproduce an incorrect label.
 - **`3.3` was correctly rejected.** Its label was already adjudicated INSUFFICIENT_EVIDENCE ("solid-state" is only in the Source title).
