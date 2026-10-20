@@ -13,7 +13,8 @@ import pytest
 from langchain_core.callbacks import BaseCallbackHandler
 
 from insightforge_agent.config import Settings
-from insightforge_agent.domain.contracts import UNVERIFIED_MARK
+from insightforge_agent.domain.contracts import UNVERIFIED_MARK, Claim, HistoricalContext
+from insightforge_agent.domain.memory import without_report_date
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.llm import build_chat_model, native_json
@@ -135,14 +136,21 @@ def passages(con, observation_id) -> list[Passage]:
 
 
 def verdicts(con) -> dict[str, tuple[dict, str]]:
-    """'run section.claim' -> (stored verdict, Claim text)."""
+    """'run section.claim' -> (stored verdict, the Claim text as production checks it). A
+    Historical Claim is checked as `fact_check` checks it: without the recognised report-date
+    annotation of the Historical item it cites (`without_report_date` with that item's
+    `report_date`), its other wording kept."""
     out = {}
     for run_id, body in con.execute("SELECT run_id, body FROM reports"):
         report = json.loads(body)
+        background = HistoricalContext.model_validate(report.get("historical") or {}).by_id()
         for v in report["verified"]["verdicts"]:
-            claim = report["draft"]["sections"][v["section"]]["claims"][v["claim"]]["text"]
-            out[f"{run_id} {v['section']}.{v['claim']}"] = (
-                v, claim.replace(UNVERIFIED_MARK, "").strip())
+            c = Claim.model_validate(
+                report["draft"]["sections"][v["section"]]["claims"][v["claim"]])
+            claim = c.text.replace(UNVERIFIED_MARK, "").strip()
+            if c.historical:
+                claim = without_report_date(claim, background[c.evidence_id].report_date)
+            out[f"{run_id} {v['section']}.{v['claim']}"] = (v, claim)
     return out
 
 

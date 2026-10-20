@@ -28,7 +28,11 @@ def t18():
 
 
 @pytest.mark.integration
-def test_39_negatives_reach_the_judge_and_n31_is_blocked_by_the_figure_gate(t18, make_deps):
+def test_76_of_the_77_b1_assessments_reach_the_judge_and_n31_does_not(t18, make_deps):
+    """B-1 assesses 77 cases: 10 positives, 40 negatives and T18's 27 verified Claims. Only
+    N31 is blocked by the figure gate, so a run makes 76 calls. The two Historical Claims reach
+    the judge because they are checked without their report-date annotation, as production
+    checks them (B1-03); the first B-1 run sent them annotated and they never did."""
     from insightforge_agent.embeddings import FastEmbedEmbedder
     from insightforge_agent.pipeline.fact_check import counterpart, screen
     from tests.t18_stage_b_support import passages, verdicts
@@ -47,7 +51,14 @@ def test_39_negatives_reach_the_judge_and_n31_is_blocked_by_the_figure_gate(t18,
             if case["id"] == "N31":
                 assert not ok
     assert reach == {(True, True): 10, (False, True): 39, (False, False): 1}
-    assert sum(v["verdict"] == "verified" for v, _ in stored.values()) == 27
+    verified = {k: claim for k, (v, claim) in stored.items() if v["verdict"] == "verified"}
+    assert len(verified) == 27
+    for key, claim in verified.items():  # as the harness screens them
+        v, _ = stored[key]
+        assert screen(deps, claim, passages(t18, v["matched"]["observation_id"])).candidates, key
+    for key in ("run_7be9b5b129d0 2.0", "run_7be9b5b129d0 3.1"):
+        assert "(reported" not in verified[key]
+        assert verified[key].startswith("The earlier report found that")  # framing kept
 
 
 @pytest.mark.integration

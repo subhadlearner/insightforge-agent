@@ -177,3 +177,53 @@ def test_stage_b_refuses_an_unusable_output_directory_before_any_call(tmp_path, 
     monkeypatch.setenv("T18_STAGE_B_OUT", str(target))
     with pytest.raises(pytest.fail.Exception, match="not a writable directory"):
         require_out()
+
+
+# ---- B1-03: a Historical Claim is checked as production checks it --------------------------
+
+def test_b1_checks_a_historical_claim_as_fact_check_does(monkeypatch):
+    """The harness's Claim text is the one `_historical_verdict` hands to the check: without the
+    recognised annotation of the Historical item's own report date, every other word kept. A
+    current Claim, or another date in the text, is never touched."""
+    import sqlite3
+    from datetime import date
+
+    from insightforge_agent.domain.contracts import HistoricalItem, PassageRef
+    from insightforge_agent.pipeline import fact_check
+    from tests.t18_stage_b_support import verdicts
+
+    ref = PassageRef(observation_id="obs_old", index=201)
+    item = HistoricalItem(id="hist_1", subtask_id="s3", aspect_id="a3", heading="Sales",
+                          statement="BYD's 2025 sales reached 4,602,436 vehicles.", entity="BYD",
+                          report_id="rep_old", run_id="run_old", report_date=date(2026, 10, 19),
+                          as_of_period="2025", primary=ref, supporting=[ref])
+    claims = [
+        {"text": "The earlier report found that BYD's 2025 sales reached 4,602,436 vehicles "
+                 "(reported 2026-10-19).", "evidence_id": "hist_1", "historical": True},
+        {"text": "As reported on 2026-10-19, BYD sold 4,602,436 vehicles in 2025.",
+         "evidence_id": "hist_1", "historical": True},
+        {"text": "BYD sold 4,602,436 vehicles in 2025 (reported 2026-10-18).",
+         "evidence_id": "hist_1", "historical": True},  # not that item's date: substance
+        {"text": "BYD sold 1,108,048 NEVs in Q2 2026 (reported 2026-10-19).",
+         "evidence_id": "ev_1", "historical": False},  # a current Claim is checked as written
+    ]
+    report = {"draft": {"sections": [{"claims": claims}]},
+              "verified": {"verdicts": [{"section": 0, "claim": i} for i in range(4)]},
+              "historical": {"items": [item.model_dump(mode="json")]}}
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE reports (run_id TEXT, body TEXT)")
+    con.execute("INSERT INTO reports VALUES ('run_new', ?)", (json.dumps(report),))
+
+    checked = []
+    monkeypatch.setattr(fact_check, "_verdict", lambda *a, **k: checked.append(a[7]))
+    for c in claims[:3]:
+        fact_check._historical_verdict(None, None, None, "o", "r", 0, 0, c["text"], item, "hist_1")
+
+    harness = [text for _, text in verdicts(con).values()]
+    assert harness[:3] == checked  # exactly what production checks
+    assert harness == [
+        "The earlier report found that BYD's 2025 sales reached 4,602,436 vehicles.",
+        "BYD sold 4,602,436 vehicles in 2025.",
+        "BYD sold 4,602,436 vehicles in 2025 (reported 2026-10-18).",
+        "BYD sold 1,108,048 NEVs in Q2 2026 (reported 2026-10-19).",
+    ]
