@@ -197,6 +197,24 @@ def _within(name: str, entity: str) -> bool:
                               for i in range(len(have) - len(want) + 1))
 
 
+def credited_names(
+    *, statement: str, entities: list[str], entity: str, passage_text: str,
+    common: frozenset[str] | None = None, document_entity: str | None = None,
+) -> list[str]:
+    """The names a Passage of an uploaded document does not state but `credited_by_document`
+    credits to the document's own company (T18 CS2), or [] when none was needed or none
+    applies. Shared by Synthesis and the Fact-Checker, so both use the same narrow rule."""
+    if not document_entity:
+        return []
+    vocabulary = common if common is not None else common_words([passage_text, statement])
+    names = missing_names(statement=statement, entities=entities, entity=entity,
+                          passage_text=passage_text, common=vocabulary).missing
+    if names and credited_by_document(names, entity=document_entity, statement=statement,
+                                      chunk_text=passage_text, common=vocabulary):
+        return names
+    return []
+
+
 def without_credited_names(statement: str, names: list[str]) -> str | None:
     """The statement with the document's own company names (already credited to it by
     `credited_by_document`) removed, for the entailment judge (T18 Stage C): "Northwind Health

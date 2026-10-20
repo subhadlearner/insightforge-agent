@@ -771,3 +771,40 @@ def test_stage_c_command_attributes_through_the_runs_uploaded_report(tmp_path):
     con.close()
     rc, out = cli("stage-c", d)
     assert (rc, out["status"]) == (0, "pass"), out
+
+
+# ---- Final pre-Stage-C review: naming Northwind, or a code with digits, is not enough --------
+
+def with_item(passage, statement, entity, claim):
+    """`with_competitor`, with the Claim's own text given."""
+    b = from_document(body([s for s in NORTHWIND if s != REVENUE]),
+                      [e for s, e in zip(NORTHWIND, DOC_ENTITIES) if s != REVENUE])
+    b["evidence"]["sections"][0]["items"].append({
+        "id": "ev_x", "entity": entity, "statement": statement,
+        "primary": {"observation_id": "obs_doc", "index": 99}})
+    b["verified"]["draft"]["sections"][0]["claims"].append(
+        {"evidence_id": "ev_x", "historical": False, "text": claim})
+    document = NorthwindDocument({**NORTHWIND_PDF.passages, ("obs_doc", 99): passage},
+                                 NORTHWIND_PDF.common)
+    return document_coverage(b, document)["facts"]["revenue 612 million"]
+
+
+UNLIKE = "Unlike Northwind, Medtronic revenue reached 612 million dollars in fiscal 2025."
+CODE = "3M revenue reached 612 million dollars in fiscal 2025."
+
+
+@pytest.mark.parametrize("passage, statement, entity, claim, verdict", [
+    # Another company's figure in a Passage that also mentions Northwind.
+    (UNLIKE, UNLIKE, "Medtronic", UNLIKE, "candidate"),
+    (UNLIKE, UNLIKE, "Northwind Health", UNLIKE, "candidate"),
+    (UNLIKE, UNLIKE, "", SAME, "candidate"),
+    # Another company or product whose name has digits.
+    (CODE, CODE, "3M", SAME, "mismatch"),
+    (CODE, CODE, "", SAME, "candidate"),
+    ("The rival AB-500 maker reported that revenue reached 612 million dollars in fiscal 2025.",
+     "AB-500 revenue reached 612 million dollars in fiscal 2025.", "AB-500", SAME, "mismatch"),
+], ids=["names-both-entity-other", "names-both-entity-northwind", "names-both-claim-silent",
+        "digits-entity", "digits-sentence-initial", "digits-product-code"])
+def test_naming_northwind_or_a_digit_code_never_credits_another_companys_figure(
+        passage, statement, entity, claim, verdict):
+    assert with_item(passage, statement, entity, claim) == verdict

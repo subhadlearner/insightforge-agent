@@ -436,12 +436,17 @@ def northwind_document(con: sqlite3.Connection, run_id: str) -> NorthwindDocumen
 _MONTH = re.compile(r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?$")
 
 
+# Northwind's own product codes in the sample report. Any other code (3M, AB-500) may name
+# another company or its product.
+_NORTHWIND_CODES = frozenset({"nw-200"})
+
+
 def _northwinds(name: str) -> bool:
-    """A name the Northwind report uses for itself or a date: the company, a product code
+    """A name the Northwind report uses for itself or a date: the company, its product code
     (NW-200), one of its three segments, a month or a period label. Anything else may be
     another company."""
     return (all(w.casefold() in ("northwind", "health") for w in tokens(name))
-            or any(c.isdigit() for c in name) or bool(_MONTH.match(name))
+            or name.casefold() in _NORTHWIND_CODES or bool(_MONTH.match(name))
             or bool(_PERIOD_LABEL.match(name))
             or any(re.fullmatch(p, name, re.IGNORECASE) for p in _SEGMENTS.values()))
 
@@ -471,7 +476,12 @@ def _attribution(item: dict | None, common: frozenset[str] = frozenset(),
         return "unknown"
     statement, entity = item["statement"], item.get("entity") or ""
     if _NORTHWIND.search(statement) or _NORTHWIND.search(entity):
-        return "northwind"
+        # Naming Northwind is not enough when it names someone else too ("Unlike Northwind,
+        # Medtronic revenue reached ..."): whose figure it is cannot be settled here. Only the
+        # entity label naming Northwind: the statement's mid-sentence names are checked.
+        others = (asserted_names(statement, common) if _NORTHWIND.search(statement)
+                  else named_entities_in(statement)) | asserted_names(entity, common)
+        return "northwind" if all(_northwinds(n) for n in others) else "unknown"
     primary = item.get("primary") or {}
     cited = (document.passages.get((primary.get("observation_id"), primary.get("index")))
              if document is not None else None)
@@ -487,12 +497,15 @@ def _attribution(item: dict | None, common: frozenset[str] = frozenset(),
 
 def _attributed(verdict: str, claim: str, item: dict | None, common: frozenset[str],
                 document: NorthwindDocument | None = None) -> str:
-    """A Claim's verdict once its company is checked. A Claim naming Northwind is Northwind's.
-    One that names a company its cited Evidence does not ("Medtronic revenue reached 612
+    """A Claim's verdict once its company is checked. A Claim naming Northwind is Northwind's,
+    unless it also names someone else (then only a candidate). One that names a company its cited Evidence does not ("Medtronic revenue reached 612
     million"), or cites Evidence about another company, is a mismatch. One that names no company
     is attributed through its cited Evidence; without that, it is only a candidate."""
-    if verdict not in ("match", "candidate") or _NORTHWIND.search(claim):
+    if verdict not in ("match", "candidate"):
         return verdict
+    if _NORTHWIND.search(claim):  # Northwind's, unless it names someone else as well
+        others = asserted_names(claim, common)
+        return verdict if all(_northwinds(n) for n in others) else "candidate"
     cited = item or {"statement": "", "entity": ""}
     known = {t.casefold() for t in tokens(f"{cited['statement']} {cited.get('entity') or ''}")}
     if any(n.casefold() not in known and not _PERIOD_LABEL.match(n)

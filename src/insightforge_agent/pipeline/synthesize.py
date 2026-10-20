@@ -66,6 +66,7 @@ from insightforge_agent.domain.passages import (
 from insightforge_agent.domain.provenance import (
     common_words,
     credited_by_document,
+    credited_names,
     document_entity,
     missing_names,
     without_credited_names,
@@ -92,7 +93,10 @@ as the passages write it>", "passages": [<numbers of every passage that bears on
 "<short snake_case relation>", "value": "<the stated value>", "scope": "<what it covers, or
 empty>", "as_of_period": "<the period a passage states, as 2025, 2025-Q3, 2025-09 or
 2025-01..2025-06, or UNKNOWN if none is stated>"}]}
-Only state what the passages say. Leave entity, predicate and value empty if there is none."""
+Only state what the passages say. Leave entity, predicate and value empty if there is none.
+When passages explicitly state management outlook or forward financial guidance relevant to the
+research sub-task, draft it as a separate Evidence item with its stated period. Do not infer,
+calculate, or invent guidance."""
 
 class _DraftItem(BaseModel):
     statement: str
@@ -398,23 +402,6 @@ def literal_problem(
     if names:
         return f"name not in Passage: {names}"
     return None
-
-
-def credited_names(
-    *, statement: str, entities: list[str], entity: str, passage_text: str,
-    common: frozenset[str] | None = None, document_entity: str | None = None,
-) -> list[str]:
-    """The names `literal_problem` accepted only because the uploaded document speaks for
-    them (T18 CS2 credit), or [] when none was needed or none applies."""
-    if not document_entity:
-        return []
-    vocabulary = common if common is not None else common_words([passage_text, statement])
-    names = missing_names(statement=statement, entities=entities, entity=entity,
-                          passage_text=passage_text, common=vocabulary).missing
-    if names and credited_by_document(names, entity=document_entity, statement=statement,
-                                      chunk_text=passage_text, common=vocabulary):
-        return names
-    return []
 
 
 def _validate(

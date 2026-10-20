@@ -24,6 +24,12 @@ figure gate, grouping, TOP_K and step 4 unchanged. If it is absent, ambiguous, s
 another Source, or has no span stating the figures, the verdict is exactly the F2 one. Uploaded
 documents keep their own check. Each attempt is logged as `fact_check_counterpart`.
 
+Source-identity exception (T18 Stage C, current Claims from uploaded documents only): when the
+candidate Passages do not name the document's own company but the CS2 rule credits it (each
+names no one else), step 4 judges the Claim without those company names, as Synthesis does
+(`document_judged_as`); the gates still run on the Claim as written. Logged as
+`document_credit` on `fact_check_entailment`. Web and Historical Claims never take this path.
+
 A Historical Claim (T8) goes through the same steps against its original Sources: its
 Historical item carries the earlier Report's primary Passage, and the verdict's check kind is
 `historical_web_refetch` or `historical_document_passages`."""
@@ -57,6 +63,13 @@ from insightforge_agent.domain.passages import (
     in_context,
     render_batch,
     window_width,
+)
+from insightforge_agent.domain.provenance import (
+    common_words,
+    credited_names,
+    document_entity,
+    missing_names,
+    without_credited_names,
 )
 from insightforge_agent.domain.quantities import unsupported_numbers
 from insightforge_agent.domain.tokens import estimate_tokens
@@ -232,6 +245,30 @@ def _entailed(deps: Deps, owner_id: str, run_id: str, statement: str,
     return None, f"no candidate span was judged SUPPORTED ({dict(sorted(counts.items()))})"
 
 
+def document_judged_as(text: str, candidates: list[tuple[float, Span]], entity: str | None,
+                       common: frozenset[str]) -> str | None:
+    """Source-identity exception (T18 Stage C), as in Synthesis: the statement a current
+    Claim from an uploaded document is judged on when its candidate Passages do not name the
+    document's own company but `credited_names` credits it (each Passage names no one else).
+    Only those company names are removed; every other name, number, period and qualifier is
+    judged as written. None (judge the Claim as written) when no credit is needed, or when any
+    candidate's Passage lacks a name that is not the document's company."""
+    if not entity:
+        return None
+    names: set[str] = set()
+    for _, span in candidates:
+        chunk = span.passage.text
+        if not missing_names(statement=text, entities=[], entity="", passage_text=chunk,
+                             common=common).missing:
+            continue  # this Passage states every name itself
+        credited = credited_names(statement=text, entities=[], entity="", passage_text=chunk,
+                                  common=common, document_entity=entity)
+        if not credited:
+            return None
+        names.update(credited)
+    return without_credited_names(text, sorted(names)) if names else None
+
+
 def _normalised(text: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip().casefold()
 
@@ -306,8 +343,14 @@ def _verdict(
                                         original, source, passages, check, base)
         if fallback is not None:
             return fallback
+    judged_as = None
+    if source.kind == "pdf" and not historical and s.candidates:
+        judged_as = document_judged_as(
+            text, s.candidates, document_entity(source.title, [p.text for p in passages]),
+            common_words(p.text for p in passages))
+    where = dict(section=section, claim=index) | ({"document_credit": True} if judged_as else {})
     supported, reason = (None, s.reason) if not s.candidates else _entailed(  # no call if none
-        deps, owner_id, run_id, text, s.candidates, section=section, claim=index)
+        deps, owner_id, run_id, judged_as or text, s.candidates, **where)
     if supported is None:
         return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
                             matched=s.matched, reason=reason)
