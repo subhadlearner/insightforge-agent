@@ -686,8 +686,11 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         except NotFoundError:
             report = Report(
                 id=derive_report_id(owner, run_id), owner_id=owner, run_id=run_id, created_at=deps.now(),
-                body={"brief": state["brief"], "draft": draft.model_dump(),
-                      "verified": verified.model_dump(), "evidence": state["bundle"],
+                # JSON mode throughout: the body is stored as JSON, and Evidence items carry
+                # `published_at` dates.
+                body={"brief": state["brief"], "draft": draft.model_dump(mode="json"),
+                      "verified": verified.model_dump(mode="json"),
+                      "evidence": EvidenceBundle.model_validate(state["bundle"]).model_dump(mode="json"),
                       "historical": historical_of(state).model_dump(mode="json")},
             )
             # Index and summarise first, store the Report last: a stored Report is always
