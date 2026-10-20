@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from insightforge_agent.domain.provenance import tokens
 from tests.t18_acceptance import (
     b1_breakdown,
     b1_decision,
@@ -19,6 +20,7 @@ from tests.t18_acceptance import (
     b2_classify,
     b2_failures,
     b3_outcome,
+    NorthwindDocument,
     document_coverage,
     regulatory_coverage,
 )
@@ -454,7 +456,8 @@ def evaluation(tmp_path, samples):
     con = sqlite3.connect(tmp_path / "anthropic" / "eval.db")
     con.executescript("CREATE TABLE reports (owner_id, id, run_id, body);"
                       "CREATE TABLE run_events (run_id, type, payload);"
-                      "CREATE TABLE observations (id, run_id);"
+                      "CREATE TABLE sources (id, kind, title);"
+                      "CREATE TABLE observations (id, run_id, source_id);"
                       "CREATE TABLE passages (observation_id, idx, text);")
     entries = []
     for n, (sid, statements) in enumerate(samples):
@@ -654,3 +657,75 @@ def test_an_approval_already_granted_is_not_the_expected_approval(claim, verdict
     texts = [claim if s == APPROVAL else s for s in NORTHWIND]
     assert document_coverage(body(NORTHWIND, claim_texts=texts))["facts"][
         "NW-200 approval expected H1 2026"] == verdict
+
+
+# ---- Stage C rerun: attribution through the uploaded report, and contributing segments ------
+# The live Run's Evidence named segments and products as its entity ("Cardiology devices",
+# "NW-200"), which the rules read as another company (run_61c2b5c7ec63, rep_5cb300569eb6f65b).
+
+DOC_ENTITIES = ["Northwind Health", "Northwind Health", "Cardiology devices", "Orthopaedic implants",
+                "Diagnostics", "Northwind Health", "Northwind Health", "NW-200", "NW-200",
+                "Orthopaedic implant titanium supply", "Average selling prices", "NW-200",
+                "Northwind Health"]
+NORTHWIND_PDF = NorthwindDocument(
+    frozenset({"obs_doc"}),
+    frozenset(w.casefold() for s in NORTHWIND for w in tokens(s)))
+
+
+def from_document(b, entities=DOC_ENTITIES, observation="obs_doc"):
+    """The body with each Evidence item's entity as the live Run set it, read from `observation`."""
+    for item, entity in zip(b["evidence"]["sections"][0]["items"], entities):
+        item.update(entity=entity, primary={"observation_id": observation, "index": 0})
+    return b
+
+
+def test_segment_and_product_entities_read_from_the_northwind_report_are_northwind_facts():
+    r = document_coverage(from_document(body(NORTHWIND)), NORTHWIND_PDF)
+    assert r["status"] == "pass", r["facts"]
+    # Without that provenance the same entities are still read as another company.
+    assert document_coverage(from_document(body(NORTHWIND)))["facts"][
+        "cardiology segment 341 million"] == "mismatch"
+    elsewhere = document_coverage(from_document(body(NORTHWIND), observation="obs_web"),
+                                  NORTHWIND_PDF)
+    assert elsewhere["facts"]["cardiology segment 341 million"] == "mismatch"
+
+
+def test_another_company_named_in_evidence_from_the_report_is_still_a_mismatch():
+    b = from_document(body(NORTHWIND))
+    b["evidence"]["sections"][0]["items"].append({
+        "id": "ev_other", "entity": "Medtronic", "primary": {"observation_id": "obs_doc", "index": 0},
+        "statement": "Medtronic revenue reached 612 million dollars in fiscal 2025."})
+    b["verified"]["draft"]["sections"][0]["claims"].append(
+        {"evidence_id": "ev_other", "historical": False,
+         "text": "Revenue reached 612 million dollars in fiscal 2025."})
+    assert document_coverage(b, NORTHWIND_PDF)["facts"]["revenue 612 million"] == "mismatch"
+
+
+@pytest.mark.parametrize("claim, verdict", [
+    ("Northwind Health revenue grew 14 percent in fiscal 2025 compared with fiscal 2024, led by "
+     "the cardiology segment.", "covered"),  # the live Claim: cardiology drove the total
+    ("Revenue grew 14 percent compared with fiscal 2024, driven by cardiology.", "covered"),
+    ("Cardiology revenue grew 14 percent compared with fiscal 2024.", "mismatch"),
+    ("Revenue grew 14 percent in the cardiology segment compared with fiscal 2024.", "mismatch"),
+    ("Revenue grew 14 percent compared with fiscal 2024, led by the cardiology segment, which "
+     "grew 20 percent.", "covered"),
+])
+def test_a_segment_named_only_as_what_drove_total_growth_does_not_own_it(claim, verdict):
+    texts = [claim if s == GROWTH else s for s in NORTHWIND]
+    assert document_coverage(body(NORTHWIND, claim_texts=texts))["facts"][
+        "growth 14 percent"] == verdict
+
+
+def test_stage_c_command_attributes_through_the_runs_uploaded_report(tmp_path):
+    d = evaluation(tmp_path, [("document-annual-report", NORTHWIND),
+                              ("regulatory-impact-semiconductors", REG)])
+    con = sqlite3.connect(d / "anthropic" / "eval.db")
+    con.execute("UPDATE reports SET body=? WHERE id='rep_0'",
+                (json.dumps(from_document(body(NORTHWIND))),))
+    con.execute("INSERT INTO sources VALUES ('src_doc', 'pdf', 'northwind-health-annual-report-2025.pdf')")
+    con.execute("INSERT INTO observations VALUES ('obs_doc', 'run_0', 'src_doc')")
+    con.executemany("INSERT INTO passages VALUES ('obs_doc', ?, ?)", enumerate(NORTHWIND))
+    con.commit()
+    con.close()
+    rc, out = cli("stage-c", d)
+    assert (rc, out["status"]) == (0, "pass"), out

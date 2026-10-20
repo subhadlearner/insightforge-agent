@@ -283,6 +283,8 @@ _SEGMENTS = {"cardiology": r"cardiolog\w*", "orthopaedic": r"orthop(?:a)?edic\w*
              "diagnostics": r"diagnostic\w*"}
 _COMPARED = re.compile(r"(?:compared (?:with|to)|versus|vs\.?|relative to|against|than|from|over)"
                        r"\s+(?:the\s+)?(?:fiscal\s+(?:year\s+)?|FY\s?)?$", re.IGNORECASE)
+_CONTRIBUTOR = re.compile(r"\b(?:led|driven|helped|boosted|supported) by\s+(?:the\s+)?(?:\w+\s+)?$",
+                          re.IGNORECASE)
 _NORTHWIND = re.compile(r"\bNorthwind\b", re.IGNORECASE)
 _PERIOD_LABEL = re.compile(r"(?:H[12]|Q[1-4]|FY\d*)$", re.IGNORECASE)  # never a company name
 # A forecast ("expects approval in H1 2026"), and the same event stated as already done.
@@ -336,9 +338,12 @@ _RANK = {"match": 3, "candidate": 2, "mismatch": 1, "absent": 0}
 
 
 def _segment_of(sentence: str, at: int) -> str | None:
-    """The segment named nearest before position `at` (else nearest after), if any."""
+    """The segment named nearest before position `at` (else nearest after), if any. A segment
+    named after the figure only as what drove it ("grew 14 percent, led by the cardiology
+    segment") does not own the figure."""
     found = [(m.start(), name) for name, pattern in _SEGMENTS.items()
-             for m in re.finditer(pattern, sentence, re.IGNORECASE)]
+             for m in re.finditer(pattern, sentence, re.IGNORECASE)
+             if m.start() <= at or not _CONTRIBUTOR.search(sentence[at:m.start()])]
     if not found:
         return None
     before = [f for f in found if f[0] <= at]
@@ -406,18 +411,47 @@ def _claims_and_items(body: dict) -> tuple[list[dict], dict[str, dict]]:
     return claims, items
 
 
-def _attribution(item: dict | None) -> str:
+@dataclass(frozen=True)
+class NorthwindDocument:
+    """The uploaded Northwind annual report as the Run stored it: its Observations, and the
+    names its own text uses (any word in it, as written)."""
+
+    observations: frozenset[str]
+    words: frozenset[str]
+
+
+def northwind_document(con: sqlite3.Connection, run_id: str) -> NorthwindDocument:
+    """The Run's uploaded Northwind document (an uploaded Source whose title names Northwind)."""
+    rows = con.execute(
+        "SELECT ob.id, p.text FROM sources s JOIN observations ob ON ob.source_id = s.id "
+        "JOIN passages p ON p.observation_id = ob.id "
+        "WHERE ob.run_id = ? AND s.kind != 'web' AND s.title LIKE '%northwind%'", (run_id,)).fetchall()
+    return NorthwindDocument(frozenset(o for o, _ in rows),
+                             frozenset(w.casefold() for _, t in rows for w in tokens(t)))
+
+
+def _attribution(item: dict | None, common: frozenset[str] = frozenset(),
+                 document: NorthwindDocument | None = None) -> str:
     """Whose fact a retained Evidence item states: 'northwind' when it or its entity names
-    Northwind, 'other' when its entity is someone else, 'unknown' otherwise."""
+    Northwind, or when its primary Passage is in Northwind's own uploaded report and every name
+    it asserts (statement and entity) is one that report uses, so a segment or product entity
+    ("Cardiology devices", "NW-200") is not mistaken for another company; 'other' when its
+    entity is someone else; 'unknown' otherwise."""
     if item is None:
         return "unknown"
     entity = item.get("entity") or ""
     if _NORTHWIND.search(item["statement"]) or _NORTHWIND.search(entity):
         return "northwind"
+    primary = (item.get("primary") or {}).get("observation_id")
+    if document is not None and primary in document.observations:
+        names = asserted_names(item["statement"], common) | asserted_names(entity, common)
+        if all(w.casefold() in document.words for n in names for w in tokens(n)):
+            return "northwind"
     return "other" if entity.strip() else "unknown"
 
 
-def _attributed(verdict: str, claim: str, item: dict | None, common: frozenset[str]) -> str:
+def _attributed(verdict: str, claim: str, item: dict | None, common: frozenset[str],
+                document: NorthwindDocument | None = None) -> str:
     """A Claim's verdict once its company is checked. A Claim naming Northwind is Northwind's.
     One that names a company its cited Evidence does not ("Medtronic revenue reached 612
     million"), or cites Evidence about another company, is a mismatch. One that names no company
@@ -429,13 +463,13 @@ def _attributed(verdict: str, claim: str, item: dict | None, common: frozenset[s
     if any(n.casefold() not in known and not _PERIOD_LABEL.match(n)
            for n in asserted_names(claim, common)):
         return "mismatch"  # attributed to a company the cited Evidence does not name
-    who = _attribution(item)
+    who = _attribution(item, common, document)
     if who == "other":
         return "mismatch"
     return verdict if who == "northwind" else "candidate"
 
 
-def document_coverage(body: dict) -> dict:
+def document_coverage(body: dict, document: NorthwindDocument | None = None) -> dict:
     """Per Northwind fact, over the published Report, in this order: 'mismatch' if any Claim
     misstates it (another segment's figure, another period, another company, negated), even
     beside a correct one or when marked unverified; 'covered' if a Claim the Fact-Checker did
@@ -447,10 +481,11 @@ def document_coverage(body: dict) -> dict:
     common = common_words([c["text"] for c in claims] + [i["statement"] for i in items.values()])
     facts = {}
     for name, fact in NORTHWIND_FACTS.items():
-        on_items = {i: _attributed(judge_fact(fact, x["statement"]), x["statement"], x, common)
+        on_items = {i: _attributed(judge_fact(fact, x["statement"]), x["statement"], x, common,
+                                   document)
                     for i, x in items.items()}
         pairs = [(_attributed(judge_fact(fact, c["text"]), c["text"],
-                              items.get(c["evidence_id"]), common),
+                              items.get(c["evidence_id"]), common, document),
                   on_items.get(c["evidence_id"], "absent"), c["unverified"]) for c in claims]
         if any(claim == "mismatch" for claim, _, _ in pairs):
             facts[name] = "mismatch"
@@ -559,7 +594,8 @@ def stage_c(evaluation_dir: Path) -> dict:
             if row is None:
                 briefs[brief] = {"status": "failed", "reason": "stored Report not found"}
             elif brief == "document-annual-report":
-                briefs[brief] = document_coverage(json.loads(row[0]))
+                briefs[brief] = document_coverage(json.loads(row[0]),
+                                                  northwind_document(con, s["run_id"]))
             else:
                 briefs[brief] = regulatory_coverage(json.loads(row[0]),
                                                     fetched_texts(con, s["run_id"]))
