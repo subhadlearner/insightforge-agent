@@ -68,6 +68,7 @@ from insightforge_agent.domain.provenance import (
     credited_by_document,
     document_entity,
     missing_names,
+    without_credited_names,
 )
 from insightforge_agent.domain.periods import (
     UNKNOWN,
@@ -399,6 +400,23 @@ def literal_problem(
     return None
 
 
+def credited_names(
+    *, statement: str, entities: list[str], entity: str, passage_text: str,
+    common: frozenset[str] | None = None, document_entity: str | None = None,
+) -> list[str]:
+    """The names `literal_problem` accepted only because the uploaded document speaks for
+    them (T18 CS2 credit), or [] when none was needed or none applies."""
+    if not document_entity:
+        return []
+    vocabulary = common if common is not None else common_words([passage_text, statement])
+    names = missing_names(statement=statement, entities=entities, entity=entity,
+                          passage_text=passage_text, common=vocabulary).missing
+    if names and credited_by_document(names, entity=document_entity, statement=statement,
+                                      chunk_text=passage_text, common=vocabulary):
+        return names
+    return []
+
+
 def _validate(
     deps: Deps, owner_id: str, run_id: str, c: _Candidate, source_by_obs: dict[str, Source],
     fetched_on: dict[str, date], facts_at: dict[tuple[str, int], list[ExtractedFact]],
@@ -414,6 +432,7 @@ def _validate(
     # contradict it, so it still goes to the entailment call.
     candidates: list[Passage] = []
     can_support: set[tuple[str, int]] = set()
+    credited: dict[tuple[str, int], list[str]] = {}  # names the document's identity supplied
     rejected: list[str] = []
     refs: list[dict] = []  # each cited Passage with why it cannot support: replayable offline
 
@@ -438,6 +457,11 @@ def _validate(
             reject(ref, problem)
         else:
             can_support.add(_key(ref))
+            names = credited_names(statement=c.statement, entities=c.entities, entity=c.entity,
+                                   passage_text=passage.text, common=common,
+                                   document_entity=(entity_of or {}).get(ref.observation_id))
+            if names:
+                credited[_key(ref)] = names
     if not can_support:
         drop(DROP_LITERAL, rejected=rejected,
              refs=refs)
@@ -476,11 +500,22 @@ def _validate(
 
     # One bounded entailment call per item, chunked when the candidates exceed the cap. A
     # Passage over the cap is read in windows; its verdicts are combined per Passage.
+    # Source-identity exception (T18 Stage C, uploaded documents only): a Passage of an uploaded
+    # document whose company the deterministic check above credited (the Passage names no one
+    # else) is judged on the statement without those company names, in its own call, so the
+    # judge decides the fact itself, not who the document speaks for. Nothing else is removed:
+    # every other name, number, period and qualifier must still be stated by the Passage. Web
+    # and Historical items never take this path, and ENTAIL_SYSTEM is unchanged.
+    judged_as = without_credited_names(c.statement, [n for v in credited.values() for n in v])
+    groups = [(c.statement, [p for p in candidates if not judged_as or _key(p) not in credited])]
+    if judged_as:
+        groups.append((judged_as, [p for p in candidates if _key(p) in credited]))
     verdicts: dict[tuple[str, int], set[str]] = {}
     present_state: set[tuple[str, int]] = set()
-    for batch in batch_passages(candidates, deps.passage_token_cap):
+    for statement, batch in ((s, b) for s, group in groups if group
+                             for b in batch_passages(group, deps.passage_token_cap)):
         numbered = render_batch(batch)
-        user = f"Statement: {c.statement}\n\n{numbered}"
+        user = f"Statement: {statement}\n\n{numbered}"
         deps.spend(owner_id, run_id, ENTAIL_SYSTEM, user)
         try:
             reply = ask_json(deps.light_model, ENTAIL_SYSTEM, user, EntailmentVerdicts)
@@ -498,6 +533,13 @@ def _validate(
                  if "SUPPORTED" in vs and (o, i) in can_support]
     contradicted = [PassageRef(observation_id=o, index=i) for (o, i), vs in verdicts.items()
                     if "CONTRADICTED" in vs and not ("SUPPORTED" in vs and (o, i) in can_support)]
+    # Per-Passage diagnostics: references and verdicts only, never Passage text or replies.
+    deps.log(owner_id, run_id, "evidence_entailment", evidence_id=c.id, subtask_id=c.subtask.id,
+             passages=[{"observation_id": k[0], "index": k[1], "verdicts": sorted(verdicts.get(k, ())),
+                        "literal_gate": k in can_support,
+                        "document_credit": bool(judged_as) and k in credited}
+                       for k in (_key(p) for p in candidates)],
+             outcome="supported" if supported else DROP_UNSUPPORTED)
     if not supported:
         drop(DROP_UNSUPPORTED, verdicts={"contradicted": len(contradicted)})
         return None

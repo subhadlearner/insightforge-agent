@@ -197,6 +197,23 @@ def _within(name: str, entity: str) -> bool:
                               for i in range(len(have) - len(want) + 1))
 
 
+def without_credited_names(statement: str, names: list[str]) -> str | None:
+    """The statement with the document's own company names (already credited to it by
+    `credited_by_document`) removed, for the entailment judge (T18 Stage C): "Northwind Health
+    research and development spending was 71 million dollars" becomes "Research and development
+    spending was 71 million dollars". Only those names go; every other word, number and
+    qualifier stays, so the judge still decides the fact itself. None when nothing is removed
+    or too little would remain to judge."""
+    text = statement
+    for name in sorted(set(names), key=len, reverse=True):
+        words = r"\s+".join(re.escape(w) for w in name.split())
+        text = re.sub(rf"\b{words}(?:'s|’s)?\b\s*", "", text)
+    text = re.sub(r"\s+([,.;:])", r"\1", " ".join(text.split()))
+    if text == " ".join(statement.split()) or len(tokens(text)) < 3:
+        return None
+    return text[:1].upper() + text[1:]
+
+
 def credited_by_document(missing: list[str], *, entity: str | None, statement: str,
                          chunk_text: str, common: frozenset[str]) -> bool:
     """Whether the missing names are all the document's own entity, in a chunk of that same

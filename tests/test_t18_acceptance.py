@@ -667,15 +667,17 @@ DOC_ENTITIES = ["Northwind Health", "Northwind Health", "Cardiology devices", "O
                 "Diagnostics", "Northwind Health", "Northwind Health", "NW-200", "NW-200",
                 "Orthopaedic implant titanium supply", "Average selling prices", "NW-200",
                 "Northwind Health"]
-NORTHWIND_PDF = NorthwindDocument(
-    frozenset({"obs_doc"}),
-    frozenset(w.casefold() for s in NORTHWIND for w in tokens(s)))
+NORTHWIND_PDF = NorthwindDocument({("obs_doc", n): s for n, s in enumerate(NORTHWIND)},
+                                  frozenset(w for s in NORTHWIND for w in tokens(s) if w.islower())
+                                  | {"delays", "pricing"})  # as the Run's web pages write them
 
 
 def from_document(b, entities=DOC_ENTITIES, observation="obs_doc"):
-    """The body with each Evidence item's entity as the live Run set it, read from `observation`."""
-    for item, entity in zip(b["evidence"]["sections"][0]["items"], entities):
-        item.update(entity=entity, primary={"observation_id": observation, "index": 0})
+    """The body with each Evidence item's entity as the live Run set it, each read from its own
+    Passage of `observation` (the report states each fact in its own Passage)."""
+    for n, (item, entity) in enumerate(zip(b["evidence"]["sections"][0]["items"], entities)):
+        index = NORTHWIND.index(item["statement"]) if item["statement"] in NORTHWIND else n
+        item.update(entity=entity, primary={"observation_id": observation, "index": index})
     return b
 
 
@@ -690,16 +692,52 @@ def test_segment_and_product_entities_read_from_the_northwind_report_are_northwi
     assert elsewhere["facts"]["cardiology segment 341 million"] == "mismatch"
 
 
-def test_another_company_named_in_evidence_from_the_report_is_still_a_mismatch():
-    b = from_document(body(NORTHWIND))
+def test_a_sentence_initial_word_the_rules_cannot_place_is_only_a_candidate():
+    # The live Run's delay risk: "Delays" opens the sentence and no Passage writes it in lower
+    # case, so it may be a name. It is left for manual adjudication, never passed.
+    document = NorthwindDocument(NORTHWIND_PDF.passages, NORTHWIND_PDF.common - {"delays"})
+    r = document_coverage(from_document(body(NORTHWIND)), document)
+    assert r["facts"]["NW-200 delay risk"] == "candidate" and r["status"] == "inconclusive"
+
+
+def with_competitor(passage, statement, entity):
+    """The Northwind body without its revenue item, plus one Evidence item read from a Passage
+    of the Northwind report itself that discusses a competitor, cited by the only revenue Claim,
+    which names no company. "covered" would mean the competitor's figure was credited."""
+    b = from_document(body([s for s in NORTHWIND if s != REVENUE]),
+                      [e for s, e in zip(NORTHWIND, DOC_ENTITIES) if s != REVENUE])
     b["evidence"]["sections"][0]["items"].append({
-        "id": "ev_other", "entity": "Medtronic", "primary": {"observation_id": "obs_doc", "index": 0},
-        "statement": "Medtronic revenue reached 612 million dollars in fiscal 2025."})
+        "id": "ev_other", "entity": entity, "statement": statement,
+        "primary": {"observation_id": "obs_doc", "index": len(NORTHWIND)}})
     b["verified"]["draft"]["sections"][0]["claims"].append(
         {"evidence_id": "ev_other", "historical": False,
          "text": "Revenue reached 612 million dollars in fiscal 2025."})
-    assert document_coverage(b, NORTHWIND_PDF)["facts"]["revenue 612 million"] == "mismatch"
+    document = NorthwindDocument({**NORTHWIND_PDF.passages, ("obs_doc", len(NORTHWIND)): passage},
+                                 NORTHWIND_PDF.common)
+    return document_coverage(b, document)["facts"]["revenue 612 million"]
 
+
+COMPETITOR = "Its competitor Medtronic reported that revenue reached 612 million dollars in fiscal 2025."
+SAME = "Revenue reached 612 million dollars in fiscal 2025."
+
+
+@pytest.mark.parametrize("passage, statement, entity, verdict", [
+    # The report discusses the competitor and the item says so: a mismatch.
+    ("Medtronic revenue reached 612 million dollars in fiscal 2025.",
+     "Medtronic revenue reached 612 million dollars in fiscal 2025.", "Medtronic", "mismatch"),
+    ("Revenue at Medtronic reached 612 million dollars in fiscal 2025.",
+     "Revenue at Medtronic reached 612 million dollars in fiscal 2025.", "", "mismatch"),
+    # The item hides the competitor, but the Passage it cites names it: never credited.
+    (COMPETITOR, SAME, "", "candidate"),
+    (COMPETITOR, SAME, "Revenue", "candidate"),
+    # Only a sentence-initial name the rules cannot place: manual adjudication, not a pass.
+    ("Medtronic revenue reached 612 million dollars in fiscal 2025.",
+     "Medtronic revenue reached 612 million dollars in fiscal 2025.", "", "candidate"),
+], ids=["entity", "mid-sentence", "passage-only", "passage-only-generic-entity",
+        "sentence-initial-only"])
+def test_a_competitor_discussed_in_the_northwind_report_is_never_credited_to_northwind(
+        passage, statement, entity, verdict):
+    assert with_competitor(passage, statement, entity) == verdict
 
 @pytest.mark.parametrize("claim, verdict", [
     ("Northwind Health revenue grew 14 percent in fiscal 2025 compared with fiscal 2024, led by "
@@ -725,6 +763,10 @@ def test_stage_c_command_attributes_through_the_runs_uploaded_report(tmp_path):
     con.execute("INSERT INTO sources VALUES ('src_doc', 'pdf', 'northwind-health-annual-report-2025.pdf')")
     con.execute("INSERT INTO observations VALUES ('obs_doc', 'run_0', 'src_doc')")
     con.executemany("INSERT INTO passages VALUES ('obs_doc', ?, ?)", enumerate(NORTHWIND))
+    # A web page the Run also read, which writes "pricing" and "delays" in lower case.
+    con.execute("INSERT INTO observations VALUES ('obs_web', 'run_0', 'src_web')")
+    con.execute("INSERT INTO passages VALUES ('obs_web', 0, 'Device makers face approval "
+                "delays and pricing pressure this year.')")
     con.commit()
     con.close()
     rc, out = cli("stage-c", d)

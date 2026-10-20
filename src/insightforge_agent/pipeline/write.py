@@ -19,7 +19,11 @@ instead of failing the Run: an uncovered section gets one Claim stating its best
 unsupported summary sentences are removed, and the rest is fitted to the limit from whole
 sentences or whole Claims, never part of one, else replaced by a sentence that states no
 finding (`fit_summary`). A published summary is never empty and never over the limit.
-Claim-rule violations still fail the Run."""
+Claim-rule violations still fail the Run, with one conservative fallback (T18 Stage C): when no
+draft's Claims pass, a current Claim that cites an existing Evidence item but adds a number or
+name gets that item's exact statement as its text (`replace_ungrounded_claims`, logged as
+`writer_claims_replaced`); an unknown Evidence id, a blank Claim or a Historical Claim's problem
+is never repaired, and anything still wrong fails the Run."""
 
 import re
 
@@ -412,8 +416,36 @@ def fit_summary(sentences: list[str], draft: ReportDraft) -> tuple[str, str | No
     return NO_SUMMARY, "placeholder"
 
 
+def replace_ungrounded_claims(draft: ReportDraft, bundle: EvidenceBundle,
+                              historical: HistoricalContext) -> tuple[ReportDraft, list[dict]] | None:
+    """The conservative Claim fallback (T18 Stage C), once retries are spent: each current Claim
+    that cites an existing Evidence item but states a number or name that item does not gets
+    that item's exact statement as its text; its citation and section stay. Returns the draft
+    and the replacements, or None when anything else is wrong (an unknown or invented Evidence
+    id, a blank Claim, a Historical Claim's problem): those are never guessed at, and the Run
+    fails as before."""
+    items = {i.id: i for s in bundle.sections for i in s.items}
+    replaced: list[dict] = []
+    sections = []
+    for si, section in enumerate(draft.sections):
+        claims = []
+        for ci, c in enumerate(section.claims):
+            item = items.get(c.evidence_id)
+            if (not c.historical and item is not None and c.text.strip()
+                    and _grounding(c.text, item.statement, item.entity, f"evidence {item.id}")):
+                replaced.append({"section": si, "claim": ci, "evidence_id": item.id,
+                                 "original_text": c.text[:300]})
+                c = c.model_copy(update={"text": item.statement})
+            claims.append(c)
+        sections.append(section.model_copy(update={"claims": claims}))
+    draft = draft.model_copy(update={"sections": sections})
+    if not replaced or violations(draft, bundle, historical):
+        return None
+    return draft, replaced
+
+
 def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
-            historical: HistoricalContext, brief: str) -> ReportDraft:
+            historical: HistoricalContext, brief: str, claims_replaced: int = 0) -> ReportDraft:
     """A draft whose Claims pass, made publishable in code once retries are spent. The
     published summary is non-empty, at most `SUMMARY_MAX_WORDS`, and holds only whole
     supported sentences, whole Claims or `NO_SUMMARY`."""
@@ -425,7 +457,8 @@ def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: 
     draft = draft.model_copy(update={"summary": summary})
     deps.log(owner_id, run_id, "writer_repaired", filled_sections=filled,
              removed_summary_sentences=sorted(dropped), summary_rebuilt=not supported,
-             summary_shortened=shortened, summary_words=summary_words(summary))
+             summary_shortened=shortened, summary_words=summary_words(summary),
+             claims_replaced=claims_replaced)
     if (violations(draft, bundle, historical) or coverage_problems(draft, bundle)
             or not summary.strip() or summary_words(summary) > SUMMARY_MAX_WORDS):
         raise RunFailed("the Writer's draft could not be repaired")
@@ -447,6 +480,7 @@ def write_report(
     constraint = ""
     last: list[str] = []
     usable: ReportDraft | None = None  # the latest draft whose Claims pass, for `_repair`
+    parsed: ReportDraft | None = None  # the latest draft at all, for the Claim fallback
     for attempt in range(deps.writer_retries + 1):
         user = (f"Brief: {brief}\n\nEvidence bundle:\n{render_bundle(bundle)}{background}"
                 f"{constraint}")
@@ -456,6 +490,7 @@ def write_report(
             if moved:
                 deps.log(owner_id, run_id, "writer_claims_placed", attempt=attempt + 1,
                          moved=moved)
+            parsed = draft
             last = violations(draft, bundle, historical)
             if not last:
                 usable = draft
@@ -469,8 +504,16 @@ def write_report(
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
         constraint = "\n\nYour previous draft broke these rules. Fix them:\n" + "\n".join(
             f"- {p}" for p in last)
+    replaced: list[dict] = []
+    if usable is None and parsed is not None:
+        fallback = replace_ungrounded_claims(parsed, bundle, historical)
+        if fallback is not None:
+            usable, replaced = fallback
+            # A replaced Claim restates its item verbatim: grounded, but neither independently
+            # verified by this step nor the Writer's synthesis.
+            deps.log(owner_id, run_id, "writer_claims_replaced", replaced=replaced)
     if usable is not None:
-        draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief)
+        draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief, len(replaced))
         _flag_absence(deps, owner_id, run_id, draft.summary)
         return draft.model_copy(update={"gaps": gaps})
     raise RunFailed(f"the Writer broke the citation rules after {deps.writer_retries} retries")

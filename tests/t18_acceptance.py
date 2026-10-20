@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from insightforge_agent.domain.contracts import UNVERIFIED_MARK
+from insightforge_agent.domain.passages import named_entities_in
 from insightforge_agent.domain.provenance import asserted_names, common_words, tokens
 
 # ---- Stage B-1: entailment calibration -------------------------------------------------------
@@ -413,41 +414,75 @@ def _claims_and_items(body: dict) -> tuple[list[dict], dict[str, dict]]:
 
 @dataclass(frozen=True)
 class NorthwindDocument:
-    """The uploaded Northwind annual report as the Run stored it: its Observations, and the
-    names its own text uses (any word in it, as written)."""
+    """The uploaded Northwind annual report as the Run stored it: its Passages by (Observation,
+    index), and the lower-case vocabulary of every Passage the Run read (tells a common word
+    from a name at the start of a sentence, as production does)."""
 
-    observations: frozenset[str]
-    words: frozenset[str]
+    passages: dict[tuple[str, int], str]
+    common: frozenset[str] = frozenset()
 
 
 def northwind_document(con: sqlite3.Connection, run_id: str) -> NorthwindDocument:
     """The Run's uploaded Northwind document (an uploaded Source whose title names Northwind)."""
     rows = con.execute(
-        "SELECT ob.id, p.text FROM sources s JOIN observations ob ON ob.source_id = s.id "
+        "SELECT ob.id, p.idx, p.text FROM sources s JOIN observations ob ON ob.source_id = s.id "
         "JOIN passages p ON p.observation_id = ob.id "
-        "WHERE ob.run_id = ? AND s.kind != 'web' AND s.title LIKE '%northwind%'", (run_id,)).fetchall()
-    return NorthwindDocument(frozenset(o for o, _ in rows),
-                             frozenset(w.casefold() for _, t in rows for w in tokens(t)))
+        "WHERE ob.run_id = ? AND s.kind != 'web' AND s.title LIKE '%northwind%'", (run_id,))
+    read = con.execute("SELECT p.text FROM passages p JOIN observations ob "
+                       "ON ob.id = p.observation_id WHERE ob.run_id = ?", (run_id,))
+    return NorthwindDocument({(o, i): t for o, i, t in rows}, common_words(t for (t,) in read))
+
+
+_MONTH = re.compile(r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?$")
+
+
+def _northwinds(name: str) -> bool:
+    """A name the Northwind report uses for itself or a date: the company, a product code
+    (NW-200), one of its three segments, a month or a period label. Anything else may be
+    another company."""
+    return (all(w.casefold() in ("northwind", "health") for w in tokens(name))
+            or any(c.isdigit() for c in name) or bool(_MONTH.match(name))
+            or bool(_PERIOD_LABEL.match(name))
+            or any(re.fullmatch(p, name, re.IGNORECASE) for p in _SEGMENTS.values()))
+
+
+def _drawn_on(statement: str, passage: str) -> str:
+    """The sentences of the cited Passage the statement draws on (most shared words)."""
+    words = {w.casefold() for w in tokens(statement)}
+    sentences = [s for s in _SENTENCE.split(passage.strip()) if s]
+    overlap = [len(words & {w.casefold() for w in tokens(s)}) for s in sentences]
+    return " ".join(s for s, n in zip(sentences, overlap) if n and n == max(overlap))
 
 
 def _attribution(item: dict | None, common: frozenset[str] = frozenset(),
                  document: NorthwindDocument | None = None) -> str:
     """Whose fact a retained Evidence item states: 'northwind' when it or its entity names
-    Northwind, or when its primary Passage is in Northwind's own uploaded report and every name
-    it asserts (statement and entity) is one that report uses, so a segment or product entity
-    ("Cardiology devices", "NW-200") is not mistaken for another company; 'other' when its
-    entity is someone else; 'unknown' otherwise."""
+    Northwind; for an item whose primary Passage is in Northwind's own uploaded report,
+    'northwind' only when neither the item, its entity nor the sentences of that Passage it
+    draws on name anyone but Northwind, its segments, a product code or a date. Elsewhere,
+    'other' when its entity is someone else.
+
+    Deterministic matching cannot tell a company from an ordinary capitalised word at the
+    start of a sentence ("Delays to ..."). So an item from the report is 'other' when its
+    entity or a mid-sentence name in its statement is someone else, and 'unknown' (manual
+    adjudication, never a pass) when only a sentence-initial word, or the cited Passage
+    itself, names someone the rules cannot place."""
     if item is None:
         return "unknown"
-    entity = item.get("entity") or ""
-    if _NORTHWIND.search(item["statement"]) or _NORTHWIND.search(entity):
+    statement, entity = item["statement"], item.get("entity") or ""
+    if _NORTHWIND.search(statement) or _NORTHWIND.search(entity):
         return "northwind"
-    primary = (item.get("primary") or {}).get("observation_id")
-    if document is not None and primary in document.observations:
-        names = asserted_names(item["statement"], common) | asserted_names(entity, common)
-        if all(w.casefold() in document.words for n in names for w in tokens(n)):
-            return "northwind"
-    return "other" if entity.strip() else "unknown"
+    primary = item.get("primary") or {}
+    cited = (document.passages.get((primary.get("observation_id"), primary.get("index")))
+             if document is not None else None)
+    if cited is None:
+        return "other" if entity.strip() else "unknown"
+    common = common | document.common
+    strong = asserted_names(entity, common) | named_entities_in(statement)
+    if not all(_northwinds(n) for n in strong):
+        return "other"
+    weak = asserted_names(statement, common) | asserted_names(_drawn_on(statement, cited), common)
+    return "northwind" if all(_northwinds(n) for n in weak) else "unknown"
 
 
 def _attributed(verdict: str, claim: str, item: dict | None, common: frozenset[str],
