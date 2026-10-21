@@ -30,7 +30,7 @@ the setup and test sections is [`docs/t17-verification.md`](docs/t17-verificatio
 6. [Context engineering and evidence](#context-engineering-and-evidence)
 7. [Evaluation](#evaluation)
 8. [Security, privacy and limitations](#security-privacy-and-limitations)
-9. [Anthropic verification results (T18): pending](#anthropic-verification-results-t18-pending)
+9. [Anthropic verification results (T18)](#anthropic-verification-results-t18)
 
 ## What InsightForge does
 
@@ -71,8 +71,8 @@ progress stream (T10), Watchlist Items on a schedule (T11), Findings, Baselines,
 and an optional Slack-format webhook (T12), a retention sweep (T13), the Next.js workbench
 (T14), Markdown/PDF export and revocable Share links (T15), and the evaluation harness
 (T16). Status: implemented and covered by the offline suite with scripted models; only the
-happy path, planning, extraction and synthesis, and Fact-Checker cases have been run on a real
-model (see the last section).
+T18's Anthropic live verification exercised all five Briefs at baseline and two targeted Briefs
+after remediation; the live acceptance gates were not all met (see the last section).
 
 ## Architecture
 
@@ -536,8 +536,9 @@ Limits: one Run per Brief per provider, so there is no repeatability estimate. T
 `checks` are descriptive, and no metric enforces them. The scripted tests
 (`tests/evaluation/`) show orchestration, persistence, subject relevance and provenance across
 the five domains **within a scripted world** (the scripted models copy Passage sentences). They
-do not show real-model research quality. **The harness is implemented. No real Anthropic
-evaluation has been run yet. That is T18.**
+do not show real-model research quality. **T18 Anthropic verification has now been run.** The
+baseline five-Brief fact-check rate was 66.7%, and the later targeted Stage C acceptance gate
+FAILED. See [T18 results](#anthropic-verification-results-t18) for the limits.
 
 ## Security, privacy and limitations
 
@@ -576,14 +577,49 @@ evaluation has been run yet. That is T18.**
   sign-up or credentials, no multi-process deployment. Search uses Tavily only (other listed providers are
   skipped). Hardening observations are tracked in issue #49 (T20).
 
-## Anthropic verification results (T18): pending
+## Anthropic verification results (T18)
 
-**Status: pending. No results are reported here yet.** T18 (issue #19) is the final
-verification on Anthropic. It will run the live paths and actual document and memory Runs,
-re-run the T1 spike criteria, run the five-Brief evaluation and record the remediation decision
-under the rule above. This README will be updated with those results, with traceable Run IDs and
-the `eval-report` files, once T18 is done. Until then, T17's third acceptance criterion is open.
+**Live verification completed; the acceptance gates did not all pass.** T18 (#19) exercised all
+five sample Briefs on Anthropic (Claude Haiku 5.5) at baseline, including the real uploaded-PDF
+Doc Reader path and the earlier-Report Memory researcher path. The full-library baseline
+fact-check pass rate was **20/30 = 66.7%**, below the 80% remediation threshold; citations were
+**115/115** accurate by the evaluation's provenance/figure checks. Remediation was attempted
+and offline-tested, but its effect on the full five-Brief Anthropic rate was **not established**.
 
-Earlier live runs on `claude-haiku-5-5` were single development runs, not the T18 verification:
-the T1 spike (design §12), the T3 to T5 runs in [`docs/live-runs/`](docs/live-runs/), and the
-F2 Fact-Checker cases (16 of 16, design F2 notes).
+| Verification gate | Formal outcome |
+|---|---|
+| Planner spike criteria 1–3 | PASS, thin evidence accepted by the owner |
+| **B-1: entailment calibration** | **FAIL** (three live attempts); documented exception, not a pass |
+| B-2: structured drafting smoke test | PASS (39/47 calls parsed; 8 hit the output-token limit) |
+| B-3: judge-only | NOT RUN |
+| **Stage C: targeted live end-to-end** | **FAIL** (acceptance exit 1; final attempt) |
+| Stage D: remediated five-Brief re-evaluation | NOT RUN (stopped after Stage C) |
+
+**B-1 limitation.** A cited-Passage entailment check can accept a market definition, financial
+metric or qualifier stated elsewhere on the Source page but **not in the cited Passage**.
+The B-1 gate failed despite an explicitly accepted exception; it was not corrected or retested
+to a pass. See [B-1 audit and gate exception](docs/audits/2026-10-21-t18-b1-gate-exception.md)
+and [follow-up #75](https://github.com/subhadlearner/insightforge-agent/issues/75).
+A Fact-Checker `verified` verdict therefore does not guarantee every qualifier is directly
+substantiated by its citation.
+
+**Stage C final run.** Both targeted Briefs published Reports. The regulatory-impact Brief
+covered **2/2** required objectives. The uploaded-document Brief covered **10/13** required
+facts, with **2 candidates** (hospital pricing pressure and NW-200 delay risk) and **1 missing**
+(six clinical-trial programmes). Consequently the **formal result remains FAILED**, not PASS
+or merely INCONCLUSIVE. The two Reports had **14/14 sampled Claims verified** and
+**65/65 citations accurate** under the recorded checks; these figures are not a full-Claim
+fact-check or a substitute for the missing facts. Synthesis-judge scores were **2.75/5** and
+**2.25/5**, respectively, reflecting unresolved comparisons and limited analytical synthesis.
+See [post-submission follow-up #76](https://github.com/subhadlearner/insightforge-agent/issues/76).
+
+The Stage C attempts are preserved separately. B-3 and Stage D were not run, so **there is no
+verified remediated five-Brief Anthropic pass rate**. Actual Anthropic billing for Stage C
+and T18 overall is **unknown**; harness estimates are not billed amounts.
+
+The [T18 verification record](docs/t18-verification.md) is authoritative for run IDs, exact
+gate results, archived evidence hashes and retrospective diagnostics (which never replace
+formal results). The underlying evaluation artifacts are stored separately from the public
+repository. These results were handed to [README ticket #18](https://github.com/subhadlearner/insightforge-agent/issues/18)
+and [demo ticket #20](https://github.com/subhadlearner/insightforge-agent/issues/20);
+they do not mean those tickets' other work is complete.
