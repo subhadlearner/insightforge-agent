@@ -57,13 +57,14 @@ class SourceStore:
         fetched_at: datetime,
         credibility_score: float | None = None,
         published_at: datetime | None = None,
+        updated_at: datetime | None = None,
     ) -> Observation:
         """Store one fetch of a web page, split into paragraph Passages."""
         return self._ingest(
             owner_id=owner_id, run_id=run_id, kind="web", locator=url, title=title,
             drafts=lambda: [PassageDraft(t) for t in split_paragraphs(body)],
             content=body, fetched_at=fetched_at, credibility_score=credibility_score,
-            published_at=published_at,
+            published_at=published_at, updated_at=updated_at,
         )
 
     def ingest_document(
@@ -90,11 +91,13 @@ class SourceStore:
         self, *, owner_id: str, run_id: str, kind: SourceKind, locator: str, title: str,
         drafts: Callable[[], list[PassageDraft]], content: str, fetched_at: datetime,
         credibility_score: float | None, published_at: datetime | None,
+        updated_at: datetime | None = None,
     ) -> Observation:
         sid = derive_source_id(kind, locator)
         self._sources.add(Source(
             id=sid, owner_id=owner_id, run_id=run_id, kind=kind, locator=locator, title=title,
             credibility_score=credibility_score, published_at=published_at,
+            updated_at=updated_at,
         ))
         oid = derive_observation_id(owner_id, run_id, sid, fetched_at, content)
         try:

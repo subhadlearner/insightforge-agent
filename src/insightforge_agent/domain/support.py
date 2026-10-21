@@ -94,16 +94,25 @@ def _stem(word: str) -> str:
     return word
 
 
+def _same_word(have: str, want: str) -> bool:
+    """Equal, or `have` is the plain word `want` with a footnote number glued on ("year3" for
+    a page's "year<sup>3</sup>"): the form rule `provenance._same` applies to names, never to a
+    model number (B30A1 is not B30A), and the quoted word itself must still match exactly."""
+    return have == want or (want.isalpha() and have.startswith(want)
+                            and have[len(want):].isdigit())
+
+
 def find_excerpt(excerpt: str, text: str) -> tuple[int, int] | None:
     """Where `excerpt` occurs in `text` as a run of whole words (case, punctuation, quotes and
-    spacing ignored), as character offsets into `text`; None if it does not."""
+    spacing ignored, and a footnote number glued to a word of `text`: `_same_word`), as
+    character offsets into `text`; None if it does not."""
     want = _words(excerpt)
     have = _tokens(text)
     if not want:
         return None
     n = len(want)
     for i in range(len(have) - n + 1):
-        if all(have[i + k][0] == want[k] for k in range(n)):
+        if all(_same_word(have[i + k][0], want[k]) for k in range(n)):
             return have[i][1], have[i + n - 1][2]
     return None
 

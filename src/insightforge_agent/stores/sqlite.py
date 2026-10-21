@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS subtasks (
 CREATE TABLE IF NOT EXISTS sources (
     owner_id TEXT NOT NULL, id TEXT NOT NULL, run_id TEXT NOT NULL, kind TEXT NOT NULL,
     locator TEXT NOT NULL, title TEXT NOT NULL, credibility_score REAL, published_at TEXT,
+    updated_at TEXT,
     PRIMARY KEY (owner_id, id)
 );
 CREATE TABLE IF NOT EXISTS run_sources (
@@ -295,14 +296,16 @@ class SqliteSourceRepository(_Base):
     @staticmethod
     def _row(row) -> Source:
         return Source(owner_id=row[0], id=row[1], run_id=row[2], kind=row[3], locator=row[4],
-                      title=row[5], credibility_score=row[6], published_at=_dt(row[7]))
+                      title=row[5], credibility_score=row[6], published_at=_dt(row[7]),
+                      updated_at=_dt(row[8]))
 
     def add(self, source: Source) -> Source:
         with self._db:
             self._db.execute(
-                "INSERT OR IGNORE INTO sources VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO sources VALUES (?,?,?,?,?,?,?,?,?)",
                 (source.owner_id, source.id, source.run_id, source.kind, source.locator,
-                 source.title, source.credibility_score, _iso(source.published_at)),
+                 source.title, source.credibility_score, _iso(source.published_at),
+                 _iso(source.updated_at)),
             )
             self._db.execute(
                 "INSERT OR IGNORE INTO run_sources VALUES (?,?,?)",
@@ -531,6 +534,10 @@ def _migrate(db: sqlite3.Connection) -> None:
         with db:
             db.execute("ALTER TABLE watchlist_baseline_failures "
                        "ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0")
+    columns = {row[1] for row in db.execute("PRAGMA table_info(sources)")}
+    if "updated_at" not in columns:  # a page's later modification date (PR #77)
+        with db:
+            db.execute("ALTER TABLE sources ADD COLUMN updated_at TEXT")
     columns = {row[1] for row in db.execute("PRAGMA table_info(watchlist_diffs)")}
     for column in ("retry_after", "attempt_started_at"):  # T12 draft databases
         if column not in columns:

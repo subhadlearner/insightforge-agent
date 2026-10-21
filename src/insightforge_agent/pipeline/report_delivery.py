@@ -223,6 +223,8 @@ def inline_source(source: Source) -> str:
     shown; a missing date or score is said to be missing, never guessed."""
     where = source.domain or source.title
     date = source.published_at.date().isoformat() if source.published_at else "undated"
+    if source.updated_at:  # the page says it was updated since: never its first date alone
+        date += f", updated {source.updated_at.date().isoformat()}"
     score = (f"{source.credibility_score:.2f}" if source.credibility_score is not None
              else "not scored")
     return f"[Source: {where}, {date}, credibility: {score}]"
@@ -260,7 +262,7 @@ def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
             published = (
                 f", published {source.published_at.date().isoformat()}"
                 if source.published_at else ""
-            )
+            ) + (f", updated {source.updated_at.date().isoformat()}" if source.updated_at else "")
             lines.append(
                 f"{source_numbers[source.id]}. {source.title} — {where}{published}"
             )

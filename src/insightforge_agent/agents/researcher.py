@@ -107,6 +107,7 @@ def make_web_search_tool(
                 obs = store.ingest_web(
                     owner_id=owner_id, run_id=run_id, url=page.url, title=page.title,
                     body=page.body, fetched_at=fetched_at, published_at=page.published_at,
+                    updated_at=page.updated_at,
                     credibility_score=credibility_score(page.url, page.published_at, fetched_at,
                                                         has_byline=page.byline is not None),
                 )
