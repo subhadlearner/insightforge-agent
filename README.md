@@ -20,18 +20,34 @@ it was run by hand and the record is linked. *Design-specified* means `docs/desi
 it. *Not yet verified* means nobody has shown it on a real Run. The fresh-clone record behind
 the setup and test sections is [`docs/t17-verification.md`](docs/t17-verification.md).
 
+## Status at a glance
+
+Everything below is on `main` (last merged PR: #77, ADR-0006). There are no open PRs or
+unmerged feature branches.
+
+| Area | Status |
+|---|---|
+| Pipeline, API, web UI, Watchlists, Diffs/Alerts, export, Share links, retention, eval harness | Implemented and CI-tested offline (scripted models, recorded search) |
+| Live end-to-end Runs on Anthropic (Claude Haiku 5.5) after ADR-0006 | **Three COMPLETE Runs**: two budget-capped harness Runs and one Run through the web UI, recorded on video ([Live end-to-end Runs](#live-end-to-end-runs-after-adr-0006)) |
+| Formal T18 Anthropic verification (#19) | **Historical gates FAILED and stay failed**: B-1 FAIL, Stage C FAIL, Stage D not run ([T18 results](#anthropic-verification-results-t18-historical)) |
+| ADR-0006 live support gate (Gate A) | **FAILED** on its one attempt; not re-run |
+| Open follow-ups | #75 and #76 (post-submission, research quality), #49 (T20 hardening), #19 (T18), #20 (T19 demo post) |
+
 ## Contents
 
 1. [What InsightForge does](#what-insightforge-does)
-2. [Architecture](#architecture)
-3. [Getting started from a fresh clone](#getting-started-from-a-fresh-clone)
-4. [Running it](#running-it)
-5. [Testing](#testing)
-6. [Context engineering and evidence](#context-engineering-and-evidence)
-7. [Evaluation](#evaluation)
-8. [Security, privacy and limitations](#security-privacy-and-limitations)
-9. [Anthropic verification results (T18)](#anthropic-verification-results-t18)
-10. [Research-integrity redesign (ADR-0006, after T18)](#research-integrity-redesign-adr-0006-after-t18)
+2. [Quick start](#quick-start)
+3. [Features](#features)
+4. [Architecture](#architecture)
+5. [Getting started from a fresh clone](#getting-started-from-a-fresh-clone)
+6. [Running it](#running-it), including the [UI walkthrough](#ui-walkthrough)
+7. [Testing](#testing)
+8. [Context engineering and evidence](#context-engineering-and-evidence)
+9. [Evaluation](#evaluation)
+10. [Research-integrity redesign (ADR-0006)](#research-integrity-redesign-adr-0006)
+11. [Live end-to-end Runs (after ADR-0006)](#live-end-to-end-runs-after-adr-0006)
+12. [Anthropic verification results (T18, historical)](#anthropic-verification-results-t18-historical)
+13. [Security, privacy and known limitations](#security-privacy-and-known-limitations)
 
 ## What InsightForge does
 
@@ -71,9 +87,48 @@ Historical Claims (T8), clarification with a durable timeout (T9), the HTTP API 
 progress stream (T10), Watchlist Items on a schedule (T11), Findings, Baselines, Diffs, Alerts
 and an optional Slack-format webhook (T12), a retention sweep (T13), the Next.js workbench
 (T14), Markdown/PDF export and revocable Share links (T15), and the evaluation harness
-(T16). Status: implemented and covered by the offline suite with scripted models; only the
-T18's Anthropic live verification exercised all five Briefs at baseline and two targeted Briefs
-after remediation; the live acceptance gates were not all met (see the last section).
+(T16). Since T18, ADR-0006 rebuilt how Evidence is supported, tracked against the Brief's
+questions and checked before publication ([Research-integrity redesign](#research-integrity-redesign-adr-0006)).
+
+## Quick start
+
+**Offline, no keys, no paid calls:**
+
+```bash
+git clone https://github.com/subhadlearner/insightforge-agent.git
+cd insightforge-agent
+uv sync --locked
+uv run insightforge-agent demo        # real Extraction and synthesis, scripted model, PASS/FAIL list
+uv run pytest                         # default offline suite; outbound network is blocked
+cd web && npm ci && npx playwright install chromium && npm run test:e2e   # the whole app in a browser, scripted models
+```
+
+**The real app** (makes real model and search calls):
+
+```bash
+cp .env.example .env      # set SESSION_SECRET (32+ chars), LLM_PROVIDER and its key, TAVILY_API_KEY
+docker compose up -d qdrant                      # or set QDRANT_URL=:memory: in .env
+uv run insightforge-agent serve --port 8000      # terminal 1
+cd web && npm run dev                            # terminal 2, then open http://localhost:3000
+```
+
+Details, prerequisites and troubleshooting follow in
+[Getting started](#getting-started-from-a-fresh-clone) and [Running it](#running-it).
+
+## Features
+
+| Feature | Where | Ticket |
+|---|---|---|
+| Brief to cited Report through a bounded multi-agent pipeline (Planner, isolated Researchers, Extraction, Synthesis, Writer, Fact-Checker) | `pipeline/`, `agents/` | T3 to T6 |
+| Three source types per Sub-task: web (Tavily), uploaded PDFs (Docling + Qdrant), the User's earlier Reports | `agents/web.py`, `agents/doc_reader.py`, `agents/memory_researcher.py` | T7, T8 |
+| One clarifying question for a Vague Brief, with a durable timeout and resume after restart | `pipeline/clarification.py`, `scheduler/clarification.py` | T9 |
+| HTTP API, persona session, live SSE progress with `Last-Event-ID` resume | `api/` | T10 |
+| Watchlist Items with `max_runs`, Baselines, Findings, Diffs, Alerts and an optional Slack-format webhook | `api/watchlist.py`, `scheduler/`, `domain/diff.py` | T11, T12 |
+| Retention sweep for raw material; Reports are kept | `scheduler/retention.py` | T13 |
+| Next.js workbench: Brief input, runtime estimate, live progress, Report viewer, citation drawer | `web/` | T14 |
+| Watchlist and Alerts pages, Markdown and PDF export, revocable Share links | `web/`, `api/delivery.py` | T15 |
+| Sample Brief library and the `eval` command (fact-check rate, citation accuracy, synthesis judge) | `samples/briefs/`, `evaluation/` | T16 |
+| Evidence-bound support judgment, one Evidence pipeline, bounded work-unit recovery, requirements ledger, checks before publication | `domain/support.py`, `domain/requirements.py`, `pipeline/` | ADR-0006 (#75, #76) |
 
 ## Architecture
 
@@ -248,6 +303,30 @@ configured. `INSIGHTFORGE_API_ORIGIN` (default `http://127.0.0.1:8000`) tells th
 where FastAPI is; `next dev` reads it at start, and `next build` bakes it into the build that
 `next start` serves.
 
+### UI walkthrough
+
+This is the path shown in the recorded demo of the Qdrant vs Weaviate Brief
+([Live end-to-end Runs](#live-end-to-end-runs-after-adr-0006)):
+
+1. **Pick a persona** (`/`). The picker lists the personas in `users.yml` and sets the signed
+   cookie. It selects an identity and is not a login.
+2. **Write the Brief and choose sources.** Toggle web, documents and memory, and attach up to
+   10 PDFs. The runtime estimate updates before you submit (`POST /research/estimate`).
+3. **Follow the Run** (`/runs/{runId}`). The stage rail moves from PLANNING to COMPLETE. Each
+   Sub-task shows its query and state. Workflow milestones, the elapsed time and an activity
+   log stream over SSE. A Vague Brief stops here with one clarifying question to answer.
+4. **Read the Report** (`/reports/{reportId}`). It has a table of contents, sections with a
+   Confidence label, `[UNVERIFIED]` markings where the sampled check found no support, and a
+   Gaps & limitations section built from the requirements ledger.
+5. **Open the citation drawer** on any Claim. It shows the Source, its date and credibility, and
+   the exact cited Passage. For a comparison it shows every premise.
+6. **Export and share.** Download Markdown or PDF, or create a revocable Share link that opens
+   at `/share/{token}` without a persona.
+7. **Watch a topic** (`/watchlist`, `/watchlist/{itemId}`, `/alerts`). The UI lists Watchlist
+   Items with their Run counts, shows each item's Diff history, and lets you read and mark
+   material-change Alerts. Watchlist Items are created and edited through the API
+   (`POST /watchlist`, below), not in the UI.
+
 ### Offline demo: Extraction and synthesis
 
 Exercise the real Extraction and synthesis stages with seeded Sources and scripted models. No
@@ -372,19 +451,24 @@ In PowerShell, set the variable first: `$env:INSIGHTFORGE_ALLOW_LIVE_TESTS = "1"
 `pytest -m live` alone is not enough: live tests also need `INSIGHTFORGE_ALLOW_LIVE_TESTS=1`,
 and skip without it.
 
-Results on a fresh clone of `main` at `22dad4d` (2026-10-18, Windows 11). The uv, model and
-Chromium caches were already warm, so cold downloads were not exercised. Details and caveats
-are in [`docs/t17-verification.md`](docs/t17-verification.md):
+Results on a fresh clone of `main` at `32b0fc4` (PR #77 merge), 2026-10-22, Windows 11, uv
+0.12.5, Node 24.20.0, npm 11.19.0. The uv, model and Chromium caches were already warm, so cold
+downloads were not exercised. No `.env`, no keys, no paid call. Details and caveats are in
+[`docs/t17-verification.md`](docs/t17-verification.md):
 
 | Check | Result |
 |---|---|
-| `uv run pytest` | 1,887 passed, 26 deselected (7 min 10 s) |
-| `uv run pytest -m integration` | 19 passed, **only because the local model cache was already warm**; CI has no cache and skips all 19 |
+| `uv sync --locked` | exit 0 (14 s) |
 | `uv run lint-imports` | 5 kept, 0 broken |
-| `uv run insightforge-agent demo` | exit 0, every expectation PASS |
-| `npm test` / `typecheck` / `build` | 102 passed / clean / built |
-| `npm run test:e2e` | 14 passed |
-| `docker compose up -d qdrant` | **not executed**: no Docker daemon on the verifying machine |
+| `uv run insightforge-agent demo` | exit 0, 7 of 7 expectations PASS |
+| `uv run pytest` | **2,550 passed**, 41 deselected, 5 warnings (10 min 22 s) |
+| `uv run pytest -m integration` | 19 passed, **12 skipped**: the T18 replay tests need `T18_EVAL_DB`/`T18_EVAL_DIR` pointing at the saved T18 evaluation, which is kept outside the repository. The 19 passes depend on the warm local model cache; CI has none and skips them |
+| `npm ci` (in `web/`) | exit 0, 0 vulnerabilities |
+| `npm test` / `typecheck` / `build` | 205 passed in 14 files / clean / built, 8 routes |
+| `npm run test:e2e` | **23 passed** (4.1 min), including the real-PDF test |
+| `docker compose up -d qdrant` | the `qdrant/qdrant:v1.12.4` container was already running from the demo; a cold start was not re-run |
+
+The previous record (`main` at `22dad4d`, 2026-10-18: 1,887 passed) is kept in the same file.
 
 Test counts show coverage, not correctness. The default suite uses scripted models, so it
 proves orchestration, persistence, provenance and the deterministic rules. It does not prove
@@ -418,7 +502,7 @@ Run log as a `context_compacted` event (issue #60). The evidence comes at three 
 |---|---|---|
 | (a) Compaction middleware configured | **Implemented (by the library).** `agents/planner.build_planner` calls `deepagents.create_deep_agent`. In the installed `deepagents` 0.7.23, that always appends `SummarizationMiddleware` to the Planner's stack and to each subagent's. If the chat model publishes a context-window profile, compaction triggers at 85% of it. Otherwise it triggers at 170,000 tokens and keeps the last 6 messages. For the default Planner models that means: Anthropic `claude-haiku-5-5`, no profile, so 170,000 tokens; Gemini `gemini-3.5-flash`, 85% of 1,048,576; Groq `openai/gpt-oss-120b`, 85% of 131,072. InsightForge does not change these thresholds | Read from the installed library source, and the profiles were read offline from the configured models; [`docs/t17-verification.md`](docs/t17-verification.md) |
 | (b) Each compaction recorded in the Run log, and tested | **Implemented and CI-tested (forced, offline).** `agents/compaction.CompactionRecorder` runs after the summarization middleware on the Planner and on every subagent, and reports each completed compaction. `pipeline/graph.py` writes it once per `compaction_id` to `run_events`. The tests make the **real** middleware compact by giving scripted models a small context-window profile, which is how deepagents sets its own trigger. No event is faked | `tests/pipeline/test_compaction_events.py`: Planner compactions, a later compaction recorded and none twice, a restart on the same checkpoint, a Run resumed after its SQLite repositories and checkpointer were closed and reopened from disk, Researcher attribution per Sub-task, durability in a reopened SQLite file, and nothing recorded at the normal thresholds. `tests/test_deepagents_facts.py` pins the library state contract the recorder reads |
-| (c) A real Run on a live model whose log shows a compaction | **Not observed. Not yet verified.** No live Run has been made since the recorder was added, and none is expected to reach the trigger (below) | `docs/live-runs/` (T3 to T5, all before issue #60) |
+| (c) A real Run on a live model whose log shows a compaction | **Not observed.** Three live Runs have been made since the recorder was added (`run_c11947913dc5`, `run_846d12a50177`, `run_e7499e34e1e6`), and none logged a `context_compacted` event, as expected (below). So the recorder has not been seen to fire on a live model | [Live end-to-end Runs](#live-end-to-end-runs-after-adr-0006); `docs/live-runs/` (T3 to T5, before issue #60) |
 
 Persisted Run log from the forced offline scenario. The Planner has a 12,000-token profile and
 padded replies, and the Run includes a repair round. This was read back from the SQLite file
@@ -537,53 +621,80 @@ Limits: one Run per Brief per provider, so there is no repeatability estimate. T
 `checks` are descriptive, and no metric enforces them. The scripted tests
 (`tests/evaluation/`) show orchestration, persistence, subject relevance and provenance across
 the five domains **within a scripted world** (the scripted models copy Passage sentences). They
-do not show real-model research quality. **T18 Anthropic verification has now been run.** The
+do not show real-model research quality. The T18 Anthropic verification ran this harness: the
 baseline five-Brief fact-check rate was 66.7%, and the later targeted Stage C acceptance gate
-FAILED. See [T18 results](#anthropic-verification-results-t18) for the limits.
+FAILED. See [T18 results](#anthropic-verification-results-t18-historical) for the limits. The
+`eval` command has not been re-run since ADR-0006.
 
-## Security, privacy and limitations
+## Research-integrity redesign (ADR-0006)
 
-- **Persona selection is not authentication.** See the note at the top. The backend scopes
-  every request and record to the persona in a signed HttpOnly cookie (HMAC-SHA256,
-  SameSite=Lax). Another persona's data returns 404. But anyone who can reach the API can
-  select any persona. Do not expose this deployment to untrusted networks.
-- **Share links are bearer capabilities.** They are HS256 JWTs carrying a unique share ID, the
-  Report ID and an expiry (7 days by default). Revocation is stored in SQLite and survives a
-  restart. Anyone holding the link can read the Report until it expires or is revoked. The
-  public view exposes only the fact-checked Report, its fact-check summary and cited web
-  Source metadata. It does not expose uploaded-PDF Passage text, Run events, internal Evidence
-  objects or other Reports. Set `SHARE_JWT_SECRET` to separate its signing key from
-  `SESSION_SECRET`; when blank, the demo deliberately reuses `SESSION_SECRET`.
-- **Extraction and judgements are LLM-based.** Entities, structured facts, Evidence drafts,
-  entailment verdicts, Finding normalisation for predicates outside the vocabulary, and
-  synthesis scores all come from models. The deterministic checks narrow what a model can slip
-  through. Every figure and named entity in an Evidence item must appear in its Passage.
-  Structured values and stated periods must be stated in the text. Citations must resolve to
-  stored Passages. Writer Claims may use only their item's figures and names. These checks are
-  lexical. They do not prove that a value belongs to the entity it is attributed to, that two
-  differently written names are the same entity, or that a paraphrase means the same thing.
-  Confidence reflects source count and credibility, not truth.
-- **Fact-checking is a sample.** It checks 20% of Claims (at least 5). Since ADR-0006 a
-  `verified` Claim had a candidate (its own cited Passage, or a span at or above the 0.85
-  similarity threshold) containing the Claim's figures that the light model judged SUPPORTED
-  with a support map code could check (quotes present, statement covered, figures stated,
-  operators such as "not" or "expected" quoted). Only the Passage the Claim cites can verify
-  it: support elsewhere in the Source leaves it unverified. Unsampled Claims are not checked by
-  the Fact-Checker, and `[UNVERIFIED]` means only that the check found no support. Before
-  publication every published Evidence item was judged against its cited Passages during
-  Synthesis, every Claim that rewords its item against the item's primary Passage, and every
-  summary sentence against the published Claims, by the same contract and model (not an
-  independent check).
-- **Data handling.** Everything is stored locally: SQLite files (`*.db`, git-ignored), Qdrant,
-  and the model cache. Fetched web pages and uploaded PDFs are kept for as long as a Report
-  cites them. Other raw material is swept after `RETENTION_DAYS` (default 30). Reports are never
-  deleted, and there is no delete endpoint. Brief text and Passage text are sent to the
-  configured chat provider. Do not upload documents you cannot share with that provider.
-- **Not production.** The app is one process on one node: no Postgres, no worker queue, no
-  sign-up or credentials, no multi-process deployment. Search uses Tavily only (other listed providers are
-  skipped). Hardening observations are tracked in issue #49 (T20).
+Merged to `main` in PR #77. The T18 results below are unchanged and remain the formal record
+(B-1 FAILED, Stage C FAILED, Stage D not run). This redesign addresses the causes T18 exposed
+([ADR-0006](docs/adr/0006-evidence-bound-support-and-requirements-ledger.md), #75, #76):
 
-## Anthropic verification results (T18)
+- **Evidence-bound support.** Synthesis, the Writer's checks and the Fact-Checker share one
+  judgment that must show, for every part of a statement, the exact words of the cited Passage
+  that state it; code verifies the quotes, the coverage and the figures. No lexical name rule
+  refuses a candidate before the judge (the rule that lost Stage C's six-programmes fact is
+  retired), and an uploaded document's company is given to the judge as identity context only.
+- **One Evidence pipeline.** Extraction proposes every fact once, anchored to its Passage;
+  Synthesis verifies and ranks those facts instead of drafting a second, different set.
+- **No silent loss.** Truncated or invalid model batches are split and retried within bounds;
+  what stays unread is reported as a gap.
+- **Requirements ledger.** The Brief's atomic questions are tracked to Evidence and Claims; an
+  item counts for a question only once a check confirms it answers it; what was not
+  established, could not be checked, or failed the Fact-Checker becomes a gap line, so "Gaps &
+  limitations" matches what is missing.
+- **Checked before publication.** A Claim that rewords its Evidence is judged against the cited
+  Passage, and a summary sentence against the published Claims. What fails is omitted with the
+  reason logged, never replaced by the bare Evidence statement. A comparison may cite several
+  items, is checked against all of them, and the citation drawer shows every premise.
+
+What is proven offline, and what is not, is in the
+[verification record](docs/audits/2026-10-21-research-redesign-verification.md). Scripted-model
+tests show the code keeps every gold positive (including all 13 Stage C Northwind facts end to
+end) and refuses every negative it can refuse on its own. They cannot show how reliably a live
+model judges qualifiers, modality or attribution.
+
+## Live end-to-end Runs (after ADR-0006)
+
+Every live Run below used Anthropic Claude Haiku 5.5 for all three roles (planner, writer,
+light) and Tavily search, and finished **COMPLETE** with one Report. These are individual Runs,
+not an acceptance gate: they show the system working end to end on a real model, and they
+show where Report quality still falls short. They do not replace or overturn the T18 results.
+
+| Run | How | Brief | Outcome | Record |
+|---|---|---|---|---|
+| Gate A (support judgment only, not a Run) | owner-authorised harness, $0.50 cap | the B-1 gold Claims | **FAILED**, $0.0675: 8 of 9 wrong rejections were code vetoes (since retired); the model made 1 wrong acceptance and 1 wrong rejection. Not re-run | verification record §13 |
+| `run_c11947913dc5` | budget-capped harness ($1.00 cap, 20 searches), on `b31ffc2` | BYD vs Tesla BEVs: 2025 sales, pricing, battery technology | COMPLETE in 43 min, **$0.317**, 711 model calls, 7 searches. The Report marked all 6 requirements as not established and 25 Claims were restated verbatim. Both causes were fixed and pinned by tests | verification record §14 |
+| `run_846d12a50177` | same harness, on `9ddf640` | same Brief | COMPLETE in 52 min, **$0.385**, 852 model calls, 6 searches. All 6 requirements reported; 33 Claims, every citation resolves from a fresh connection; Fact-Checker sample 7/7 verified. It published a UK figure as Tesla's 2025 sales, and the BYD vs Tesla comparison was refused. Both were corrected afterwards (omission rule, footnoted-quote fix) and pinned by tests. The UI Run below ran the corrected code on a different Brief; this Brief has not been re-run | verification record §15 |
+| `run_e7499e34e1e6` | **the web UI**, recorded on video; checkout at `09db8dd` per the git reflog (the code of `main` at `32b0fc4`: the two later commits changed only a test and generated types), Docker Qdrant | Qdrant vs Weaviate for a self-hosted RAG app (hybrid search, metadata filtering, Docker operations, a recommendation for a solo developer) | COMPLETE in 1 h 37 min (Synthesis took 69 min). 6/6 Sub-tasks succeeded, 27 Sources, 57 Claims in 4 sections, Fact-Checker sample **12/12 verified**. Requirements ledger: 6 of 11 reported, 1 partial, 4 incomplete. **The recommendation was not established**: 5 extraction batches (56 and 309 Passages in two Sub-tasks) stayed unread after bounded retries (output truncated), and the Report says so in Gaps & limitations. Every section is LOW Confidence and every Source is undated. Cost not measured (no harness on UI Runs) | below |
+
+**The UI demonstration** (2026-10-21) drove `run_e7499e34e1e6` through the whole
+[UI walkthrough](#ui-walkthrough): persona selection, Brief and estimate, live progress, the
+Report with its citation drawer, Share-link listing, the Watchlist and Alerts pages, and
+Markdown and PDF export (`rep_3f4e32cbd7af0109`). Read from the API log:
+
+- Markdown export returned 200 on the first try.
+- PDF export returned **502 twice** (`PdfRenderError: Chromium renderer failed`) while the
+  `next dev` server was logging worker errors. It returned 200 after the web server was
+  restarted.
+- The Qdrant client (1.19.1) warned that it is incompatible with the pinned Docker server
+  (1.12.4). Document search was not part of this Brief, so that path was not exercised against
+  the Docker server.
+
+The video (`InsightForge-Demo-2026-10-21.mp4`), the raw recording, the exported Report (Markdown
+and PDF) and the API and web logs are kept outside the repository, like the harness records,
+because they are large and include local logs. Publishing the demo is T19 (#20).
+
+What these Runs do **not** show: repeatability (one Run per Brief), whether the corrections
+made after `run_846d12a50177` fix that Brief's Report, a re-run of the formal T18 gates, or the
+uploaded-document and memory paths after ADR-0006 on a live model.
+
+## Anthropic verification results (T18, historical)
+
+This is the formal T18 record, kept as it was reported. It ran before ADR-0006, and nothing
+later re-ran or overturned these gates: the live Runs above are separate evidence, not passes.
 
 **Live verification completed; the acceptance gates did not all pass.** T18 (#19) exercised all
 five sample Briefs on Anthropic (Claude Haiku 5.5) at baseline, including the real uploaded-PDF
@@ -637,36 +748,68 @@ repository. These results were handed to [README ticket #18](https://github.com/
 and [demo ticket #20](https://github.com/subhadlearner/insightforge-agent/issues/20);
 they do not mean those tickets' other work is complete.
 
-## Research-integrity redesign (ADR-0006, after T18)
+## Security, privacy and known limitations
 
-**Implemented and offline-tested; not yet validated on a live model.** The T18 results above
-are unchanged and remain the formal record (B-1 FAILED, Stage C FAILED, Stage D not run). This
-redesign, on `fix/t18-research-integrity` (draft PR into `t18-verification`), addresses the
-causes T18 exposed ([ADR-0006](docs/adr/0006-evidence-bound-support-and-requirements-ledger.md),
-#75, #76):
-
-- **Evidence-bound support.** Synthesis, the Writer's checks and the Fact-Checker share one
-  judgment that must show, for every part of a statement, the exact words of the cited Passage
-  that state it; code verifies the quotes, the coverage, the figures and the logical operators
-  ("not", "only", "expected"). No lexical name rule refuses a candidate
-  before the judge (the rule that lost Stage C's six-programmes fact is retired), and an uploaded
-  document's company is given to the judge as identity context only.
-- **One Evidence pipeline.** Extraction proposes every fact once, anchored to its Passage;
-  Synthesis verifies and ranks those facts instead of drafting a second, different set.
-- **No silent loss.** Truncated or invalid model batches are split and retried within bounds;
-  what stays unread is reported.
-- **Requirements ledger.** The Brief's atomic questions are tracked to Evidence and Claims; an
-  item counts for a question only once a check confirms it answers it; what was not
-  established, could not be checked, or failed the Fact-Checker becomes a gap line, so "Gaps &
-  limitations" matches what is missing.
-- **Checked before publication.** A Claim that rewords its Evidence is judged against the cited
-  Passage, and a summary sentence against the published Claims; what fails is omitted, with the
-  reason logged, never replaced by the bare Evidence statement. A comparison or conclusion may cite several items, is checked against
-  all of them, and the citation drawer shows every premise.
-
-What is proven offline, and what is not, is in the
-[verification record](docs/audits/2026-10-21-research-redesign-verification.md). In short:
-scripted-model tests show the code keeps every gold positive (including all 13 Stage C
-Northwind facts end to end) and refuses every negative it can refuse on its own; they cannot
-show how reliably a live model judges qualifiers, modality or attribution. That needs the
-budget-capped live gate described there, which has not been run.
+- **Persona selection is not authentication.** See the note at the top. The backend scopes
+  every request and record to the persona in a signed HttpOnly cookie (HMAC-SHA256,
+  SameSite=Lax). Another persona's data returns 404. But anyone who can reach the API can
+  select any persona. Do not expose this deployment to untrusted networks.
+- **Share links are bearer capabilities.** They are HS256 JWTs carrying a unique share ID, the
+  Report ID and an expiry (7 days by default). Revocation is stored in SQLite and survives a
+  restart. Anyone holding the link can read the Report until it expires or is revoked. The
+  public view exposes only the fact-checked Report, its fact-check summary and cited web
+  Source metadata. It does not expose uploaded-PDF Passage text, Run events, internal Evidence
+  objects or other Reports. Set `SHARE_JWT_SECRET` to separate its signing key from
+  `SESSION_SECRET`; when blank, the demo deliberately reuses `SESSION_SECRET`.
+- **Extraction and judgements are LLM-based.** Entities, structured facts, Evidence drafts,
+  entailment verdicts, Finding normalisation for predicates outside the vocabulary, and
+  synthesis scores all come from models. The deterministic checks narrow what a model can slip
+  through. Every figure and named entity in an Evidence item must appear in its Passage.
+  Structured values and stated periods must be stated in the text. Citations must resolve to
+  stored Passages. Writer Claims may use only their item's figures and names. These checks are
+  lexical. They do not prove that a value belongs to the entity it is attributed to, that two
+  differently written names are the same entity, or that a paraphrase means the same thing.
+  Since rules ledger row 17 (2026-10-21) the Writer's figure and name match is retry feedback
+  for current Claims: a Claim that still breaks it goes to the semantic check against its cited
+  Passage and is published only if that check supports it. Confidence reflects source count and
+  credibility, not truth.
+- **Fact-checking is a sample.** It checks 20% of Claims (at least 5). Since ADR-0006 a
+  `verified` Claim had a candidate (its own cited Passage, or a span at or above the 0.85
+  similarity threshold) containing the Claim's figures that the light model judged SUPPORTED
+  with a support map code could check (quotes present, statement covered, figures stated,
+  operators such as "not" or "expected" quoted). Only the Passage the Claim cites can verify
+  it: support elsewhere in the Source leaves it unverified. Unsampled Claims are not checked by
+  the Fact-Checker, and `[UNVERIFIED]` means only that the check found no support. Before
+  publication every published Evidence item was judged against its cited Passages during
+  Synthesis, every Claim that rewords its item against the item's primary Passage, and every
+  summary sentence against the published Claims, by the same contract and model (not an
+  independent check).
+- **Data handling.** Everything is stored locally: SQLite files (`*.db`, git-ignored), Qdrant,
+  and the model cache. Fetched web pages and uploaded PDFs are kept for as long as a Report
+  cites them. Other raw material is swept after `RETENTION_DAYS` (default 30). Reports are never
+  deleted, and there is no delete endpoint. Brief text and Passage text are sent to the
+  configured chat provider. Do not upload documents you cannot share with that provider.
+- **Not production.** The app is one process on one node: no Postgres, no worker queue, no
+  sign-up or credentials, no multi-process deployment. Search uses Tavily only (other listed providers are
+  skipped). Hardening observations are tracked in issue #49 (T20).
+- **Research quality on live models (seen in the live Runs above).**
+  - Long official-documentation pages can exhaust the output limit. The Qdrant vs Weaviate Run
+    left 5 extraction batches unread, so its recommendation was not established. The Report
+    reports this as a gap and does not hide it.
+  - Passages are single sentences, so a fact whose scope sits in a neighbouring sentence can
+    lose that scope. Such a fact is now omitted when its reworded Claim is rejected, but
+    Extraction still accepts it (verification record §15).
+  - Repair still fills an emptied section or unanswered requirement with an item's statement,
+    unchecked for context.
+  - Section Confidence often shows LOW, and Source titles can carry page clutter.
+  - Many Sources show as undated. The citation drawer shows the publication date only, not
+    `updated_at`.
+  - Cost and time are high. One Brief took 711 to 852 model calls and 43 to 97 minutes,
+    mostly support judgments.
+  - Qualifier leaks (#75) and the Stage C gaps (#76) remain open post-submission follow-ups.
+- **Operational.**
+  - There is no Run or Sub-task timeout.
+  - PDF export depends on a running Next app and Chromium. It failed twice during the demo
+    until the dev server was restarted.
+  - The installed `qdrant-client` (1.19.1) warns against the pinned Docker server (1.12.4).
+  - Integration tests and the real-PDF browser test skip in CI, which has no model cache.

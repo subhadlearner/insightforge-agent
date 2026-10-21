@@ -120,3 +120,44 @@ and deepagents has no compaction callback.
   and raises `SearchError` when no Tavily key is set, so the API does not start (T3 notes,
   `agents/web.py`). The first README draft got this wrong; corrected after PR review.
 - CI runs the integration step without a model cache, so those tests skip there.
+
+## Final re-verification on merged `main` (2026-10-22)
+
+Base: `main` at `32b0fc4` (PR #77 merge, ADR-0006). A new clone of
+`https://github.com/subhadlearner/insightforge-agent.git` into an empty scratch directory, no
+`.env` file. Same machine and tool versions as above (uv 0.12.5, Node 24.20.0, npm 11.19.0).
+No paid or hosted model, search or evaluation call was made.
+
+| Step | Command | Result |
+|---|---|---|
+| Clone and install | `git clone ...`, `uv sync --locked` | exit 0 (14 s, warm uv cache) |
+| Import contracts | `uv run lint-imports` | 5 kept, 0 broken |
+| Offline demo | `uv run insightforge-agent demo` | exit 0, 7 of 7 expectations PASS |
+| Default suite | `uv run pytest` | 2,550 passed, 41 deselected, 5 warnings, 622 s |
+| Integration | `uv run pytest -m integration` | 19 passed, 12 skipped, 2,560 deselected (90 s) |
+| Web install | `npm ci` (in `web/`) | exit 0, 148 packages, 0 vulnerabilities |
+| Web unit and component | `npm test` | 14 files, 205 passed |
+| TypeScript | `npm run typecheck` | exit 0 |
+| Production build | `npm run build` | exit 0, 8 routes |
+| Browser E2E | `npm run test:e2e` | 23 passed (4.1 min), including `e2e/real-pdf.spec.ts` |
+
+Caveats:
+
+- **Warm caches.** As in the first record, the uv, model and Chromium caches already existed,
+  so cold downloads were not exercised.
+- **Integration skips.** All 12 skips are T18 replay tests that read the saved T18 evaluation
+  (`T18_EVAL_DB`, `T18_EVAL_DIR`), which is kept outside the repository by design.
+- **The 5 default-suite warnings** are the `qdrant-client` 1.19.1 version warning against a
+  Qdrant 1.12.4 server. They come from `tests/test_settings.py` (3) and
+  `tests/test_spike_checks.py` (2). These tests build the app with the default `QDRANT_URL`
+  (`http://localhost:6335`), and the demo's Docker Qdrant container was still running, so they
+  reached it over loopback. The network guard allows loopback. The tests pass. Without that
+  container the warning does not appear. Recorded for T20 (#49); not changed here.
+- **Docker.** `docker compose up -d qdrant` was exercised for the UI demonstration of
+  2026-10-21 (the container `qdrant/qdrant:v1.12.4` on port 6335). A cold start was not re-run
+  for this record.
+- **Live paths** are recorded separately, not here: the three live Runs after ADR-0006 and the
+  UI demonstration (README "Live end-to-end Runs";
+  `docs/audits/2026-10-21-research-redesign-verification.md` §13 to §15).
+- The README changes on the T17 branch are documentation only, plus three `.gitignore`
+  patterns, so these results apply to that branch.

@@ -1,6 +1,6 @@
 # Evidence-bound support, one Evidence pipeline and a requirements ledger
 
-Status: accepted for implementation on `fix/t18-research-integrity` (draft PR into `t18-verification`). Offline-verified only; live model behaviour is unproven until a separately authorised, budget-capped validation runs. Refs #19, #75, #76. Builds on ADR-0005 (model-first semantics, invariants in code); it does not replace it. Amended after the independent review of `86584c2` (PR #77): §1 check 5, §4 single-Passage split, §5 answer check and new statuses, §6 checks before publication, §7 citation rule; see "Review corrections" below.
+Status: accepted and implemented; merged to `main` in PR #77 (developed on `fix/t18-research-integrity`). Verified offline; on a live model, Gate A failed once and three end-to-end Runs completed (verification record §13 to §15, README "Live end-to-end Runs"). No live acceptance gate has passed. Refs #19, #75, #76. Builds on ADR-0005 (model-first semantics, invariants in code); it does not replace it. Amended after the independent review of `86584c2` (PR #77): §1 check 5, §4 single-Passage split, §5 answer check and new statuses, §6 checks before publication, §7 citation rule; see "Review corrections" below.
 
 ## Context
 
