@@ -566,10 +566,14 @@ FAILED. See [T18 results](#anthropic-verification-results-t18) for the limits.
 - **Fact-checking is a sample.** It checks 20% of Claims (at least 5). Since ADR-0006 a
   `verified` Claim had a candidate (its own cited Passage, or a span at or above the 0.85
   similarity threshold) containing the Claim's figures that the light model judged SUPPORTED
-  with a support map code could check (quotes present, statement covered, figures stated).
-  Unsampled Claims are not checked, and `[UNVERIFIED]` means only that the check found no
-  support. Every published Evidence item was also judged against its cited Passages during
-  Synthesis, by the same contract and model (not an independent check).
+  with a support map code could check (quotes present, statement covered, figures stated,
+  operators such as "not" or "expected" quoted). Only the Passage the Claim cites can verify
+  it: support elsewhere in the Source leaves it unverified. Unsampled Claims are not checked by
+  the Fact-Checker, and `[UNVERIFIED]` means only that the check found no support. Before
+  publication every published Evidence item was judged against its cited Passages during
+  Synthesis, every Claim that rewords its item against the item's primary Passage, and every
+  summary sentence against the published Claims, by the same contract and model (not an
+  independent check).
 - **Data handling.** Everything is stored locally: SQLite files (`*.db`, git-ignored), Qdrant,
   and the model cache. Fetched web pages and uploaded PDFs are kept for as long as a Report
   cites them. Other raw material is swept after `RETENTION_DAYS` (default 30). Reports are never
@@ -641,19 +645,24 @@ redesign, on `fix/t18-research-integrity` (draft PR into `t18-verification`), ad
 causes T18 exposed ([ADR-0006](docs/adr/0006-evidence-bound-support-and-requirements-ledger.md),
 #75, #76):
 
-- **Evidence-bound support.** Synthesis and the Fact-Checker share one judgment that must show,
-  for every part of a statement, the exact words of the cited Passage that state it; code
-  verifies the quotes, the coverage and the figures. No lexical name rule refuses a candidate
+- **Evidence-bound support.** Synthesis, the Writer's checks and the Fact-Checker share one
+  judgment that must show, for every part of a statement, the exact words of the cited Passage
+  that state it; code verifies the quotes, the coverage, the figures and the logical operators
+  ("not", "only", "expected"). No lexical name rule refuses a candidate
   before the judge (the rule that lost Stage C's six-programmes fact is retired), and an uploaded
   document's company is given to the judge as identity context only.
 - **One Evidence pipeline.** Extraction proposes every fact once, anchored to its Passage;
   Synthesis verifies and ranks those facts instead of drafting a second, different set.
 - **No silent loss.** Truncated or invalid model batches are split and retried within bounds;
   what stays unread is reported.
-- **Requirements ledger.** The Brief's atomic questions are tracked to Evidence and Claims; what
-  was not established becomes a gap line, so "Gaps & limitations" matches what is missing.
-- **Analytical Claims.** A comparison or conclusion may cite several items, is checked against
-  all of them before publication, and the citation drawer shows every premise.
+- **Requirements ledger.** The Brief's atomic questions are tracked to Evidence and Claims; an
+  item counts for a question only once a check confirms it answers it; what was not
+  established, could not be checked, or failed the Fact-Checker becomes a gap line, so "Gaps &
+  limitations" matches what is missing.
+- **Checked before publication.** A Claim that rewords its Evidence is judged against the cited
+  Passage, and a summary sentence against the published Claims; what fails is restated
+  verbatim or removed. A comparison or conclusion may cite several items, is checked against
+  all of them, and the citation drawer shows every premise.
 
 What is proven offline, and what is not, is in the
 [verification record](docs/audits/2026-10-21-research-redesign-verification.md). In short:
