@@ -51,6 +51,13 @@ from insightforge_agent.domain.contracts import (
     SubTaskResult,
     VerifiedReport,
 )
+from insightforge_agent.domain.document_recovery import (
+    LIMITATION_LEXICON,
+    RECOVERY_CAP,
+    irrelevance_stated,
+    recoverable,
+    recovered_chunks,
+)
 from insightforge_agent.domain.documents import Upload, check_uploads, chunk_id, chunk_ids_in
 from insightforge_agent.domain.errors import (
     ClarificationConflict,
@@ -89,8 +96,21 @@ from insightforge_agent.pipeline.memory import (
     resolve_historical,
     summaries_for_planner,
 )
+from insightforge_agent.pipeline.requirements import confirm_answers, derive_requirements
 from insightforge_agent.pipeline.synthesize import synthesize
-from insightforge_agent.pipeline.write import write_report
+from insightforge_agent.pipeline.write import research_gaps, write_report
+from insightforge_agent.domain.requirements import (
+    RequirementLedger,
+    RequirementStatus,
+    after_fact_check,
+    aspect_ledger,
+    assess,
+    budget_cut,
+    decomposition_gaps,
+    gap_lines,
+    mark_reported,
+    unverifiable,
+)
 
 IMPLEMENTED_SOURCE_TYPES = ["web", "documents", "memory"]
 
@@ -143,6 +163,8 @@ class State(TypedDict, total=False):
     question: str  # the Planner's one clarifying question, once asked
     clarification: dict  # its stored resolution: question, resolution, answer
     limitations: list[str]  # Gaps & limitations decided before writing (a timed-out question)
+    requirements: dict  # ADR-0006 RequirementLedger, derived once the plan is accepted
+    ledger_status: list  # RequirementStatus per requirement, after writing
 
 
 def summaries_from_log(deps: Deps, owner_id: str, run_id: str) -> dict[str, SourceRef]:
@@ -185,6 +207,26 @@ def returned_by_subtask(deps: Deps, owner_id: str, run_id: str, event_type: str,
 def returned_chunks(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
     """Per Sub-task, the chunk IDs its own Doc Reader searches returned in this Run."""
     return returned_by_subtask(deps, owner_id, run_id, DOC_SEARCH_EVENT, "chunk_ids")
+
+
+def run_log(deps: Deps, owner_id: str, run_id: str) -> list:
+    """Every event of the Run, in order."""
+    out, cursor = [], 0
+    while batch := deps.repos.events.read_after(owner_id, run_id, cursor):
+        out += batch
+        cursor = batch[-1].seq
+    return out
+
+
+def search_rankings(deps: Deps, owner_id: str, run_id: str) -> dict[str, list[list[str]]]:
+    """Per Sub-task, each of its own Doc Reader searches in this Run, in order, as the chunk ids
+    it returned in rank order (T18 CS2 recovery). A search with no Sub-task authorises nothing;
+    a search that raised wrote no event."""
+    found: dict[str, list[list[str]]] = {}
+    for e in run_log(deps, owner_id, run_id):
+        if e.type == DOC_SEARCH_EVENT and e.payload.get("subtask_id"):
+            found.setdefault(e.payload["subtask_id"], []).append(list(e.payload["chunk_ids"]))
+    return found
 
 
 def returned_memory_refs(deps: Deps, owner_id: str, run_id: str) -> dict[str, set[str]]:
@@ -402,7 +444,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
             limitations.append(timeout_limitation(clarification["question"],
                                                   plan_assumption(thread_messages)[:500]))
             deps.log(owner, run_id, "plan_assumption", detail=limitations[0])
-        return {"plan": plan.model_dump(), "repaired": False, "limitations": limitations}
+        ledger = derive_requirements(deps, owner, run_id, state["brief"], plan)
+        return {"plan": plan.model_dump(), "repaired": False, "limitations": limitations,
+                "requirements": ledger.model_dump()}
 
     def clarify(state: State) -> State:
         """AWAITING_CLARIFICATION: the graph stops here, checkpointed, until `resume_run` resumes
@@ -445,6 +489,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         known = {s.id for s in deps.repos.sources.list_for_run(owner, run_id)}
         summaries = summaries_from_log(deps, owner, run_id)
         returned = returned_chunks(deps, owner, run_id)
+        rankings = search_rankings(deps, owner, run_id)
         documents = set(state.get("documents", []))
         source_type = {t["id"]: t["source_type"] for t in state["plan"]["sub_tasks"]}
         all_outcomes = outcomes(state)
@@ -458,7 +503,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 ok = outcome.status == "succeeded" and sid in found_background
                 if not ok:
                     deps.log(owner, run_id, "subtask_failed", subtask_id=sid,
-                             status=outcome.status)
+                             status=outcome.status, reason=reply_head(outcome))
                 results.append(SubTaskResult(subtask_id=sid,
                                              status="succeeded" if ok else "failed"))
                 settle_subtask(owner, run_id, sid, ok)
@@ -479,14 +524,59 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                         refs.append(ref)
             ok = bool(refs)
             if not ok:
-                deps.log(owner, run_id, "subtask_failed", subtask_id=sid, status=outcome.status)
+                extra = {}
+                if source_type[sid] == "documents":
+                    searches = rankings.get(sid, [])
+                    extra = dict(searches=len(searches),
+                                 returned_chunks=len({c for ids in searches for c in ids}))
+                deps.log(owner, run_id, "subtask_failed", subtask_id=sid, status=outcome.status,
+                         reason=reply_head(outcome), **extra)
+            settle_subtask(owner, run_id, sid, ok)
+            if not ok and source_type[sid] == "documents" and outcome.status == "failed":
+                recovered = recover_document_scope(owner, run_id, sid, outcome, rankings,
+                                                   returned, documents)
+                if recovered is not None:
+                    results.append(recovered)
+                    continue
             results.append(SubTaskResult(
                 subtask_id=sid, status="succeeded" if ok else "failed", source_refs=refs))
-            settle_subtask(owner, run_id, sid, ok)
         if not any(r.status == "succeeded" for r in results):
             raise RunFailed("every Sub-task failed")
         return {"research": ResearchResults(results=results).model_dump(),
                 "historical": historical.context.model_dump(mode="json")}
+
+    def reply_head(outcome) -> str:
+        """The start of a Sub-task's reply, for the failure record; never Source text."""
+        return (outcome.dispatch.result or "")[:300] if outcome.dispatch else "no reply"
+
+    def recover_document_scope(owner: str, run_id: str, sid: str, outcome,
+                               rankings: dict[str, list[list[str]]],
+                               returned: dict[str, set[str]],
+                               documents: set[str]) -> SubTaskResult | None:
+        """T18 CS2: a Document Reader that failed only because its search shows no chunk text
+        (domain/document_recovery) gets its own searches' chunks back as candidates for
+        Synthesis, through the same trust checks as chunks it names. The Sub-task stays FAILED
+        for the user; its result carries the scope, marked `search_recovery`."""
+        reply, searches = outcome.dispatch.result or "", rankings.get(sid, [])
+        ok, phrases = recoverable(reply, searches)
+        if not ok:
+            return None
+        chosen = recovered_chunks(searches)
+        refs = document_refs(owner, ", ".join(chosen), returned.get(sid, set()), documents)
+        kept = [chunk_id(p) for r in refs for p in r.passages]
+        deps.log(owner, run_id, "document_scope_recovered", subtask_id=sid,
+                 trigger="metadata_only_limitation", lexicon=LIMITATION_LEXICON,
+                 matched_phrases=phrases, irrelevance_stated=irrelevance_stated(reply),
+                 reply_head=reply_head(outcome), searches=len(searches), recovered=kept,
+                 excluded_by_trust_checks=[c for c in chosen if c not in set(kept)],
+                 cap=RECOVERY_CAP)
+        if not refs:
+            return None
+        refs = [r.model_copy(update={"summary": r.summary + "; recovered from this Sub-task's "
+                                     "own searches (not selected by the Document Reader)"})
+                for r in refs]
+        return SubTaskResult(subtask_id=sid, status="succeeded", source_refs=refs,
+                             scope_origin="search_recovery")
 
     def settle_subtask(owner: str, run_id: str, sid: str, ok: bool) -> None:
         """Store the validated outcome and its event in one write, so a crash leaves both or
@@ -555,11 +645,20 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                         + (f", pages {', '.join(map(str, pages))}" if pages else "")))
         return out
 
+    def ledger_of(state: State) -> RequirementLedger:
+        """The Run's requirements ledger; a Run checkpointed before ADR-0006 has none, and gets
+        the one-per-Aspect fallback."""
+        if state.get("requirements"):
+            return RequirementLedger.model_validate(state["requirements"])
+        return aspect_ledger(SubTaskPlan.model_validate(state["plan"]))
+
     def extracting(state: State) -> State:
         enter(state, RunState.EXTRACTING)
         research = ResearchResults.model_validate(state["research"])
         scope = research.passage_scope()
-        result = extract(deps, state["owner_id"], state["run_id"], list(scope), scope)
+        result = extract(deps, state["owner_id"], state["run_id"], list(scope), scope,
+                         plan=SubTaskPlan.model_validate(state["plan"]), research=research,
+                         ledger=ledger_of(state))
         return {"extraction": result.model_dump()}
 
     def synthesizing(state: State) -> State:
@@ -569,6 +668,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
             SubTaskPlan.model_validate(state["plan"]),
             ResearchResults.model_validate(state["research"]),
             ExtractionResult.model_validate(state["extraction"]),
+            ledger_of(state),
         )
         if not bundle.sections and not historical_of(state).items:
             raise RunFailed("no Evidence item survived synthesis")
@@ -576,22 +676,67 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
     def writing(state: State) -> State:
         enter(state, RunState.WRITING)
+        owner, run_id = state["owner_id"], state["run_id"]
         research = ResearchResults.model_validate(state["research"])
-        by_id = {t.id: t for t in SubTaskPlan.model_validate(state["plan"]).sub_tasks}
-        gaps = list(state.get("limitations", []))
-        gaps += [f"Sub-task {r.subtask_id} ({by_id[r.subtask_id].query}) produced no usable "
-                 "sources." for r in research.results if r.status == "failed"]
         bundle = EvidenceBundle.model_validate(state["bundle"])
+        # T18 CS4: the gaps come from this Run's own records, in fixed wording.
+        log = [{"type": e.type, "payload": e.payload} for e in run_log(deps, owner, run_id)]
+        documents = []
+        for sid in state.get("documents", []):
+            contents = deps.store.read_run_source(owner, run_id, sid)
+            documents.append((contents.source.title, contents.passages))
+        plan = SubTaskPlan.model_validate(state["plan"])
+        extraction = ExtractionResult.model_validate(state["extraction"])
+        historical = historical_of(state)
+        # ADR-0006 §5: each requirement's status from the kept items, before writing; what is
+        # not established becomes a gap line, so Gaps & limitations matches the ledger. An item
+        # answers a requirement only if the answer check confirms it, and a candidate whose
+        # support check failed is "could not be checked", never "no evidence" (PR #77 review).
+        kept = [i for s in bundle.sections for i in s.items]
+        ledger = ledger_of(state)
+        statuses = assess(ledger, plan, research, extraction, kept,
+                          {h.aspect_id for h in historical.items},
+                          answers=confirm_answers(deps, owner, run_id, ledger, kept),
+                          unverifiable=unverifiable(
+                              [e["payload"] for e in log if e["type"] == "evidence_dropped"]),
+                          cut=budget_cut([e["payload"] for e in log if e["type"] == "evidence_cut"]))
+        # What the Brief asks that no requirement tracks (or that this could not be checked)
+        # follows the Run's own limitations (a clarification that timed out comes first).
+        gaps = list(state.get("limitations", [])) + decomposition_gaps(ledger) + research_gaps(
+            plan=plan, research=research, bundle=bundle, events=log, documents=documents,
+            extraction=extraction) + gap_lines(statuses)
         draft = write_report(deps, state["owner_id"], state["run_id"], state["brief"], bundle,
-                             gaps, historical_of(state))
-        return {"draft": draft.model_dump()}
+                             gaps, historical, statuses)
+        statuses = mark_reported(statuses, draft)
+        deps.log(owner, run_id, "requirements_assessed",
+                 statuses=[{"id": r.id, "status": r.status, "evidence_ids": r.evidence_ids,
+                            "claims": r.claims} for r in statuses])
+        return {"draft": draft.model_dump(),
+                "ledger_status": [r.model_dump(exclude_defaults=True) for r in statuses]}
 
     def fact_checking(state: State) -> State:
         enter(state, RunState.FACT_CHECKING)
+        owner, run_id = state["owner_id"], state["run_id"]
         verified = fact_check(
-            deps, state["owner_id"], state["run_id"], ReportDraft.model_validate(state["draft"]),
+            deps, owner, run_id, ReportDraft.model_validate(state["draft"]),
             EvidenceBundle.model_validate(state["bundle"]), historical_of(state))
-        return {"verified": verified.model_dump()}
+        # PR #77 review: the ledger and gaps reflect the Fact-Checker. A requirement whose every
+        # answering Claim failed it is no longer just "reported", and says so in the gaps.
+        before = [RequirementStatus.model_validate(r) for r in state.get("ledger_status") or []]
+        statuses = after_fact_check(before, verified.verdicts)
+        failed = [r for r in statuses if r.status == "reported_unverified"]
+        if failed:
+            draft = verified.draft
+            verified = verified.model_copy(update={"draft": draft.model_copy(update={
+                # First, so the bounded Run summary keeps them (second PR #77 review).
+                "gaps": [*gap_lines(failed), *draft.gaps],
+                "quality": [*draft.quality,
+                            f"requirements_unverified:{','.join(r.id for r in failed)}"]})})
+        deps.log(owner, run_id, "requirements_fact_checked",
+                 statuses=[{"id": r.id, "status": r.status, "fact_check": r.fact_check}
+                           for r in statuses])
+        return {"verified": verified.model_dump(),
+                "ledger_status": [r.model_dump(exclude_defaults=True) for r in statuses]}
 
     def historical_of(state: State) -> HistoricalContext:
         return HistoricalContext.model_validate(state.get("historical") or {})
@@ -607,9 +752,20 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         except NotFoundError:
             report = Report(
                 id=derive_report_id(owner, run_id), owner_id=owner, run_id=run_id, created_at=deps.now(),
-                body={"brief": state["brief"], "draft": draft.model_dump(),
-                      "verified": verified.model_dump(), "evidence": state["bundle"],
-                      "historical": historical_of(state).model_dump(mode="json")},
+                # JSON mode throughout: the body is stored as JSON, and Evidence items carry
+                # `published_at` dates.
+                body={"brief": state["brief"], "draft": draft.model_dump(mode="json"),
+                      "verified": verified.model_dump(mode="json"),
+                      "evidence": EvidenceBundle.model_validate(state["bundle"]).model_dump(mode="json"),
+                      "historical": historical_of(state).model_dump(mode="json"),
+                      # ADR-0006: the requirements ledger and what could not be read.
+                      "ledger": {
+                          **ledger_of(state).model_dump(mode="json"),
+                          "status": [RequirementStatus.model_validate(r).model_dump(mode="json")
+                                     for r in state.get("ledger_status") or []],
+                          "failed_units": [u.model_dump(mode="json") for u in
+                                           ExtractionResult.model_validate(
+                                               state.get("extraction") or {}).failed_units]}},
             )
             # Index and summarise first, store the Report last: a stored Report is always
             # finalised, so no COMPLETE Run (or recovered one) lacks its summary or index.

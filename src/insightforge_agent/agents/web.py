@@ -44,6 +44,10 @@ class Page:
     body: str
     published_at: datetime | None = None  # from page metadata only; None when absent or invalid
     byline: str | None = None
+    # The page's own stated modification date, only when it also states a publication date and
+    # this is later: a page updated since (a statistics page) is then never shown by its
+    # publication date alone. Never used as the publication date.
+    updated_at: datetime | None = None
 
 
 class SearchProvider(Protocol):
@@ -162,8 +166,10 @@ class _TextExtractor(HTMLParser):
 
 
 # Only metadata that names the *publication* date. A bare "date" meta tag, dateModified,
-# <time> elements, body text and URL paths are ambiguous and are never used.
+# <time> elements, body text and URL paths are ambiguous and are never used for it.
+# dateModified is recorded only as the separate `Page.updated_at`.
 _DATE_META = ("article:published_time", "datepublished")
+_MODIFIED_META = ("article:modified_time", "datemodified")
 _AUTHOR_META = ("author", "article:author")
 _EARLIEST_PLAUSIBLE = datetime(1990, 1, 1, tzinfo=UTC)
 
@@ -232,6 +238,17 @@ def _published_at(parser: _TextExtractor, objects: list[dict], now: datetime) ->
     return next((d for d in (_parse_date(c, now) for c in candidates) if d), None)
 
 
+def _updated_at(parser: _TextExtractor, objects: list[dict], now: datetime,
+                published: datetime | None) -> datetime | None:
+    """JSON-LD dateModified (the same objects), then modified-time meta tags; first valid wins,
+    kept only when the page states a publication date and this is after it."""
+    candidates = [o.get("dateModified") for o in objects] + [parser.meta.get(k)
+                                                             for k in _MODIFIED_META]
+    modified = next((d for d in (_parse_date(c, now) for c in candidates) if d), None)
+    return modified if published is not None and modified is not None and modified > published \
+        else None
+
+
 def _author_name(author: object) -> str | None:
     """A named author. An Organization is a publisher, not a byline."""
     if isinstance(author, list):
@@ -254,9 +271,11 @@ def html_to_page(url: str, html: str, now: datetime | None = None) -> Page:
     parser = _TextExtractor()
     parser.feed(html)
     objects = _publication_objects(_json_ld_objects(parser.json_ld))
+    now = now or datetime.now(UTC)
+    published = _published_at(parser, objects, now)
     return Page(url=url, title=re.sub(r"\s+", " ", parser.title).strip() or url, body=parser.text(),
-                published_at=_published_at(parser, objects, now or datetime.now(UTC)),
-                byline=_byline(parser, objects))
+                published_at=published, byline=_byline(parser, objects),
+                updated_at=_updated_at(parser, objects, now, published))
 
 
 class HttpFetcher:

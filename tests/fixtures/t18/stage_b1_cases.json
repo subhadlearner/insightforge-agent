@@ -1,0 +1,277 @@
+{
+ "_note": "T18 Stage B-1 entailment calibration cases (T18-IMPLEMENTATION-SPEC v3.1). 'ref' names the Run and section.claim of a Claim T18 left unverified; its cited Passage, read from the saved T18 eval.db at run time, is the evidence for every case in the group. 'positive' is that Report Claim (model output); the negatives are written for this calibration and must be judged NOT SUPPORTED. 'hard': the wrong entity, value or period appears elsewhere in the same Passage. N31 is blocked by the figure gate offline and is a Stage A case.",
+ "groups": [
+  {
+   "ref": "run_06105d324454 0.1",
+   "positive": "BYD's passenger BEV sales were 2,256,714 in 2025, versus Tesla's 1,636,129 deliveries.",
+   "negatives": [
+    {
+     "id": "N01",
+     "kind": "wrong company (swap, hard)",
+     "text": "Tesla's passenger BEV sales were 2,256,714 in 2025, versus BYD's 1,636,129 deliveries."
+    },
+    {
+     "id": "N02",
+     "kind": "wrong measure",
+     "text": "BYD's total NEV sales were 2,256,714 in 2025, versus Tesla's 1,636,129 deliveries."
+    },
+    {
+     "id": "N03",
+     "kind": "wrong period",
+     "text": "BYD's passenger BEV sales were 2,256,714 in the first half of 2025, versus Tesla's 1,636,129 deliveries."
+    },
+    {
+     "id": "N04",
+     "kind": "unsupported extra assertion",
+     "text": "BYD's passenger BEV sales were 2,256,714 in 2025, versus Tesla's 1,636,129 deliveries, the first year BYD outsold Tesla in Europe."
+    }
+   ]
+  },
+  {
+   "ref": "run_0b45a66fd66d 2.6",
+   "positive": "Stryker Corporation's full year reported net sales were $22.6 billion, an increase of 10.2% from the previous year.",
+   "negatives": [
+    {
+     "id": "N05",
+     "kind": "wrong company",
+     "text": "Medtronic's full year reported net sales were $22.6 billion, an increase of 10.2% from the previous year."
+    },
+    {
+     "id": "N06",
+     "kind": "wrong measure",
+     "text": "Stryker Corporation's full year net income was $22.6 billion, an increase of 10.2% from the previous year."
+    },
+    {
+     "id": "N07",
+     "kind": "wrong period (hard)",
+     "text": "Stryker Corporation's fourth quarter 2024 reported net sales were $22.6 billion, an increase of 10.2% from the previous year."
+    },
+    {
+     "id": "N08",
+     "kind": "wrong value (hard)",
+     "text": "Stryker Corporation's full year reported net sales were $6.4 billion, an increase of 10.2% from the previous year."
+    }
+   ]
+  },
+  {
+   "ref": "run_7be9b5b129d0 0.5",
+   "positive": "BYD's overseas sales in H1 2026 grew 70.7% to 792,256 units, while domestic sales in China fell almost 40%.",
+   "negatives": [
+    {
+     "id": "N09",
+     "kind": "wrong company",
+     "text": "Tesla's overseas sales in H1 2026 grew 70.7% to 792,256 units, while its domestic sales in China fell almost 40%."
+    },
+    {
+     "id": "N10",
+     "kind": "wrong measure (swap, hard)",
+     "text": "BYD's domestic sales in China in H1 2026 grew 70.7% to 792,256 units, while overseas sales fell almost 40%."
+    },
+    {
+     "id": "N11",
+     "kind": "wrong period (hard)",
+     "text": "BYD's overseas sales in H1 2025 grew 70.7% to 792,256 units, while domestic sales in China fell almost 40%."
+    },
+    {
+     "id": "N12",
+     "kind": "wrong value (hard)",
+     "text": "BYD's overseas sales in H1 2026 fell 15.7% to 792,256 units."
+    }
+   ]
+  },
+  {
+   "ref": "run_ab1c836b61f4 2.1",
+   "positive": "Amazon projects roughly $200 billion in capital expenditure for 2026, most but not all of it for data centers.",
+   "negatives": [
+    {
+     "id": "N13",
+     "kind": "wrong company",
+     "text": "Microsoft projects roughly $200 billion in capital expenditure for 2026, most but not all of it for data centers."
+    },
+    {
+     "id": "N14",
+     "kind": "wrong measure",
+     "text": "Amazon projects roughly $200 billion in revenue for 2026, most but not all of it from data centers."
+    },
+    {
+     "id": "N15",
+     "kind": "wrong value (hard)",
+     "text": "Amazon projects roughly $147 billion in capital expenditure for 2026, most but not all of it for data centers."
+    },
+    {
+     "id": "N16",
+     "kind": "contradicted detail",
+     "text": "Amazon projects roughly $200 billion in capital expenditure for 2026, all of it for data centers."
+    }
+   ]
+  },
+  {
+   "ref": "run_ab1c836b61f4 2.8",
+   "positive": "Microsoft said that demand exceeds available supply in a \"relatively extreme moment\" and expects to double its total data center capacity from FY2025 to FY2027.",
+   "negatives": [
+    {
+     "id": "N17",
+     "kind": "wrong company",
+     "text": "Amazon said that demand exceeds available supply in a \"relatively extreme moment\" and expects to double its total data center capacity from FY2025 to FY2027."
+    },
+    {
+     "id": "N18",
+     "kind": "wrong measure",
+     "text": "Microsoft expects to double its total capital expenditure from FY2025 to FY2027."
+    },
+    {
+     "id": "N19",
+     "kind": "wrong temporal status",
+     "text": "Microsoft said it doubled its total data center capacity from FY2025 to FY2027."
+    },
+    {
+     "id": "N20",
+     "kind": "reversed relation",
+     "text": "Microsoft said that available supply exceeds demand and expects to double its total data center capacity from FY2025 to FY2027."
+    }
+   ]
+  },
+  {
+   "ref": "run_f388cc91cf2a 1.1",
+   "positive": "Germany added 15 GW of new solar PV capacity in 2025.",
+   "negatives": [
+    {
+     "id": "N21",
+     "kind": "wrong country",
+     "text": "France added 15 GW of new solar PV capacity in 2025."
+    },
+    {
+     "id": "N22",
+     "kind": "wrong measure",
+     "text": "Germany added 15 GW of new wind capacity in 2025."
+    },
+    {
+     "id": "N23",
+     "kind": "wrong temporal status",
+     "text": "Germany plans to add 15 GW of new solar PV capacity in 2025."
+    },
+    {
+     "id": "N24",
+     "kind": "wrong value (hard)",
+     "text": "Germany added 59 GW of new solar PV capacity in 2025."
+    }
+   ]
+  },
+  {
+   "ref": "run_f388cc91cf2a 2.1",
+   "positive": "The Global Solar Market Outlook sets out actionable policy recommendations.",
+   "negatives": [
+    {
+     "id": "N25",
+     "kind": "wrong publication",
+     "text": "The IEA World Energy Outlook sets out actionable policy recommendations."
+    },
+    {
+     "id": "N26",
+     "kind": "wrong measure",
+     "text": "The Global Solar Market Outlook sets out binding policy requirements for governments."
+    },
+    {
+     "id": "N27",
+     "kind": "wrong period (hard)",
+     "text": "The Global Solar Market Outlook provides an in-depth analysis of solar PV developments until 2030."
+    },
+    {
+     "id": "N28",
+     "kind": "unsupported detail",
+     "text": "The Global Solar Market Outlook features a dedicated chapter analysing the German solar PV market."
+    }
+   ]
+  },
+  {
+   "ref": "run_fc1c9560577b 1.0",
+   "positive": "The H20 chip was designed to comply with U.S. export restrictions and generated an estimated $12 billion to $15 billion in revenue in 2024.",
+   "negatives": [
+    {
+     "id": "N29",
+     "kind": "wrong company",
+     "text": "AMD's China chip was designed to comply with U.S. export restrictions and generated an estimated $12 billion to $15 billion in revenue in 2024."
+    },
+    {
+     "id": "N30",
+     "kind": "wrong measure",
+     "text": "The H20 chip was designed to comply with U.S. export restrictions and generated an estimated $12 billion to $15 billion in profit in 2024."
+    },
+    {
+     "id": "N31",
+     "kind": "wrong period (hard)",
+     "text": "The H20 chip was designed to comply with U.S. export restrictions and generated an estimated $12 billion to $15 billion in revenue in 2022."
+    },
+    {
+     "id": "N32",
+     "kind": "reversed relation",
+     "text": "The H20 chip was designed to circumvent U.S. export restrictions and generated an estimated $12 billion to $15 billion in revenue in 2024."
+    }
+   ]
+  },
+  {
+   "ref": "run_fc1c9560577b 1.2",
+   "positive": "NVIDIA's full-year fiscal 2026 revenue was $215.9 billion, up 65% from a year ago.",
+   "negatives": [
+    {
+     "id": "N33",
+     "kind": "wrong company",
+     "text": "AMD's full-year fiscal 2026 revenue was $215.9 billion, up 65% from a year ago."
+    },
+    {
+     "id": "N34",
+     "kind": "wrong measure",
+     "text": "NVIDIA's full-year fiscal 2026 net income was $215.9 billion, up 65% from a year ago."
+    },
+    {
+     "id": "N35",
+     "kind": "wrong period (hard)",
+     "text": "NVIDIA's fourth-quarter fiscal 2026 revenue was $215.9 billion, up 65% from a year ago."
+    },
+    {
+     "id": "N36",
+     "kind": "wrong value (hard)",
+     "text": "NVIDIA's full-year fiscal 2026 revenue was $215.9 billion, up 73% from a year ago."
+    }
+   ]
+  },
+  {
+   "ref": "run_fc1c9560577b 3.1",
+   "positive": "The H20 was engineered by Nvidia to fall within the 'green zone' of the AI Diffusion Rule, which allowed it to avoid extra export paperwork.",
+   "negatives": [
+    {
+     "id": "N37",
+     "kind": "wrong company",
+     "text": "AMD engineered a chip to fall within the 'green zone' of the AI Diffusion Rule, which allowed it to avoid extra export paperwork."
+    },
+    {
+     "id": "N38",
+     "kind": "wrong model number (hard)",
+     "text": "The H200 was engineered by Nvidia to fall within the 'green zone' of the AI Diffusion Rule, which allowed it to avoid extra export paperwork."
+    },
+    {
+     "id": "N39",
+     "kind": "wrong period (hard)",
+     "text": "The AI Diffusion Rule, introduced in January 2027, carved out a 'green zone' for lower-powered models such as the H20."
+    },
+    {
+     "id": "N40",
+     "kind": "overstated effect",
+     "text": "The H20 was engineered by Nvidia to fall within the 'green zone' of the AI Diffusion Rule, which exempted it from all export licensing requirements."
+    }
+   ]
+  }
+ ],
+ "adjudication": {
+  "run_06105d324454 0.1": "yes",
+  "run_0b45a66fd66d 2.6": "yes",
+  "run_7be9b5b129d0 0.5": "yes",
+  "run_ab1c836b61f4 2.1": "yes",
+  "run_ab1c836b61f4 2.8": "yes",
+  "run_f388cc91cf2a 1.1": "partly (the Passage says 'last year'; 2025 is inferred)",
+  "run_f388cc91cf2a 2.1": "yes",
+  "run_fc1c9560577b 1.0": "yes",
+  "run_fc1c9560577b 1.2": "yes",
+  "run_fc1c9560577b 3.1": "yes by the Source; factual accuracy doubtful (T18 defect 4)"
+ }
+}

@@ -3,14 +3,15 @@
     uv run insightforge-agent demo
 
 Runs the real `extract` and `synthesize` stages over seeded Sources, in memory. The only thing
-that is not production code is the model: `ScriptedModel` answers the three Passage-reading
-calls (extract, draft, entail) from small tables below, standing in for an LLM. No network, no
-credentials, no API calls. Everything the demo shows (merging, validation, Confidence,
-contradictions, ranking, budget) is decided by the production pipeline.
+that is not production code is the model: `ScriptedModel` answers the two Passage-reading
+calls (extraction, and the ADR-0006 support judgment) from small tables below, standing in for
+an LLM. No network, no credentials, no API calls. Everything the demo shows (merging,
+verification, Confidence, contradictions, ranking, budget) is decided by the production
+pipeline.
 
-The scripted entailment judge follows a simple rule and uses `unsupported_numbers` for its
-number comparison; a real model judges meaning, so this only shows the pipeline's reaction to
-each verdict."""
+The scripted support judge follows a simple rule and uses `unsupported_numbers` for its number
+comparison, answering SUPPORTED with the whole Passage as its excerpt; a real model judges
+meaning, so this only shows the pipeline's reaction to each verdict."""
 
 import json
 import re
@@ -74,8 +75,8 @@ FACTS = {
     SOURCES["blog_a"][3]: ("Tesla", "units_sold", "1.80 million", "2025"),
     SOURCES["blog_b"][3]: ("Tesla", "units_sold", "1.64 million", "2025"),
 }
-# Candidates the scripted drafter adds on top of "one item per known Passage": a fabricated
-# figure and a claim no Passage states. The pipeline must reject both.
+# Facts the scripted extractor adds on top of "one fact per known Passage": a fabricated figure
+# and a claim no Passage states. The pipeline must reject both.
 FABRICATED = "BYD sold 4.9 million vehicles in 2025."
 UNSUPPORTED = "BYD is the safest electric vehicle brand."
 
@@ -102,25 +103,19 @@ def _numbered(user: str) -> list[tuple[int, str]]:
 
 
 def _extract_reply(user: str) -> dict:
-    return {"facts": [
-        {"passage_index": n, "statement": t, "entity": FACTS[t][0], "predicate": FACTS[t][1],
-         "value": FACTS[t][2], "period": FACTS[t][3]} for n, t in _numbered(user) if t in FACTS]}
-
-
-def _draft_reply(user: str) -> dict:
-    items = []
+    facts = []
     for n, text in _numbered(user):
         entity, predicate, value, period = FACTS.get(text, ("", "", "", "UNKNOWN"))
-        items.append({"statement": text, "passages": [n], "entity": entity, "predicate": predicate,
-                      "value": value, "as_of_period": period})
-        if "BYD sold 4.27 million" in text:  # the planted bad candidates cite the BYD Passage
-            items.append({"statement": FABRICATED, "passages": [n]})
-            items.append({"statement": UNSUPPORTED, "passages": [n]})
-    return {"items": items}
+        facts.append({"passage_index": n, "statement": text, "entity": entity,
+                      "predicate": predicate, "value": value, "period": period})
+        if "BYD sold 4.27 million" in text:  # the planted bad facts cite the BYD Passage
+            facts.append({"passage_index": n, "statement": FABRICATED})
+            facts.append({"passage_index": n, "statement": UNSUPPORTED})
+    return {"facts": facts}
 
 
 def _judge(statement: str, passage: str) -> str:
-    """The scripted entailment rule. A statement about another subject is INSUFFICIENT; a
+    """The scripted support rule. A statement about another subject is INSUFFICIENT; a
     statement with figures is SUPPORTED if the Passage states them and CONTRADICTED if not; a
     statement with no figures is SUPPORTED only if the Passage says it."""
     if statement.split()[0].casefold() not in passage.casefold():
@@ -130,19 +125,21 @@ def _judge(statement: str, passage: str) -> str:
     return "SUPPORTED" if statement.casefold() in passage.casefold() else "INSUFFICIENT_EVIDENCE"
 
 
-def _entail_reply(user: str) -> dict:
+def _support_reply(user: str) -> dict:
     statement = re.search(r"^Statement: (.+)$", user, re.MULTILINE).group(1)
-    return {"verdicts": [{"passage": n, "verdict": _judge(statement, t)}
-                         for n, t in _numbered(user)]}
+    verdicts = []
+    for n, t in _numbered(user):
+        verdict = _judge(statement, t)
+        verdicts.append({"passage": n, "verdict": verdict, **(
+            {"parts": [{"part": statement, "excerpts": [t]}]} if verdict == "SUPPORTED" else {})})
+    return {"verdicts": verdicts}
 
 
 def build_model() -> ScriptedModel:
     def reply(system: str, user: str) -> str:
         if system.startswith("You extract facts"):
             return json.dumps(_extract_reply(user))
-        if system.startswith("You draft evidence"):
-            return json.dumps(_draft_reply(user))
-        return json.dumps(_entail_reply(user))
+        return json.dumps(_support_reply(user))
     return ScriptedModel(reply=reply)
 
 
@@ -178,7 +175,7 @@ def run_demo() -> DemoRun:
         SubTaskResult(subtask_id=sid, status="succeeded", source_refs=[
             SourceRef(source_id=ids[k], title=SOURCES[k][1], summary="") for k in keys])
         for sid, (_, _, _, keys) in SUBTASKS.items()])
-    extraction = extract(deps, OWNER, RUN, list(ids.values()))
+    extraction = extract(deps, OWNER, RUN, list(ids.values()), plan=plan, research=research)
     bundle = synthesize(deps, OWNER, RUN, BRIEF, plan, research, extraction)
     return DemoRun(deps, extraction, bundle, repos.events.read_after(OWNER, RUN),
                    {v: SOURCES[k][0] for k, v in ids.items()})
@@ -211,7 +208,7 @@ def checks(run: DemoRun) -> list[tuple[str, bool]]:
         ("a single trusted-domain Source is MEDIUM (high_credibility_single_source)",
          len(agency) == 1 and agency[0].confidence == "MEDIUM"
          and decided[agency[0].id]["decision_rule"] == "high_credibility_single_source"),
-        ("a fabricated figure is rejected by the literal-value check",
+        ("a fabricated figure is rejected by the figure check, before any judge",
          FABRICATED in dropped and "value not in Passage" in str(
              next(e.payload["rejected"] for e in run.events
                   if e.type == "evidence_dropped" and e.payload["statement"] == FABRICATED))),

@@ -65,6 +65,24 @@ describe("Report viewer", () => {
     expect(within(drawer).getByText("Pricing", { selector: "dd" })).toBeInTheDocument();
   });
 
+  it("shows every premise an analytical claim rests on, each with its own Source", async () => {
+    const [first, second, third] = citations();
+    m.getCitations.mockResolvedValue([first, second, { ...third, premises: [{ ...second, claim: 2 }] }]);
+    render(<ReportView reportId="rep_1" />);
+    await userEvent.click(await screen.findByRole("button", { name: "View source for claim 3" }));
+    const drawer = screen.getByRole("dialog", { name: "Source for claim 3" });
+    const premise = within(drawer).getByTestId("citation-premise");
+    expect(premise).toHaveTextContent(`It also rests on: ${second.source_title}`);
+    expect(premise).toHaveTextContent(second.passage_text);
+    expect(within(drawer).getByTestId("citation-passage")).toHaveTextContent("Seagull now starts at 69,800 yuan.");
+  });
+
+  it("shows no premise for a claim that rests on one item", async () => {
+    render(<ReportView reportId="rep_1" />);
+    await userEvent.click(await screen.findByRole("button", { name: "View source for claim 3" }));
+    expect(screen.queryByTestId("citation-premise")).toBeNull();
+  });
+
   it("says when a source gives no publication date instead of inventing one", async () => {
     render(<ReportView reportId="rep_1" />);
     await userEvent.click(await screen.findByRole("button", { name: "View source for claim 2" }));

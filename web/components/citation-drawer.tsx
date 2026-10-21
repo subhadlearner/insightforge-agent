@@ -1,7 +1,8 @@
 "use client";
 
 // The evidence behind one Claim, as GET /api/reports/{id}/citations resolved it: the Claim's
-// own primary Passage and that Passage's Source. Nothing here is derived in the browser.
+// own primary Passage and that Passage's Source, and for an analytical Claim the primary
+// Passage of each premise it rests on. Nothing here is derived in the browser.
 // A native <dialog>: Escape closes it, focus moves into it and returns to the marker.
 
 import { useEffect, useRef } from "react";
@@ -87,6 +88,15 @@ export function CitationDrawer({ claim, citation, total, onClose, onStep }: {
                 <figcaption className="passage__caption">The passage this claim cites</figcaption>
                 <p className="passage__text" data-testid="citation-passage">{citation.passage_text}</p>
               </figure>
+              {(citation.premises ?? []).map((p, i) => (
+                // An analytical claim rests on every premise: each is shown with its own Source.
+                <figure className="passage" key={`${p.evidence_id}-${i}`} data-testid="citation-premise">
+                  <figcaption className="passage__caption">
+                    It also rests on: {p.source_title}{p.page != null ? `, page ${p.page}` : ""}
+                  </figcaption>
+                  <p className="passage__text">{p.passage_text}</p>
+                </figure>
+              ))}
             </>
           ) : (
             <p className="notice notice--error">The source for this claim could not be resolved.</p>

@@ -94,6 +94,7 @@ class Source(_Record):
     title: str
     credibility_score: float | None = Field(default=None, ge=0, le=1)
     published_at: datetime | None = None
+    updated_at: datetime | None = None  # a web page's own later modification date (`web.Page`)
 
     @property
     def domain(self) -> str | None:

@@ -46,6 +46,9 @@ class SubTaskResult(BaseModel):
     subtask_id: str
     status: Literal["succeeded", "failed"]
     source_refs: list[SourceRef] = Field(default_factory=list)
+    # T18 CS2: "search_recovery" when a failed Document Reader's own search results were
+    # recovered as the scope (the Sub-task itself stays FAILED for the user).
+    scope_origin: Literal["doc_reader", "search_recovery"] = "doc_reader"
 
     def passage_scope(self) -> "PassageScope":
         """Per Source, the exact Passages this Sub-task retrieved (by Observation and index),
@@ -109,6 +112,10 @@ class ExtractedFact(BaseModel):
     value: str = ""
     period: str = "UNKNOWN"
     conflict: bool = False
+    # ADR-0006: the Sub-task the fact serves and the research requirements it helps answer, as
+    # Extraction proposed them and code accepted them (known ids only). Empty for older facts.
+    subtask_id: str = ""
+    requirement_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _provenance_matches_references(self) -> "ExtractedFact":
@@ -133,10 +140,21 @@ class Conflict(BaseModel):
     fact_ids: list[str]
 
 
+class FailedUnit(BaseModel):
+    """A model work unit whose output could not be used after bounded recovery (ADR-0006 §4):
+    what it covered, so the loss stays visible instead of reading as "no facts"."""
+
+    stage: str  # "extraction"
+    source_id: str
+    passages: list[PassageRef]
+    reason: str  # "truncated", "invalid" or "rejected"
+
+
 class ExtractionResult(BaseModel):
     entities: list[str] = Field(default_factory=list)
     facts: list[ExtractedFact] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
+    failed_units: list[FailedUnit] = Field(default_factory=list)
 
 
 class EvidenceItem(BaseModel):
@@ -154,10 +172,19 @@ class EvidenceItem(BaseModel):
     as_of_period: str = "UNKNOWN"
     derived_from: str | None = None  # "observation_date" when the period was derived
     temporally_ambiguous: bool = False
+    # T18 CS4: the primary Source's publication date, and whether an item with no stated period
+    # was published before the time window its Sub-task asked for (possibly stale, not wrong).
+    published_at: date | None = None
+    before_window: bool = False
     conflicting: bool = False
     contradicting: list[PassageRef] = Field(default_factory=list)
     conflict_fact_ids: list[str] = Field(default_factory=list)
     relevance: float = 0.0  # cosine similarity between the item and the Brief
+    requirement_ids: list[str] = Field(default_factory=list)  # ADR-0006 ledger links
+    # Over the Evidence budget, the Writer may be shown this shorter wording instead of the
+    # statement, set only once the support contract judged it equivalent both ways
+    # (`pipeline/synthesize._shortened`); the statement and citation are unchanged.
+    shortened: str = ""
 
 
 class EvidenceSection(BaseModel):
@@ -205,6 +232,13 @@ class Claim(BaseModel):
     text: str
     evidence_id: str  # an Evidence item, or a HistoricalItem when `historical`
     historical: bool = False
+    # ADR-0006: further current Evidence items an analytical Claim (a comparison or conclusion)
+    # rests on. `evidence_id` stays its primary citation; empty for a single-item Claim.
+    premises: list[str] = Field(default_factory=list)
+
+    def evidence_ids(self) -> list[str]:
+        """The primary item and every premise, in order, without repeats."""
+        return list(dict.fromkeys([self.evidence_id, *self.premises]))
 
 
 class ReportSection(BaseModel):
@@ -217,6 +251,10 @@ class ReportDraft(BaseModel):
     summary: str = ""
     sections: list[ReportSection]
     gaps: list[str] = Field(default_factory=list)
+    # ADR-0006: what code had to do to make the draft publishable (a Claim replaced by its
+    # item's statement, a section or requirement filled verbatim, an analytical Claim removed).
+    # A flagged Report is degraded output, never evidence of the Writer's synthesis.
+    quality: list[str] = Field(default_factory=list)
 
 
 # A section's label: its Confidence, or BACKGROUND for Historical background only.
@@ -262,11 +300,14 @@ class ClaimVerdict(BaseModel):
     verdict: Literal["verified", "unverified", "unchecked"]
     # A Historical Claim is checked against its original Sources: the `historical_` kinds.
     check: Literal["web_refetch", "document_passages", "historical_web_refetch",
-                   "historical_document_passages", "not_checkable"]
+                   "historical_document_passages", "premises_joint", "not_checkable"]
     original: PassageRef
     similarity: float | None = None
     matched: PassageRef | None = None
     reason: str = ""
+    # ADR-0006: the support verdict of the cited Passage as it was when cited (citation truth),
+    # kept apart from the verdict on the re-fetched page (current truth). None for older Reports.
+    cited_support: str | None = None
 
 
 class VerifiedReport(BaseModel):
@@ -294,6 +335,8 @@ class Citation(BaseModel):
     passage_text: str
     page: int | None = None
     section_heading: str | None = None
+    # ADR-0006: the primary citation of each premise of an analytical Claim, in order.
+    premises: list["Citation"] = Field(default_factory=list)
 
 
 UNVERIFIED_MARK = " [UNVERIFIED]"

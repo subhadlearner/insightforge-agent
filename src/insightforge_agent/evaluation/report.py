@@ -28,6 +28,15 @@ SampleStatus = Literal["complete", "failed", "rejected", "setup_failed", "error"
 Setting = str | int | float | bool | None
 
 
+class FactCheckPaths(BaseModel):
+    """How a Report's sampled verdicts were reached (T18 CS1A): the counterpart fallback is a
+    method change, so its share is reported beside the pass rate, never folded into it."""
+
+    counterpart_looked_up: int = 0  # F2 found no candidate; the cited Passage was looked up
+    counterpart_judged: int = 0  # it entered the entailment call
+    verified_by_counterpart: int = 0
+
+
 class SampleResult(BaseModel):
     sample_id: str
     industry: str
@@ -39,6 +48,7 @@ class SampleResult(BaseModel):
     report_id: str | None = None
     reason: str = ""  # why the Run did not complete
     fact_check: FactCheckMetrics | None = None
+    fact_check_paths: FactCheckPaths | None = None
     citations: CitationMetrics | None = None
     synthesis: SynthesisResult
     metric_errors: list[str] = []
@@ -97,6 +107,9 @@ class CodeVersion(BaseModel):
 class JudgeIdentity(BaseModel):
     provider: str  # a chat provider, or "none"
     rubric_version: str
+    # The judge prompt around the rubric; None in reports written before it was recorded
+    # (judge-prompt-1, as in the T18 baseline).
+    prompt_version: str | None = None
     model: str | None = None  # the configured model id
     runtime_model: str | None = None  # the class and model id that ran
     role: str | None = None  # whose Settings model the judge is
@@ -325,6 +338,13 @@ def render_markdown(report: EvalReport) -> str:
             + " |", "",
             f"Remediation (section 11): **{p.remediation.status}**. {p.remediation.reason}.", "",
         ]
+        paths = [s.fact_check_paths for s in p.samples if s.fact_check_paths]
+        if paths:
+            lines += [f"Fact-check by path (T18): "
+                      f"{sum(x.verified_by_counterpart for x in paths)} verified through the "
+                      f"cited-Passage counterpart, of {sum(x.counterpart_judged for x in paths)} "
+                      f"judged and {sum(x.counterpart_looked_up for x in paths)} looked up; every "
+                      "other verdict came from the F2 path.", ""]
         problems = [(s.sample_id, x) for s in p.samples
                     for x in (s.metric_errors + (s.citations.problems if s.citations else [])
                               + ([s.synthesis.reason] if s.synthesis.status == "error" else []))]

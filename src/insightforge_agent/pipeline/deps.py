@@ -51,6 +51,15 @@ class Deps:
     fact_check_rate: float = 0.2
     fact_check_minimum: int = 5
     similarity_threshold: float = 0.85
+    # T18 CS3. `native_json` (llm.native_json in production) gives drafting the provider's
+    # native structured output; None keeps plain JSON. Injected so this package never imports
+    # the model layer. `draft_passage_cap` bounds the Passages per drafting call; None: no bound.
+    native_json: Callable[[BaseChatModel, type], Any] | None = None
+    draft_passage_cap: int | None = None
+    # T18 CS1A: the cited-Passage counterpart fallback of the Fact-Checker (fact_check.py).
+    fact_check_counterpart: bool = True
+    # ADR-0006 §4: retries one Run may spend recovering truncated or invalid work units.
+    work_unit_retry_cap: int = 12
     recursion_limit: int = 60
     # Uploaded documents (T7). Without both, the documents source type cannot be researched.
     doc_index: DocChunkIndex | None = None
@@ -66,6 +75,15 @@ class Deps:
     on_complete: Callable[[Run], object] | None = None  # scheduler post-processing, outside the graph
 
     _spent: dict[tuple[str, str], int] = field(default_factory=dict, repr=False)
+    _retries: dict[tuple[str, str], int] = field(default_factory=dict, repr=False)
+
+    def take_retry(self, owner_id: str, run_id: str) -> bool:
+        """Use one of the Run's work-unit retries; False once `work_unit_retry_cap` is spent."""
+        key = (owner_id, run_id)
+        if self._retries.get(key, 0) >= self.work_unit_retry_cap:
+            return False
+        self._retries[key] = self._retries.get(key, 0) + 1
+        return True
 
     def spend(self, owner_id: str, run_id: str, *texts: str) -> None:
         """Count the estimated input tokens of one model call against the Run's token cap."""

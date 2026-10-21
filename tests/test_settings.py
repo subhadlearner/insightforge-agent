@@ -81,6 +81,33 @@ def test_evidence_limits_and_bucket_thresholds_are_settings_that_reach_the_pipel
     assert Settings.model_fields["evidence_budget_tokens"].default == 6000
 
 
+def test_drafting_reliability_settings_reach_the_pipeline(monkeypatch):
+    """T18 CS3: native structured drafting is on by default and can be switched off; the
+    drafting Passage cap is off by default."""
+    from insightforge_agent.llm import native_json
+    from insightforge_agent.pipeline.wiring import build_deps
+    from insightforge_agent.stores.memory import MemoryRepos
+
+    deps = build_deps(make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t"), MemoryRepos(),
+                      checkpointer=None)
+    assert (deps.native_json, deps.draft_passage_cap) == (native_json, None)
+    deps = build_deps(make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t",
+                           DRAFT_STRUCTURED_OUTPUT="false", DRAFT_PASSAGE_CAP="150"),
+                      MemoryRepos(), checkpointer=None)
+    assert (deps.native_json, deps.draft_passage_cap) == (None, 150)
+
+
+def test_the_counterpart_fallback_is_on_by_default_and_can_be_switched_off(monkeypatch):
+    from insightforge_agent.pipeline.wiring import build_deps
+    from insightforge_agent.stores.memory import MemoryRepos
+
+    on = build_deps(make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t"), MemoryRepos(),
+                    checkpointer=None)
+    off = build_deps(make(monkeypatch, LLM_PROVIDER="fake", TAVILY_API_KEY="t",
+                          FACT_CHECK_COUNTERPART="false"), MemoryRepos(), checkpointer=None)
+    assert (on.fact_check_counterpart, off.fact_check_counterpart) == (True, False)
+
+
 def test_documents_are_wired_with_the_configured_local_embedding_model(monkeypatch):
     """T7: production wiring builds the Doc Reader's pieces without loading a model or opening a
     connection; the one embedding model serves documents, relevance and the Fact-Checker."""

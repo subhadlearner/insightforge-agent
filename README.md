@@ -30,7 +30,8 @@ the setup and test sections is [`docs/t17-verification.md`](docs/t17-verificatio
 6. [Context engineering and evidence](#context-engineering-and-evidence)
 7. [Evaluation](#evaluation)
 8. [Security, privacy and limitations](#security-privacy-and-limitations)
-9. [Anthropic verification results (T18): pending](#anthropic-verification-results-t18-pending)
+9. [Anthropic verification results (T18)](#anthropic-verification-results-t18)
+10. [Research-integrity redesign (ADR-0006, after T18)](#research-integrity-redesign-adr-0006-after-t18)
 
 ## What InsightForge does
 
@@ -71,8 +72,8 @@ progress stream (T10), Watchlist Items on a schedule (T11), Findings, Baselines,
 and an optional Slack-format webhook (T12), a retention sweep (T13), the Next.js workbench
 (T14), Markdown/PDF export and revocable Share links (T15), and the evaluation harness
 (T16). Status: implemented and covered by the offline suite with scripted models; only the
-happy path, planning, extraction and synthesis, and Fact-Checker cases have been run on a real
-model (see the last section).
+T18's Anthropic live verification exercised all five Briefs at baseline and two targeted Briefs
+after remediation; the live acceptance gates were not all met (see the last section).
 
 ## Architecture
 
@@ -402,8 +403,9 @@ at a time.
 | **Researchers see summaries, not pages.** The fetch tool writes each Source's one-line summary in its own bounded call. The Researcher sees only `{source_id, title, summary}` | Five full articles per search would otherwise sit in the Researcher's context ([design rationale Q18](docs/design-rationale.md)) | CI-tested: `tests/pipeline/test_isolation.py::test_each_researcher_receives_only_its_own_subtask` |
 | **Isolated Researchers.** Each Researcher is a DeepAgents subagent with its own `tools=` and only its Sub-task's task description. It does not see the Brief, the plan or its peers. Only its final message returns to the Planner | The Planner's thread grows by one short result per Sub-task, not by every search and fetch | CI-tested: same test, plus `tests/pipeline/test_isolation.py::test_the_researcher_subagent_has_its_own_tools_and_is_not_forked`. Isolation on a real model was checked in the T1 spike (`docs/design.md` section 12) |
 | **Planner memory is three Run summaries.** The Planner gets the last 3 Run summaries for the same Watchlist Item, or for the same User's one-shot Runs. Each summary is bounded (Brief 500 characters, 6 themes, 12 entities, 6 gaps). It never sees transcripts, earlier Reports or Passage text | Memory stays constant in size however many Runs a User has made | CI-tested: `tests/pipeline/test_t8_memory.py::test_the_planner_reads_exactly_the_newest_three_summaries_and_no_transcript`. The Run log records `run_summaries_loaded` with count and IDs only |
-| **Bounded Passage batches.** Extraction (one Source at a time), Synthesis (one Sub-task at a time) and the Fact-Checker read Passage text in batches under `PASSAGE_TOKEN_CAP` (default 3,000 estimated tokens, measured on the rendered batch). An oversized Passage is read in windows, never truncated | The cost of one call does not grow with page or document length | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_budget` (captures the payloads); `tests/pipeline/test_t5_review.py::test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synthesis` |
-| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context, and never sees Passage text. When the bundle is over budget, whole lowest-ranked items are cut (never truncated mid-item), and each cut is logged as an `evidence_cut` event with its reason, Confidence and rank | The Writer's input is bounded however much research succeeded | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`. Nothing is summarised: the implementation drops whole items (design §4 was corrected to say so). Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
+| **Bounded Passage batches.** Extraction (one Source at a time), the support judgment (one Evidence item or sampled Claim at a time) and the Fact-Checker read Passage text in batches under `PASSAGE_TOKEN_CAP` (default 3,000 estimated tokens, measured on the call's user message). An oversized Passage is read in windows, never truncated | The cost of one call does not grow with page or document length | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_budget` (captures the payloads); `tests/pipeline/test_t5_review.py::test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synthesis` |
+| **Structured output and bounded recovery (T18, ADR-0006).** Extraction, the only call that proposes facts since ADR-0006, asks for the provider's native structured output where one exists (Anthropic: `output_config` JSON schema; `DRAFT_STRUCTURED_OUTPUT`, default on); `DRAFT_PASSAGE_CAP` (default off) can bound the Passages per call. A truncated, invalid or rejected batch is split and retried at most two levels deep within `WORK_UNIT_RETRY_CAP` (default 12) per Run; what stays unread is reported as a gap, never read as "no facts" | In the T18 evaluation 37 of 144 drafting calls failed (26 malformed JSON, 11 cut off), and the Stage C regulatory Run lost 5 drafting and 2 extraction batches at the output limit plus 1 invalid reply | CI-tested: `tests/test_llm_json.py`, `tests/pipeline/test_extraction_synthesis.py::test_only_extraction_uses_the_native_structured_path`, `tests/pipeline/test_research_integrity_work_units.py` |
+| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context and a compact requirement index (ADR-0006, outside the budget), and never sees Passage text. When the bundle is over budget, lower-ranked items are first shown in a shorter wording (same id and citation), each logged as `evidence_compressed`, but only when the support contract judges the wording equivalent to the statement both ways; otherwise the item stays whole (`evidence_compression_refused`); only if that is not enough are whole lowest-ranked items cut (never truncated mid-item), never the last kept support of a required research requirement while anything else can go, each logged as `evidence_cut` with its reason, Confidence, rank and requirements | The Writer's input is bounded however much research succeeded | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`, `tests/pipeline/test_research_integrity_review3.py::test_the_bundle_is_shortened_before_anything_is_cut`. Shortening costs a light call and two support judgments per item; only redundancy can be removed (a wording that drops content is not equivalent), so most over-budget items are still cut, and a requirement whose only verified Evidence was cut is reported as left out for the budget. Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
 | **Historical context stays apart.** Claims from earlier Reports enter as Historical items with their original Report, date and Passages, never as current Evidence items. They never establish or confirm a Finding | Old material cannot pose as current evidence, and its provenance stays checkable | CI-tested: `tests/pipeline/test_t8_memory.py::test_memory_findings_become_historical_claims_with_original_lineage`, `tests/pipeline/test_t8_historical_checks.py` |
 | **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway Passage reading | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner, Researcher and Writer calls are not counted, so it does not bound all model spend (design section 10) |
 
@@ -491,6 +493,7 @@ T16 added a five-Brief sample library (`samples/briefs/`) and an `eval` command 
 ```bash
 uv run insightforge-agent eval --provider gemini --judge-provider none            # all five
 uv run insightforge-agent eval --provider anthropic --judge-provider anthropic --brief market-sizing-solar
+uv run insightforge-agent eval-judge --from eval-results/<timestamp> --judge-provider anthropic  # re-judge stored Reports into a separate report
 ```
 
 **This makes real, possibly paid, model and search calls.** It is never run by the test
@@ -534,8 +537,9 @@ Limits: one Run per Brief per provider, so there is no repeatability estimate. T
 `checks` are descriptive, and no metric enforces them. The scripted tests
 (`tests/evaluation/`) show orchestration, persistence, subject relevance and provenance across
 the five domains **within a scripted world** (the scripted models copy Passage sentences). They
-do not show real-model research quality. **The harness is implemented. No real Anthropic
-evaluation has been run yet. That is T18.**
+do not show real-model research quality. **T18 Anthropic verification has now been run.** The
+baseline five-Brief fact-check rate was 66.7%, and the later targeted Stage C acceptance gate
+FAILED. See [T18 results](#anthropic-verification-results-t18) for the limits.
 
 ## Security, privacy and limitations
 
@@ -559,10 +563,17 @@ evaluation has been run yet. That is T18.**
   lexical. They do not prove that a value belongs to the entity it is attributed to, that two
   differently written names are the same entity, or that a paraphrase means the same thing.
   Confidence reflects source count and credibility, not truth.
-- **Fact-checking is a sample.** It checks 20% of Claims (at least 5). A `verified` Claim had a
-  supporting span at or above the 0.85 similarity threshold, containing the Claim's figures, that the
-  light model judged SUPPORTED. Unsampled Claims are not checked, and `[UNVERIFIED]` means only
-  that the check found no support.
+- **Fact-checking is a sample.** It checks 20% of Claims (at least 5). Since ADR-0006 a
+  `verified` Claim had a candidate (its own cited Passage, or a span at or above the 0.85
+  similarity threshold) containing the Claim's figures that the light model judged SUPPORTED
+  with a support map code could check (quotes present, statement covered, figures stated,
+  operators such as "not" or "expected" quoted). Only the Passage the Claim cites can verify
+  it: support elsewhere in the Source leaves it unverified. Unsampled Claims are not checked by
+  the Fact-Checker, and `[UNVERIFIED]` means only that the check found no support. Before
+  publication every published Evidence item was judged against its cited Passages during
+  Synthesis, every Claim that rewords its item against the item's primary Passage, and every
+  summary sentence against the published Claims, by the same contract and model (not an
+  independent check).
 - **Data handling.** Everything is stored locally: SQLite files (`*.db`, git-ignored), Qdrant,
   and the model cache. Fetched web pages and uploaded PDFs are kept for as long as a Report
   cites them. Other raw material is swept after `RETENTION_DAYS` (default 30). Reports are never
@@ -572,14 +583,90 @@ evaluation has been run yet. That is T18.**
   sign-up or credentials, no multi-process deployment. Search uses Tavily only (other listed providers are
   skipped). Hardening observations are tracked in issue #49 (T20).
 
-## Anthropic verification results (T18): pending
+## Anthropic verification results (T18)
 
-**Status: pending. No results are reported here yet.** T18 (issue #19) is the final
-verification on Anthropic. It will run the live paths and actual document and memory Runs,
-re-run the T1 spike criteria, run the five-Brief evaluation and record the remediation decision
-under the rule above. This README will be updated with those results, with traceable Run IDs and
-the `eval-report` files, once T18 is done. Until then, T17's third acceptance criterion is open.
+**Live verification completed; the acceptance gates did not all pass.** T18 (#19) exercised all
+five sample Briefs on Anthropic (Claude Haiku 5.5) at baseline, including the real uploaded-PDF
+Doc Reader path and the earlier-Report Memory researcher path. The full-library baseline
+fact-check pass rate was **20/30 = 66.7%**, below the 80% remediation threshold; citations were
+**115/115** accurate by the evaluation's provenance/figure checks. Remediation was attempted
+and offline-tested, but its effect on the full five-Brief Anthropic rate was **not established**.
 
-Earlier live runs on `claude-haiku-5-5` were single development runs, not the T18 verification:
-the T1 spike (design §12), the T3 to T5 runs in [`docs/live-runs/`](docs/live-runs/), and the
-F2 Fact-Checker cases (16 of 16, design F2 notes).
+| Verification gate | Formal outcome |
+|---|---|
+| Planner spike criteria 1–3 | PASS, thin evidence accepted by the owner |
+| **B-1: entailment calibration** | **FAIL** (three live attempts); documented exception, not a pass |
+| B-2: structured drafting smoke test | PASS (39/47 calls parsed; 8 hit the output-token limit) |
+| B-3: judge-only | PASS (5/5 baseline Reports judged with valid score sheets; mean 2.40/5) |
+| **Stage C: targeted live end-to-end** | **FAIL** (acceptance exit 1; final attempt) |
+| Stage D: remediated five-Brief re-evaluation | NOT RUN (stopped after Stage C) |
+
+**B-1 limitation.** A cited-Passage entailment check can accept a market definition, financial
+metric or qualifier stated elsewhere on the Source page but **not in the cited Passage**.
+The B-1 gate failed despite an explicitly accepted exception; it was not corrected or retested
+to a pass. See [B-1 audit and gate exception](docs/audits/2026-10-21-t18-b1-gate-exception.md)
+and [follow-up #75](https://github.com/subhadlearner/insightforge-agent/issues/75).
+A Fact-Checker `verified` verdict therefore does not guarantee every qualifier is directly
+substantiated by its citation.
+
+**Stage C final run.** Both targeted Briefs published Reports. The regulatory-impact Brief
+covered **2/2** required objectives. The uploaded-document Brief covered **10/13** required
+facts, with **2 candidates** (hospital pricing pressure and NW-200 delay risk) and **1 missing**
+(six clinical-trial programmes). Consequently the **formal result remains FAILED**, not PASS
+or merely INCONCLUSIVE. The two Reports had **14/14 sampled Claims verified** and
+**65/65 citations accurate** under the recorded checks; these figures are not a full-Claim
+fact-check or a substitute for the missing facts. Synthesis-judge scores were **2.75/5** and
+**2.25/5**, respectively, reflecting unresolved comparisons and limited analytical synthesis.
+See [post-submission follow-up #76](https://github.com/subhadlearner/insightforge-agent/issues/76).
+
+**B-3 judge-only.** The five stored baseline Reports were judged again, without research, by
+`claude-haiku-5-5` under `synthesis-rubric-v1` and `judge-prompt-2`: all five got a valid score
+sheet (acceptance PASS), with a mean of **2.40/5** and **2/5 on synthesis for every Report**.
+This shows only that the judge produced valid score sheets in this one run; it does not show
+good Report quality, factual accuracy, repeatability or a successful remediation. The baseline's own judge result (2 judged, 3 errors)
+stands unchanged and is not pooled with B-3. Its Anthropic usage and billing are **unknown**.
+
+The Stage C attempts are preserved separately. Stage D was not run, so **there is no
+verified remediated five-Brief Anthropic pass rate**. Actual Anthropic billing for Stage C
+and T18 overall is **unknown**; harness estimates are not billed amounts.
+
+The [T18 verification record](docs/t18-verification.md) is authoritative for run IDs, exact
+gate results, archived evidence hashes and retrospective diagnostics (which never replace
+formal results). The underlying evaluation artifacts are stored separately from the public
+repository. These results were handed to [README ticket #18](https://github.com/subhadlearner/insightforge-agent/issues/18)
+and [demo ticket #20](https://github.com/subhadlearner/insightforge-agent/issues/20);
+they do not mean those tickets' other work is complete.
+
+## Research-integrity redesign (ADR-0006, after T18)
+
+**Implemented and offline-tested; not yet validated on a live model.** The T18 results above
+are unchanged and remain the formal record (B-1 FAILED, Stage C FAILED, Stage D not run). This
+redesign, on `fix/t18-research-integrity` (draft PR into `t18-verification`), addresses the
+causes T18 exposed ([ADR-0006](docs/adr/0006-evidence-bound-support-and-requirements-ledger.md),
+#75, #76):
+
+- **Evidence-bound support.** Synthesis, the Writer's checks and the Fact-Checker share one
+  judgment that must show, for every part of a statement, the exact words of the cited Passage
+  that state it; code verifies the quotes, the coverage, the figures and the logical operators
+  ("not", "only", "expected"). No lexical name rule refuses a candidate
+  before the judge (the rule that lost Stage C's six-programmes fact is retired), and an uploaded
+  document's company is given to the judge as identity context only.
+- **One Evidence pipeline.** Extraction proposes every fact once, anchored to its Passage;
+  Synthesis verifies and ranks those facts instead of drafting a second, different set.
+- **No silent loss.** Truncated or invalid model batches are split and retried within bounds;
+  what stays unread is reported.
+- **Requirements ledger.** The Brief's atomic questions are tracked to Evidence and Claims; an
+  item counts for a question only once a check confirms it answers it; what was not
+  established, could not be checked, or failed the Fact-Checker becomes a gap line, so "Gaps &
+  limitations" matches what is missing.
+- **Checked before publication.** A Claim that rewords its Evidence is judged against the cited
+  Passage, and a summary sentence against the published Claims; what fails is omitted, with the
+  reason logged, never replaced by the bare Evidence statement. A comparison or conclusion may cite several items, is checked against
+  all of them, and the citation drawer shows every premise.
+
+What is proven offline, and what is not, is in the
+[verification record](docs/audits/2026-10-21-research-redesign-verification.md). In short:
+scripted-model tests show the code keeps every gold positive (including all 13 Stage C
+Northwind facts end to end) and refuses every negative it can refuse on its own; they cannot
+show how reliably a live model judges qualifiers, modality or attribution. That needs the
+budget-capped live gate described there, which has not been run.

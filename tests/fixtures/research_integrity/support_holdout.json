@@ -1,0 +1,90 @@
+{
+  "_note": "Held-out support cases for the second Gate A attempt (support-holdout-1), written 2026-10-21 after the first attempt and before any second one, adjudicated from the passage text alone. None is a variant of a case the first attempt judged; each targets a class the first attempt showed matters (operators, hedges, framing, identity) now that code no longer decides them (checks-3). Written by the implementing agent: the owner should review every label before the gate runs. 'expected' is the verdict a correct judge must give; 'honest_map' is a correct support map for SUPPORTED cases.",
+  "version": "support-holdout-1",
+  "cases": [
+    {
+      "id": "H-P01", "kind": "hedged forecast stated as a forecast",
+      "statement": "Orion Freight expects 2026 shipping volumes to rise by about 4 percent.",
+      "passage": "Orion Freight said it expects shipping volumes in 2026 to rise by about 4 percent, helped by new routes in Asia.",
+      "document_entity": null, "expected": "SUPPORTED",
+      "honest_map": [{"part": "Orion Freight expects", "excerpts": ["Orion Freight said it expects"]},
+                     {"part": "2026 shipping volumes to rise by about 4 percent", "excerpts": ["shipping volumes in 2026 to rise by about 4 percent"]}]
+    },
+    {
+      "id": "H-P02", "kind": "negation stated as a negation",
+      "statement": "Kestrel Bank did not raise its dividend in 2025.",
+      "passage": "For 2025, Kestrel Bank did not raise its dividend, keeping it at 1.10 euros per share.",
+      "document_entity": null, "expected": "SUPPORTED",
+      "honest_map": [{"part": "Kestrel Bank did not raise its dividend", "excerpts": ["Kestrel Bank did not raise its dividend"]},
+                     {"part": "in 2025", "excerpts": ["For 2025"]}]
+    },
+    {
+      "id": "H-P03", "kind": "approximate figure kept approximate",
+      "statement": "Tidewater Energy reported roughly 2.3 million customers at the end of 2025.",
+      "passage": "At the end of 2025 Tidewater Energy served roughly 2.3 million customers across three states.",
+      "document_entity": null, "expected": "SUPPORTED",
+      "honest_map": [{"part": "Tidewater Energy reported roughly 2.3 million customers", "excerpts": ["Tidewater Energy served roughly 2.3 million customers"]},
+                     {"part": "at the end of 2025", "excerpts": ["At the end of 2025"]}]
+    },
+    {
+      "id": "H-P04", "kind": "unnamed subject from identity context",
+      "statement": "The Halcyon Robotics order book stood at 340 units at year end 2025.",
+      "passage": "Our order book stood at 340 units at year end 2025, up from 290 a year earlier.",
+      "document_entity": "Halcyon Robotics", "expected": "SUPPORTED",
+      "honest_map": [{"part": "The Halcyon Robotics", "identity": true},
+                     {"part": "order book stood at 340 units at year end 2025", "excerpts": ["order book stood at 340 units at year end 2025"]}]
+    },
+    {
+      "id": "H-P05", "kind": "comparison the passage states",
+      "statement": "Vela Pharma's 2025 research spending was higher than its 2024 spending.",
+      "passage": "Vela Pharma spent 410 million dollars on research in 2025, compared with 365 million dollars in 2024.",
+      "document_entity": null, "expected": "SUPPORTED",
+      "honest_map": [{"part": "Vela Pharma's 2025 research spending", "excerpts": ["Vela Pharma spent 410 million dollars on research in 2025"]},
+                     {"part": "was higher than its 2024 spending", "excerpts": ["compared with 365 million dollars in 2024"]}]
+    },
+    {
+      "id": "H-P06", "kind": "framing of an earlier finding",
+      "statement": "An earlier report found that Corvid Mining planned to close its Elm Creek site in 2026.",
+      "passage": "Corvid Mining plans to close its Elm Creek site in 2026 as reserves run down.",
+      "document_entity": null, "expected": "SUPPORTED",
+      "honest_map": [{"part": "An earlier report found that"},
+                     {"part": "Corvid Mining planned to close its Elm Creek site in 2026", "excerpts": ["Corvid Mining plans to close its Elm Creek site in 2026"]}]
+    },
+    {
+      "id": "H-N01", "kind": "forecast stated as fact (hedge dropped)",
+      "statement": "Orion Freight's 2026 shipping volumes rose by about 4 percent.",
+      "passage": "Orion Freight said it expects shipping volumes in 2026 to rise by about 4 percent, helped by new routes in Asia.",
+      "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "H-N02", "kind": "negation flipped",
+      "statement": "Kestrel Bank raised its dividend in 2025.",
+      "passage": "For 2025, Kestrel Bank did not raise its dividend, keeping it at 1.10 euros per share.",
+      "document_entity": null, "expected": "CONTRADICTED"
+    },
+    {
+      "id": "H-N03", "kind": "exclusivity not stated",
+      "statement": "Tidewater Energy is the only utility serving customers across three states.",
+      "passage": "At the end of 2025 Tidewater Energy served roughly 2.3 million customers across three states.",
+      "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "H-N04", "kind": "wrong company from identity context",
+      "statement": "Ardent Automation's order book stood at 340 units at year end 2025.",
+      "passage": "Our order book stood at 340 units at year end 2025, up from 290 a year earlier.",
+      "document_entity": "Halcyon Robotics", "expected": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "H-N05", "kind": "growth rate not stated (computed)",
+      "statement": "Vela Pharma's research spending grew 12 percent in 2025.",
+      "passage": "Vela Pharma spent 410 million dollars on research in 2025, compared with 365 million dollars in 2024.",
+      "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE"
+    },
+    {
+      "id": "H-N06", "kind": "plan stated as done",
+      "statement": "Corvid Mining closed its Elm Creek site in 2026.",
+      "passage": "Corvid Mining plans to close its Elm Creek site in 2026 as reserves run down.",
+      "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE"
+    }
+  ]
+}

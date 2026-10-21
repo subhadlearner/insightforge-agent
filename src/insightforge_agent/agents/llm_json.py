@@ -6,6 +6,7 @@ from typing import Literal, NamedTuple, TypeVar
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ValidationError
 from pydantic_core import ErrorDetails
 
@@ -88,8 +89,33 @@ def reply_ends(text: str) -> tuple[str, str]:
     return text[:HEAD_CHARS], text[max(HEAD_CHARS, len(text) - TAIL_CHARS):]
 
 
+class StructuredOutputRejected(ValueError):
+    """The provider refused the request's output schema itself (an HTTP 400), so no reply was
+    produced. Bounded message; never retried."""
+
+
 def ask_json(model: BaseChatModel, system: str, user: str, schema: type[T]) -> T:
-    reply = model.invoke([SystemMessage(system), HumanMessage(user)])
+    return _parse(model.invoke([SystemMessage(system), HumanMessage(user)]), model, schema)
+
+
+def ask_structured(model: BaseChatModel, system: str, user: str, schema: type[T],
+                   native: Runnable | None) -> T:
+    """`ask_json`, but through the provider's native structured output when `native` is given
+    (`llm.native_json`; T18 CS3). The reply is parsed and diagnosed exactly as `ask_json` does,
+    so a truncated, refused or non-conforming reply raises the same `BadModelReply`. Nothing
+    is retried and no other path is tried."""
+    if native is None:
+        return ask_json(model, system, user, schema)
+    try:
+        out = native.invoke([SystemMessage(system), HumanMessage(user)])
+    except Exception as e:
+        if getattr(e, "status_code", None) == 400:
+            raise StructuredOutputRejected(f"{type(e).__name__}: {str(e)[:_ERROR_CHARS * 2]}") from None
+        raise
+    return _parse(out["raw"], model, schema)
+
+
+def _parse(reply: BaseMessage, model: BaseChatModel, schema: type[T]) -> T:
     text = _FENCE.sub("", reply.text.strip())
     try:
         return schema.model_validate_json(text)

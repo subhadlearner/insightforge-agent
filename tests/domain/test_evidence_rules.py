@@ -107,21 +107,22 @@ def test_priority_breaks_a_relevance_tie_with_one_as_most_important():
 
 def test_compression_cuts_lowest_ranked_whole_items_and_keeps_an_aspect_alive():
     ranked = [item("ev_1", "a1"), item("ev_2", "a1"), item("ev_3", "a1"), item("ev_4", "a2")]
-    kept, cut = compress_to_budget(ranked, lambda items: len(items) <= 2)
+    kept, cut, short = compress_to_budget(ranked, lambda items: len(items) <= 2)
+    assert short == []  # no structured fact to summarise to, so whole items are cut
     assert [i.id for i in kept] == ["ev_1", "ev_4"]  # a2's only item survives a higher rank cut
     assert [i.id for i in cut] == ["ev_3", "ev_2"]
     assert all(i.statement == i.id * 10 for i in kept)  # whole items, not shortened
 
 
 def test_compression_cuts_a_lone_aspect_item_when_nothing_else_can_go():
-    kept, cut = compress_to_budget([item("ev_1", "a1"), item("ev_2", "a2")],
-                                   lambda i: len(i) <= 1)
+    kept, cut, _ = compress_to_budget([item("ev_1", "a1"), item("ev_2", "a2")],
+                                      lambda i: len(i) <= 1)
     assert [i.id for i in kept] == ["ev_1"] and [i.id for i in cut] == ["ev_2"]
 
 
 def test_nothing_is_cut_when_it_already_fits():
     ranked = [item("ev_1"), item("ev_2")]
-    assert compress_to_budget(ranked, lambda i: True) == (ranked, [])
+    assert compress_to_budget(ranked, lambda i: True) == (ranked, [], [])
 
 
 def test_named_entities_skip_the_first_word_of_a_sentence_and_possessives():

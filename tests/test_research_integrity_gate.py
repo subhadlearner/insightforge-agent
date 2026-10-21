@@ -1,0 +1,64 @@
+"""The live support gate's decision, offline (tests/research_integrity_gate.py). No model call."""
+
+from tests.research_integrity_gate import Case, decide, gold_cases
+
+
+def cases():
+    return [Case("gold", "P", "s", "p", "SUPPORTED"),
+            Case("gold", "N", "s", "p", "NOT_SUPPORTED", repeats=3),
+            Case("b1_positive", "partly", "s", "p", "REPORT", meta={"adjudication": "partly"})]
+
+
+def rows(p="SUPPORTED", n=("INSUFFICIENT_EVIDENCE",) * 3):
+    return [{"set": "gold", "id": "P", "repeat": 0, "verdict": p}] + [
+        {"set": "gold", "id": "N", "repeat": i, "verdict": v} for i, v in enumerate(n)]
+
+
+def test_all_correct_is_a_pass_and_reported_cases_never_gate():
+    out = decide(cases(), rows())
+    assert out["status"] == "PASS" and out["failures"] == [] and len(out["reported"]) == 1
+
+
+def test_one_supported_negative_in_any_repetition_fails():
+    out = decide(cases(), rows(n=("INSUFFICIENT_EVIDENCE", "SUPPORTED", "CONTRADICTED")))
+    assert out["status"] == "FAIL" and "1 of 3" in out["failures"][0]
+
+
+def test_a_rejected_positive_fails():
+    assert decide(cases(), rows(p="INSUFFICIENT_EVIDENCE"))["status"] == "FAIL"
+
+
+def test_a_verification_error_or_a_missing_repetition_is_inconclusive_never_a_pass():
+    assert decide(cases(), rows(p="VERIFICATION_ERROR"))["status"] == "INCONCLUSIVE"
+    assert decide(cases(), rows(n=("CONTRADICTED",)))["status"] == "INCONCLUSIVE"
+
+
+def test_the_gold_set_repeats_every_negative_and_no_positive():
+    built = {c.id: c for c in gold_cases(repeats=3)}
+    assert all(c.repeats == 3 for c in built.values() if c.expected == "NOT_SUPPORTED")
+    assert built["NW-P01"].repeats == 1 and built["NW-P01"].entity == "Northwind Health"
+    assert built["Q-N02"].repeats == 3 and built["Q-N02"].expected == "NOT_SUPPORTED"
+    assert built["NW-N07"].repeats == 3  # competitor sentence in the company's own report
+    assert all(c.repeats == 1 for c in built.values() if c.expected == "SUPPORTED")
+
+
+def test_the_held_out_set_is_balanced_and_its_positives_pass_code_with_their_honest_maps():
+    """The held-out set (support-holdout-1): six positives, six negatives, and code alone
+    refuses none of the positives' honest maps, so a live failure on them is the model's."""
+    import json
+    from pathlib import Path
+
+    from insightforge_agent.domain.support import SupportPart, check_support
+    from tests.research_integrity_gate import holdout_cases
+
+    cases = holdout_cases(repeats=3)
+    assert [c.expected for c in cases].count("SUPPORTED") == 6
+    assert sum(c.repeats for c in cases) == 6 + 6 * 3
+    raw = json.loads((Path(__file__).parent / "fixtures" / "research_integrity"
+                      / "support_holdout.json").read_text(encoding="utf-8"))["cases"]
+    for c in raw:
+        if c["expected"] == "SUPPORTED":
+            parts = [SupportPart(p["part"], tuple(p.get("excerpts", [])), p.get("identity", False))
+                     for p in c["honest_map"]]
+            check = check_support(c["statement"], parts, c["passage"], c["document_entity"])
+            assert check.verdict == "SUPPORTED", (c["id"], check.problems)

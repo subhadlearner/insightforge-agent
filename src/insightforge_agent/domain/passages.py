@@ -103,6 +103,25 @@ def batch_passages(
     return batches
 
 
+def split_by_passages(batch: list[Window], cap: int | None) -> list[list[Window]]:
+    """A batch cut, in order, into parts of at most `cap` distinct Passages (T18 CS3: bounded
+    drafting output). The windows of one Passage stay in one part; nothing is dropped or
+    repeated. `None` leaves the batch whole."""
+    if cap is None:
+        return [batch]
+    parts: list[list[Window]] = []
+    seen: list[tuple[str, int]] = []
+    for w in batch:
+        key = (w.passage.observation_id, w.passage.index)
+        if not parts or (key not in seen and len(seen) == cap):
+            parts.append([])
+            seen = []
+        if key not in seen:
+            seen.append(key)
+        parts[-1].append(w)
+    return parts
+
+
 MAX_SENTENCE_CHARS = 600  # a longer "sentence" (scraped text without stops) is cut into pieces
 
 # A word ending a sentence: "." "!" or "?", optionally followed by closing quotes or brackets.
@@ -174,6 +193,26 @@ def candidate_spans(passages: list[Passage], width: int = 2) -> list[Span]:
                 if n + k <= len(sentences):
                     spans.append(Span(passage, " ".join(sentences[n:n + k]), n, n + k - 1))
     return spans
+
+
+def in_context(span: Span, token_budget: int) -> str:
+    """The span with as much of its own Passage around it as fits `token_budget` tokens: the
+    preceding sentences first, where a subject or place is usually named ("the LFP battery
+    industry faces...", "China dominated..."), then the following ones. Only the span's own
+    Passage is ever added, never a neighbouring Passage or the Source's title. The budget is a
+    target for the added context only: the span itself is always shown whole, even when it alone
+    is longer than the budget; the caller's per-call cap is the hard limit."""
+    sentences = sentences_of(span.passage.text)
+    first, last = span.first, span.last
+
+    def fits(a: int, b: int) -> bool:
+        return estimate_tokens(" ".join(sentences[a:b + 1])) <= token_budget
+
+    while first > 0 and fits(first - 1, last):
+        first -= 1
+    while last + 1 < len(sentences) and fits(first, last + 1):
+        last += 1
+    return " ".join(sentences[first:last + 1])
 
 
 _SPACE_CURRENCY = re.compile(r"([$€£])\s*(\d[\d,]*(?:\.\d+)?)")

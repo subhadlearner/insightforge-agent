@@ -552,6 +552,8 @@ export interface components {
             page?: number | null;
             /** Section Heading */
             section_heading?: string | null;
+            /** Premises */
+            premises?: components["schemas"]["Citation"][];
         };
         /** Claim */
         Claim: {
@@ -564,6 +566,8 @@ export interface components {
              * @default false
              */
             historical: boolean;
+            /** Premises */
+            premises?: string[];
         };
         /**
          * Clarification
@@ -742,6 +746,13 @@ export interface components {
              * @default false
              */
             temporally_ambiguous: boolean;
+            /** Published At */
+            published_at?: string | null;
+            /**
+             * Before Window
+             * @default false
+             */
+            before_window: boolean;
             /**
              * Conflicting
              * @default false
@@ -756,6 +767,13 @@ export interface components {
              * @default 0
              */
             relevance: number;
+            /** Requirement Ids */
+            requirement_ids?: string[];
+            /**
+             * Shortened
+             * @default
+             */
+            shortened: string;
         };
         /**
          * FailedDiff

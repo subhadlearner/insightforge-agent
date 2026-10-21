@@ -193,18 +193,18 @@ def _claim_sources(
     seen: set[str] = set()
     for section in verified.draft.sections:
         for claim in section.claims:
-            ref = refs.get(claim.evidence_id)
-            if ref is None:
-                raise ProvenanceError(
-                    f"report {report.id}: claim cites unknown item {claim.evidence_id}"
-                )
-            try:
-                source = store.source_for_passage(owner_id, ref)
-            except NotFoundError as e:
-                raise ProvenanceError(f"report {report.id}: {e}") from e
-            if source.id not in seen:
-                sources.append(source)
-                seen.add(source.id)
+            # ADR-0006: an analytical Claim's premises are Sources it rests on too.
+            for eid in ([claim.evidence_id] if claim.historical else claim.evidence_ids()):
+                ref = refs.get(eid)
+                if ref is None:
+                    raise ProvenanceError(f"report {report.id}: claim cites unknown item {eid}")
+                try:
+                    source = store.source_for_passage(owner_id, ref)
+                except NotFoundError as e:
+                    raise ProvenanceError(f"report {report.id}: {e}") from e
+                if source.id not in seen:
+                    sources.append(source)
+                    seen.add(source.id)
     return verified, dates, sources
 
 
@@ -223,6 +223,8 @@ def inline_source(source: Source) -> str:
     shown; a missing date or score is said to be missing, never guessed."""
     where = source.domain or source.title
     date = source.published_at.date().isoformat() if source.published_at else "undated"
+    if source.updated_at:  # the page says it was updated since: never its first date alone
+        date += f", updated {source.updated_at.date().isoformat()}"
     score = (f"{source.credibility_score:.2f}" if source.credibility_score is not None
              else "not scored")
     return f"[Source: {where}, {date}, credibility: {score}]"
@@ -239,11 +241,15 @@ def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
     for section, confidence in zip(draft.sections, confidences, strict=True):
         lines += [f"## {section.heading}", "", f"*{confidence_label(confidence)}*", ""]
         for claim in section.claims:
-            source = store.source_for_passage(owner_id, refs[claim.evidence_id])
+            cited = list({source.id: source for source in (
+                store.source_for_passage(owner_id, refs[e])
+                for e in ([claim.evidence_id] if claim.historical else claim.evidence_ids()))
+            }.values())
             historical = (f"Background from an earlier Report of {dates[claim.evidence_id]}: "
                           if claim.historical and claim.evidence_id in dates
                           else "Background from an earlier Report: " if claim.historical else "")
-            lines.append(f"- {historical}{claim.text} {inline_source(source)}")
+            lines.append(f"- {historical}{claim.text} "
+                         + " ".join(inline_source(source) for source in cited))
         lines.append("")
     if draft.gaps:
         lines += ["## Gaps & limitations", ""]
@@ -256,7 +262,7 @@ def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
             published = (
                 f", published {source.published_at.date().isoformat()}"
                 if source.published_at else ""
-            )
+            ) + (f", updated {source.updated_at.date().isoformat()}" if source.updated_at else "")
             lines.append(
                 f"{source_numbers[source.id]}. {source.title} — {where}{published}"
             )

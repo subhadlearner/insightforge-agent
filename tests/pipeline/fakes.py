@@ -7,7 +7,17 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from insightforge_agent.agents.web import Page, PaywalledError, SearchHit, FetchError
-from tests.scripted import ScriptedChat, ai, call
+from tests.scripted import (
+    ANSWERS_PREFIX,
+    JOINT_PREFIX,
+    SUPPORT_PREFIX,
+    ScriptedChat,
+    ai,
+    answer_verdicts,
+    call,
+    joint_verdict,
+    support_verdicts,
+)
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "search"
 
@@ -81,7 +91,7 @@ def researcher() -> ScriptedChat:
 
 
 def light() -> ScriptedChat:
-    """Summaries, extraction, drafting and entailment, told apart by the system prompt."""
+    """Summaries, extraction and the support judgment, told apart by the system prompt."""
     def reply(messages) -> AIMessage:
         system = str(next(m.content for m in messages if isinstance(m, SystemMessage)))
         user = str(messages[-1].content)
@@ -91,16 +101,12 @@ def light() -> ScriptedChat:
                 for i, text in re.findall(r"\[(\d+)\] (.+)", user)
             ]
             return AIMessage(content=json.dumps({"facts": facts}))
-        if system.startswith("You draft evidence"):
-            items = [
-                {"statement": text.strip(), "passages": [int(i)], "entities": []}
-                for i, text in re.findall(r"\[(\d+)\] (.+)", user)
-            ]
-            return AIMessage(content=json.dumps({"items": items}))
-        if system.startswith("You judge whether"):
-            verdicts = [{"passage": int(i), "verdict": "SUPPORTED"}
-                        for i in re.findall(r"^\[(\d+)\] ", user, re.MULTILINE)]
-            return AIMessage(content=json.dumps({"verdicts": verdicts}))
+        if system.startswith(JOINT_PREFIX):
+            return AIMessage(content=json.dumps(joint_verdict(user)))
+        if system.startswith(SUPPORT_PREFIX):
+            return AIMessage(content=json.dumps({"verdicts": support_verdicts(user)}))
+        if system.startswith(ANSWERS_PREFIX):
+            return AIMessage(content=json.dumps(answer_verdicts(user)))
         return AIMessage(content="A page about electric vehicles.")
     return ScriptedChat(reply=reply)
 
@@ -111,7 +117,7 @@ def writer(bad_first: int = 0) -> ScriptedChat:
 
     def reply(messages) -> AIMessage:
         user = str(messages[-1].content)
-        items = re.findall(r"- \[(ev_\w+)\] \(\w+\) (.+)", user)
+        items = re.findall(r"- \[(ev_\w+)\] \([^)]*\) (.+)", user)
         state["n"] += 1
         bad = state["n"] <= bad_first
         claims = [{"text": t, "evidence_id": "ev_nope" if bad else eid} for eid, t in items]

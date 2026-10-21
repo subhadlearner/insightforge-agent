@@ -73,7 +73,9 @@ class Lineage:
 
 def claim_lineage(report: Report, section: int, claim: int) -> Lineage | None:
     """The lineage of one Claim, or None when there is no such Claim, the Fact-Checker marked
-    it unverified, or its Evidence or Historical item is missing from the Report."""
+    it unverified, its Evidence or Historical item is missing from the Report, or it is an
+    analytical Claim (ADR-0006: it rests on several items, and a Historical item carries one
+    lineage, so it never becomes background)."""
     body = report.body
     draft = ReportDraft.model_validate(body["draft"])
     if not (0 <= section < len(draft.sections) and 0 <= claim < len(draft.sections[section].claims)):
@@ -82,6 +84,8 @@ def claim_lineage(report: Report, section: int, claim: int) -> Lineage | None:
            for v in body.get("verified", {}).get("verdicts", [])):
         return None
     c = draft.sections[section].claims[claim]
+    if c.premises and not c.historical:
+        return None
     if c.historical:  # reuse the stored lineage: the original Report and Passages, not this one
         h = HistoricalContext.model_validate(body.get("historical") or {}).by_id().get(
             c.evidence_id)
@@ -185,10 +189,14 @@ def finalise_report(deps: Deps, run: Run, report: Report) -> RunSummary:
         indexed = index.index(report.owner_id, report.id, report.run_id,
                               report.created_at.date(), section_entries(report))
     draft = ReportDraft.model_validate(report.body["draft"])
+    # The gaps as published: the fact-checked draft carries the Fact-Checker's limitations
+    # (second PR #77 review); a Report stored without one falls back to its draft.
+    published = (report.body.get("verified") or {}).get("draft")
+    gaps = ReportDraft.model_validate(published).gaps if published else draft.gaps
     summary = build_run_summary(
         owner_id=report.owner_id, run_id=run.id, watchlist_item_id=run.watchlist_item_id,
         created_at=deps.now(), brief=run.brief, themes=[s.heading for s in draft.sections],
-        entities=_key_entities(deps, report), gaps=draft.gaps, memory_indexed=indexed > 0)
+        entities=_key_entities(deps, report), gaps=gaps, memory_indexed=indexed > 0)
     stored = deps.repos.summaries.add(summary)
     deps.log(report.owner_id, run.id, "run_summary_stored", report_id=report.id,
              memory_indexed=stored.memory_indexed, themes=len(stored.themes))

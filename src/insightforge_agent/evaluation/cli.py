@@ -38,7 +38,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from qdrant_client import QdrantClient
 
 from insightforge_agent.config import Settings
-from insightforge_agent.evaluation.judge import RUBRIC_VERSION
+from insightforge_agent.domain.support import CHECKS_VERSION
+from insightforge_agent.evaluation.judge import JUDGE_PROMPT_VERSION, RUBRIC_VERSION
 from insightforge_agent.evaluation.library import (
     LibraryError,
     library_fingerprint,
@@ -63,6 +64,15 @@ from insightforge_agent.llm import (
     configured_model_name,
 )
 from insightforge_agent.pipeline.deps import Deps
+from insightforge_agent.pipeline.extract import EXTRACT_PROMPT_VERSION
+from insightforge_agent.pipeline.requirements import (
+    ANSWERS_PROMPT_VERSION,
+    COVERAGE_PROMPT_VERSION,
+    REQUIREMENTS_PROMPT_VERSION,
+)
+from insightforge_agent.pipeline.support import SUPPORT_PROMPT_VERSION
+from insightforge_agent.pipeline.synthesize import SHORTEN_PROMPT_VERSION
+from insightforge_agent.pipeline.write import WRITER_PROMPT_VERSION
 from insightforge_agent.pipeline.wiring import build_deps
 from insightforge_agent.stores.sqlite import SqliteRepos
 
@@ -144,6 +154,24 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         "passage_token_cap": deps.passage_token_cap,
         "run_token_cap": deps.run_token_cap,
         "writer_retries": deps.writer_retries,
+        # T18 remediation behaviours: a run under them is never the T18 baseline. Since ADR-0006
+        # the structured-output setting and the Passage cap apply to Extraction, the only call
+        # that proposes facts.
+        "draft_structured_output": "on" if deps.native_json is not None else "off",
+        "draft_passage_cap": deps.draft_passage_cap,
+        "fact_check_method": (f"{SUPPORT_PROMPT_VERSION}+cited" if deps.fact_check_counterpart
+                              else SUPPORT_PROMPT_VERSION),
+        "writer_prompt_version": WRITER_PROMPT_VERSION,
+        # ADR-0006: the evidence-bound pipeline and its prompt versions.
+        "evidence_pipeline": "adr-0006",
+        "support_prompt_version": SUPPORT_PROMPT_VERSION,
+        "support_checks_version": CHECKS_VERSION,
+        "extract_prompt_version": EXTRACT_PROMPT_VERSION,
+        "requirements_prompt_version": REQUIREMENTS_PROMPT_VERSION,
+        "answers_prompt_version": ANSWERS_PROMPT_VERSION,
+        "coverage_prompt_version": COVERAGE_PROMPT_VERSION,
+        "shorten_prompt_version": SHORTEN_PROMPT_VERSION,
+        "work_unit_retry_cap": deps.work_unit_retry_cap,
         # The effective Evidence thresholds: they set Confidence and ranking.
         "credibility_high": deps.thresholds.credibility_high,
         "credibility_medium": deps.thresholds.credibility_medium,
@@ -192,7 +220,7 @@ def main(argv: list[str], *, make_deps: MakeDeps | None = None,
             return _cannot_build(f"the {opts.judge_provider} judge", e)
         identity = JudgeIdentity(
             provider=opts.judge_provider, rubric_version=RUBRIC_VERSION,
-            model=configured_model_name(JUDGE_ROLE, judge_settings),
+            prompt_version=JUDGE_PROMPT_VERSION, model=configured_model_name(JUDGE_ROLE, judge_settings),
             runtime_model=_model_id(judge), role=JUDGE_ROLE, inference=_inference(judge))
     try:
         out = allocate_evaluation_dir(opts.out, started.strftime(STAMP_FORMAT))

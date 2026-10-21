@@ -10,7 +10,7 @@ from insightforge_agent.agents.web import HttpFetcher, build_search
 from insightforge_agent.config import Settings
 from insightforge_agent.domain.evidence import Thresholds
 from insightforge_agent.embeddings import FastEmbedEmbedder
-from insightforge_agent.llm import build_chat_model
+from insightforge_agent.llm import build_chat_model, native_json
 from insightforge_agent.pipeline.deps import Deps, TimeoutScheduler
 from insightforge_agent.stores.doc_chunks import DocChunkIndex
 from insightforge_agent.stores.report_sections import ReportSectionIndex
@@ -55,6 +55,10 @@ def build_deps(settings: Settings, repos: Any, checkpointer: Any,
         fact_check_rate=settings.fact_check_rate,
         fact_check_minimum=settings.fact_check_minimum,
         similarity_threshold=settings.similarity_threshold,
+        native_json=native_json if settings.draft_structured_output else None,
+        draft_passage_cap=settings.draft_passage_cap,
+        fact_check_counterpart=settings.fact_check_counterpart,
+        work_unit_retry_cap=settings.work_unit_retry_cap,
         timeouts=timeouts,
         clarification_timeout=timedelta(minutes=settings.clarification_timeout_minutes),
         thresholds=Thresholds(

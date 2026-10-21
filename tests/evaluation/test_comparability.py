@@ -86,3 +86,15 @@ def test_a_full_anthropic_run_with_one_brief_nothing_checkable_is_undetermined()
     samples = [sample(s) for s in IDS[:4]] + [sample("e", verified=0, unchecked=5)]
     r = remediation_of("anthropic", samples, totals_of(samples), FULL)
     assert r.status == "undetermined" and "not measured: e" in r.reason
+
+
+
+def test_a_t18_remediation_run_is_never_comparable_with_the_baseline():
+    """T18 G3: the remediation behaviours are conditions, so a run under them is reported beside
+    the baseline, never pooled with it."""
+    baseline = result("baseline", [sample("a")], conditions={**CONDITIONS, "fact_check_method": "f2",
+                                                             "writer_prompt_version": "writer-1"})
+    remediated = result("remediated", [sample("a")], conditions={
+        **CONDITIONS, "fact_check_method": "f2+counterpart-v1", "writer_prompt_version": "writer-2"})
+    for metric, c in comparability_of([baseline, remediated]).items():
+        assert c.comparable is False and "fact_check_method" in c.reason, metric

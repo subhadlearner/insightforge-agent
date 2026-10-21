@@ -191,7 +191,9 @@ def test_a_section_still_omitted_after_retries_is_filled_from_its_evidence(make_
 
 
 def test_claim_rule_violations_still_fail_the_run(make_deps):
-    bad = reply([*ALL_PLACED[:2], ("Batteries", [claim("Tesla cells cost 56 dollars.", "ev_3")])])
+    # T18 Stage C changed this: an ungrounded Claim with a valid citation now goes to the semantic
+    # check (tests/pipeline/test_t18_writer_fallback.py). An invented id still fails.
+    bad = reply([*ALL_PLACED[:2], ("Batteries", [claim("Tesla cells cost 56 dollars.", "ev_9")])])
     deps = make_deps(writer_model=writer(bad, bad, bad))
     with pytest.raises(RunFailed):
         write(deps)

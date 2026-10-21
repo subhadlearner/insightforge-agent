@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from insightforge_agent.agents.web import (
@@ -55,7 +57,8 @@ def test_extraction_payloads_respect_the_per_call_cap(make_deps):
     extraction_calls = [c for c in light.seen if str(c[0].content).startswith("You extract")]
     assert len(extraction_calls) > 3  # the small cap forced splitting
     for conv in extraction_calls:
-        passage_text = str(conv[-1].content).split("\n\n", 1)[1]
+        user = str(conv[-1].content)
+        passage_text = user[re.search(r"^\[\d+\] ", user, re.MULTILINE).start():]
         # every fixture paragraph is under the cap on its own, so a batch must fit it
         assert estimate_tokens(passage_text) <= 30
 
