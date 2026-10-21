@@ -53,7 +53,7 @@ A Claim (a comparison, reconciliation or conclusion) that also cites further Evi
 _Avoid_: insight, derived fact
 
 **Requirement**:
-One atomic question the Brief asks, linked to the Aspects that research it, with a status decided from the Run's records (supported, contradictory, incomplete, verification incomplete, no evidence, background, reported, reported but unverified). An item answers it only when it is linked to it and a check confirms it states what the question asks. A requirement is reported only when a Claim cites such an item, never because its Aspect has a Claim. One that is not answered, could not be checked, or whose answering Claims all failed the Fact-Checker is stated in Gaps & limitations.
+One atomic question the Brief asks, linked to the Aspects that research it, with a status decided from the Run's records (supported, partial, contradictory, incomplete, verification incomplete, no evidence, background, reported, reported but unverified). An item answers it only when it is linked to it and a check confirms which parts of the question it states; a requirement is supported only when every part is stated. A requirement is reported only when a Claim cites such an item, never because its Aspect has a Claim. One that is not answered, could not be checked, or whose answering Claims all failed the Fact-Checker is stated in Gaps & limitations.
 _Avoid_: question (alone), goal
 
 **Finding**:
