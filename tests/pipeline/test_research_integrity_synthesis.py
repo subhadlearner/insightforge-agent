@@ -114,7 +114,7 @@ def test_identity_used_for_another_company_is_refused_by_code(world):
     assert kept == []
     (judged,) = world.events("support_judged")
     assert judged["judgments"][0]["verdict"] == "INSUFFICIENT_EVIDENCE"
-    assert "not the document's entity" in judged["judgments"][0]["problems"][0]
+    assert "does not quote the document's entity" in judged["judgments"][0]["problems"][0]
 
 
 def test_a_map_that_leaves_out_a_qualifier_is_not_support(world):

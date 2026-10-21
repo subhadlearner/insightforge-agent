@@ -31,7 +31,7 @@ from insightforge_agent.domain.requirements import (
     assess,
     gap_lines,
 )
-from insightforge_agent.domain.support import SupportPart, check_joint, check_support
+from insightforge_agent.domain.support import SupportPart, check_support
 from insightforge_agent.pipeline.fact_check import fact_check
 from insightforge_agent.pipeline.write import write_report
 from tests.pipeline.test_extraction_synthesis import world  # noqa: F401
@@ -240,59 +240,58 @@ def test_an_answer_quote_that_is_not_in_the_statement_does_not_count(make_deps):
 # check (final PR #77 review): see test_research_integrity_review3.py, block 1.
 
 
-# ==== P1: logical operators are not disposable ===============================================
+# ==== P1: logical operators are the model's judgment (retired word lists, Gate A) ============
+# The review asked that negation, hedging, "only"/"all" and comparison be held to the quotes.
+# The word-list check that did so (checks-2) refused 6 correct positives in Gate A (2026-10-21)
+# and was retired (checks-3): code keeps only quotations, coverage, figures and identity
+# quotation. These tests pin that contract; how often the model holds operators is Gate A's.
 
-def test_an_omitted_negation_in_the_statement_is_refused():
-    statement = "Revenue did not increase by 20% in 2025."
-    passage = "Revenue increased by 20% in 2025."
-    check = check_support(statement, [SupportPart(statement.rstrip("."), (passage,))],
-                          passage, None)
-    assert check.verdict == "INSUFFICIENT_EVIDENCE"
-    assert any("not" in p for p in check.problems)
+def test_a_hedged_figure_the_model_supports_is_no_longer_refused_by_a_word_list():
+    """Gate A false rejection (run_fc1c9560577b 2.4, same shape): "expects" and
+    "approximately" were read as hedges the parts lacked."""
+    statement = "For the first quarter of 2026, AMD expects revenue of approximately $9.8 billion."
+    passage = ("For the first quarter of 2026, AMD expects revenue to be approximately $9.8 "
+               "billion, plus or minus $300 million.")
+    parts = [SupportPart("For the first quarter of 2026, AMD expects", (
+                 "For the first quarter of 2026, AMD expects",)),
+             SupportPart("revenue of approximately $9.8 billion", (
+                 "revenue to be approximately $9.8 billion",))]
+    assert check_support(statement, parts, passage, None).verdict == "SUPPORTED"
 
 
-def test_a_negation_trimmed_off_the_quote_is_refused():
-    statement = "Revenue increased by 20% in 2025."
+def test_a_framing_part_needs_no_excerpt_but_a_figure_still_does():
+    """Gate A false rejection (run_7be9b5b129d0 3.1): framing words ("The earlier report found
+    that") were mapped without an excerpt and refused. A figure can still only come from an
+    excerpt (objective)."""
+    passage = "CATL and BYD produce LFP batteries at large scale in China."
+    statement = "The earlier report found that CATL and BYD produce LFP batteries at large scale."
+    framing = [SupportPart("The earlier report found that"),
+               SupportPart("CATL and BYD produce LFP batteries at large scale", (
+                   "CATL and BYD produce LFP batteries at large scale",))]
+    assert check_support(statement, framing, passage, None).verdict == "SUPPORTED"
+    figure = "The earlier report found that CATL and BYD produced 40 GWh of LFP batteries."
+    unquoted = [SupportPart("The earlier report found that CATL and BYD produced 40 GWh"),
+                SupportPart("of LFP batteries", ("LFP batteries",))]
+    check = check_support(figure, unquoted, passage, None)
+    assert check.verdict == "INSUFFICIENT_EVIDENCE" and any("40" in p for p in check.problems)
+
+
+def test_a_negation_the_model_rejects_stays_rejected(make_deps):
+    """Code never turns a model's rejection into support: the operator is the model's to
+    judge, and its CONTRADICTED stands."""
+    from insightforge_agent.pipeline.support import Unit, judge_units
+
+    deps = make_deps(light_model=judge(lambda s, t: "CONTRADICTED"))
+    unit = Unit(PassageRef(observation_id="o", index=0), "Revenue did not increase in 2025.")
+    (j,) = judge_units(deps, "alice", "run_1", "Revenue increased in 2025.", [unit])
+    assert j.verdict == "CONTRADICTED"
+
+
+def test_a_fabricated_quote_is_still_a_verification_error_whatever_its_operators():
     passage = "Revenue did not increase by 20% in 2025, the company said."
-    parts = [SupportPart("Revenue", ("Revenue",)),
-             SupportPart("increased by 20% in 2025", ("increase by 20% in 2025",))]
-    assert check_support(statement, parts, passage, None).verdict == "INSUFFICIENT_EVIDENCE"
-
-
-def test_a_hedge_trimmed_off_the_quote_is_refused():
-    statement = "NW-200 will receive approval in 2026."
-    passage = "Northwind said NW-200 is expected to receive approval in 2026."
-    parts = [SupportPart("NW-200", ("NW-200",)),
-             SupportPart("will receive approval in 2026", ("receive approval in 2026",))]
-    check = check_support(statement, parts, passage, None)
-    assert check.verdict == "SUPPORTED"  # a hedge both sides keep: "will" and "expected"
-    flat = "NW-200 received approval in 2026."
-    parts = [SupportPart("NW-200", ("NW-200",)),
-             SupportPart("received approval in 2026", ("receive approval in 2026",))]
-    assert check_support(flat, parts, passage, None).verdict == "INSUFFICIENT_EVIDENCE"
-
-
-def test_only_and_all_must_be_stated_by_the_quotes():
-    passage = "AWS is a provider growing 20% a year, as are Azure and Google Cloud."
-    for statement in ("AWS is the only provider growing 20% a year.",
-                      "All providers are growing 20% a year."):
-        check = check_support(statement, [SupportPart(statement.rstrip("."), (passage,))],
-                              passage, None)
-        assert check.verdict == "INSUFFICIENT_EVIDENCE", statement
-
-
-def test_the_operators_are_held_in_a_joint_judgment_too_but_a_comparison_may_be_drawn():
-    texts = ["BYD sold 4.27 million vehicles in 2025.", "Tesla sold 1.64 million vehicles in 2025."]
-    from insightforge_agent.domain.support import JointPart
-
-    drawn = "BYD sold 4.27 million vehicles in 2025, more than Tesla's 1.64 million."
-    ok = check_joint(drawn, [JointPart(drawn.rstrip("."), ((1, texts[0]), (2, texts[1])))],
-                     texts, [None, None])
-    assert ok.verdict == "SUPPORTED"  # the comparison is the analysis: no source states it
-    negated = "BYD did not sell more vehicles in 2025 than Tesla's 1.64 million."
-    bad = check_joint(negated, [JointPart(negated.rstrip("."), ((1, texts[0]), (2, texts[1])))],
-                      texts, [None, None])
-    assert bad.verdict == "INSUFFICIENT_EVIDENCE"
+    parts = [SupportPart("Revenue increased by 20% in 2025", ("Revenue increased by 20% in 2025",))]
+    assert check_support("Revenue increased by 20% in 2025.", parts, passage,
+                         None).verdict == "VERIFICATION_ERROR"
 
 
 # ==== P1: a failed judgment is not "insufficient Evidence" =================================

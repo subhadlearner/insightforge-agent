@@ -31,7 +31,7 @@ from insightforge_agent.pipeline.support import (
     judge_units,
     render_request,
 )
-from tests.research_integrity_gate import b1_cases, decide, gold_cases
+from tests.research_integrity_gate import b1_cases, decide, gold_cases, holdout_cases
 from tests.t18_stage_b_support import Budget, checker_deps, light_model, require_t18_db
 
 pytestmark = pytest.mark.live
@@ -64,7 +64,7 @@ def test_research_integrity_support_gate():
     con = require_t18_db()
     repeats = int(os.environ.get("RESEARCH_GATE_REPEATS", "3"))
     assert 1 <= repeats <= 5
-    cases = gold_cases(repeats) + b1_cases(con, repeats)
+    cases = gold_cases(repeats) + b1_cases(con, repeats) + holdout_cases(repeats)
     model = light_model()
     budget = Budget(cap, model.max_tokens)
     deps = checker_deps(model.with_config(callbacks=[budget]))

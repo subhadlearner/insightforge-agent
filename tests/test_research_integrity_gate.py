@@ -40,3 +40,25 @@ def test_the_gold_set_repeats_every_negative_and_no_positive():
     assert built["Q-N02"].repeats == 3 and built["Q-N02"].expected == "NOT_SUPPORTED"
     assert built["NW-N07"].repeats == 3  # competitor sentence in the company's own report
     assert all(c.repeats == 1 for c in built.values() if c.expected == "SUPPORTED")
+
+
+def test_the_held_out_set_is_balanced_and_its_positives_pass_code_with_their_honest_maps():
+    """The held-out set (support-holdout-1): six positives, six negatives, and code alone
+    refuses none of the positives' honest maps, so a live failure on them is the model's."""
+    import json
+    from pathlib import Path
+
+    from insightforge_agent.domain.support import SupportPart, check_support
+    from tests.research_integrity_gate import holdout_cases
+
+    cases = holdout_cases(repeats=3)
+    assert [c.expected for c in cases].count("SUPPORTED") == 6
+    assert sum(c.repeats for c in cases) == 6 + 6 * 3
+    raw = json.loads((Path(__file__).parent / "fixtures" / "research_integrity"
+                      / "support_holdout.json").read_text(encoding="utf-8"))["cases"]
+    for c in raw:
+        if c["expected"] == "SUPPORTED":
+            parts = [SupportPart(p["part"], tuple(p.get("excerpts", [])), p.get("identity", False))
+                     for p in c["honest_map"]]
+            check = check_support(c["statement"], parts, c["passage"], c["document_entity"])
+            assert check.verdict == "SUPPORTED", (c["id"], check.problems)

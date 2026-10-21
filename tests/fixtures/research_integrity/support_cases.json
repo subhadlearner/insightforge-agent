@@ -1,6 +1,6 @@
 {
-  "_note": "Research-integrity gold set (ADR-0006), version support-gold-2, adjudicated 2026-10-21 from the text shown here alone (the cited unit), never a title, heading or neighbouring Passage. 'expected' is the verdict a correct judge must give. 'honest_map' is a correct support map for SUPPORTED cases. 'qualifier' names the words a lazy judge leaves out; 'subject' the name a judge might wrongly take from identity context. 'floor' records which permissive-judge personas the code itself blocks ('code') and which only a correct model can stop ('model'); it is a measurement of the deterministic floor, not a pass threshold. support-gold-2 (2026-10-21, PR #77 review) re-measured every floor after check 5 (logical operators) and added the 'sentence' persona (the passage's best-matching sentence as the only excerpt), so a refusal caused only by quoting the whole passage (an unrelated 'does not' or 'planned' elsewhere in it) is not mistaken for a floor; no 'expected' label changed. 'old_literal_gate' is what the retired T18 lexical gate (literal_problem) said, recorded to show the false negative it caused. Northwind text is the fictional sample PDF (samples/documents/make_sample_documents.py). Web text is quoted from docs/audits/2026-10-21-t18-b1-historical-claim-audit.md. 'constructed' cases are written for this set. Nothing here alters the T18 B-1 records or stage_b1_cases.json.",
-  "version": "support-gold-2",
+  "_note": "Research-integrity gold set (ADR-0006), version support-gold-2, adjudicated 2026-10-21 from the text shown here alone (the cited unit), never a title, heading or neighbouring Passage. 'expected' is the verdict a correct judge must give. 'honest_map' is a correct support map for SUPPORTED cases. 'qualifier' names the words a lazy judge leaves out; 'subject' the name a judge might wrongly take from identity context. 'floor' records which permissive-judge personas the code itself blocks ('code') and which only a correct model can stop ('model'); it is a measurement of the deterministic floor, not a pass threshold. support-gold-2 (2026-10-21, PR #77 review) re-measured every floor after check 5 (logical operators) and added the 'sentence' persona (the passage's best-matching sentence as the only excerpt), so a refusal caused only by quoting the whole passage (an unrelated 'does not' or 'planned' elsewhere in it) is not mistaken for a floor; no 'expected' label changed. support-gold-3 (2026-10-21, after Gate A) re-measured every floor once the operator word lists, the entity-word identity rule and the every-part-needs-an-excerpt rule were retired (checks-3): NW-N04, NW-N06 and Q-N02 (full, sentence) are now the model's to stop; no 'expected' label changed. 'old_literal_gate' is what the retired T18 lexical gate (literal_problem) said, recorded to show the false negative it caused. Northwind text is the fictional sample PDF (samples/documents/make_sample_documents.py). Web text is quoted from docs/audits/2026-10-21-t18-b1-historical-claim-audit.md. 'constructed' cases are written for this set. Nothing here alters the T18 B-1 records or stage_b1_cases.json.",
+  "version": "support-gold-3",
   "cases": [
     {
       "id": "NW-P01", "class": "positive", "kind": "company attribution from a verified PDF; compound entity label",
@@ -109,7 +109,7 @@
       "entities": ["Northwind", "NW-200"], "entity": "Northwind",
       "passage": "Northwind expects regulatory approval for NW-200 in the first half of 2026.",
       "document_entity": "Northwind Health", "expected": "INSUFFICIENT_EVIDENCE",
-      "floor": {"full": "code", "sentence": "code"},
+      "floor": {"full": "model", "sentence": "model"},
       "old_literal_gate": null
     },
     {
@@ -130,7 +130,7 @@
       "entities": ["Northwind Health"], "entity": "Northwind Health",
       "passage": "Revenue grew 14 percent compared with fiscal 2024, led by the cardiology segment.",
       "document_entity": "Northwind Health", "expected": "CONTRADICTED",
-      "floor": {"full": "code", "sentence": "code"},
+      "floor": {"full": "model", "sentence": "model"},
       "old_literal_gate": null
     },
     {
@@ -180,7 +180,7 @@
       "entities": ["Alphabet"], "entity": "Alphabet",
       "passage": "Alphabet’s planned $175-185 billion is notable partly because it has already been revised three times upward from an initial $71-73 billion range for 2025. CEO Sundar Pichai acknowledged the scale is significant enough to cause concern internally, but pointed to a cloud backlog that surged 55% sequentially to over $240 billion.",
       "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE", "qualifier": "capex",
-      "floor": {"full": "code", "lazy": "code", "sentence": "code"},
+      "floor": {"full": "model", "lazy": "code", "sentence": "model"},
       "old_literal_gate": null
     },
     {

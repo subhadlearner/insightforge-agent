@@ -204,8 +204,21 @@ def test_absence_assertions_about_sources_are_detected(sentence, flagged):
 
 def test_a_flagged_summary_sentence_is_logged_and_the_flag_removes_nothing(make_deps):
     """The T18 CS4 absence flag is a measurement of the Writer's summary: it never removes a
-    sentence. Since the PR #77 review the support check does, when the published Claims do not
-    support it (here no Claim says anything about R&D, and its "no" is quoted by none)."""
+    sentence. Since the PR #77 review the support check does, when the published Claims and gap
+    lines do not support it (here none says anything about R&D). Since Gate A that is the
+    judge's decision, not an operator word list's, so the judge here is scripted faithfully."""
+    from tests.pipeline import fakes
+    from tests.scripted import JOINT_PREFIX, joint_verdict
+
+    base = fakes.light()
+
+    def judge(messages):
+        if str(messages[0].content).startswith(JOINT_PREFIX):
+            return AIMessage(content=json.dumps(joint_verdict(
+                str(messages[-1].content),
+                lambda s, ts: "INSUFFICIENT_EVIDENCE" if "research and development" in s
+                else "SUPPORTED")))
+        return base._generate(messages).generations[0].message
     summary = ("BYD cut prices by 34%. The evidence contains no research and development "
                "pipeline detail.")
 
@@ -214,7 +227,8 @@ def test_a_flagged_summary_sentence_is_logged_and_the_flag_removes_nothing(make_
             {"heading": "Pricing", "claims": [{"text": "BYD cut prices by 34%.",
                                                "evidence_id": "ev_1"}]}]}))
 
-    deps = make_deps(writer_model=ScriptedChat(reply=reply))
+    deps = make_deps(writer_model=ScriptedChat(reply=reply),
+                     light_model=ScriptedChat(reply=judge))
     draft = write_report(deps, "alice", "run_1", "Brief", bundle(item()), [])
     events = deps.repos.events.read_after("alice", "run_1")
     (flag,) = [e.payload for e in events if e.type == "summary_absence_flagged"]

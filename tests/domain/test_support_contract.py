@@ -73,7 +73,8 @@ def test_the_deterministic_floor_of_every_gold_negative_is_as_recorded(case):
 
 
 def test_the_floor_blocks_every_figure_period_and_identity_negative():
-    """The classes code can and must stop alone, whatever the model says."""
+    """The classes code can and must stop alone, whatever the model says: figures, periods and
+    a company not quoted from identity context (objective checks, checks-3)."""
     blocked = {c["id"] for c in NEGATIVE
                if any(v == "code" for k, v in c["floor"].items() if k in ("full", "identity"))}
     assert {"NW-N01", "NW-N02", "NW-N03", "WEB-N01", "WEB-N02"} <= blocked
@@ -120,10 +121,12 @@ def test_coverage_counts_content_words_and_their_plurals_only():
     ("Northwind Health", "Northwind Health", True),
     ("Northwind Health's", "Northwind Health", True),
     ("Northwind", "Northwind Health", True),
-    ("Medtronic", "Northwind Health", False),
-    ("Northwind Health pipeline", "Northwind Health", False),  # a label is not the company
-    ("Northwind 2025", "Northwind Health", False),
+    ("Medtronic", "Northwind Health", False),  # never another company: it is not quoted
+    ("Medtronic pipeline", "Northwind Health", False),
+    # Gate A (checks-3): the part must quote the entity; what else it says is the model's.
+    ("The Northwind Health pipeline", "Northwind Health", True),
+    ("Northwind 2025", "Northwind Health", False),  # never a figure
     ("Northwind Health", None, False),
 ])
-def test_identity_is_only_the_documents_own_entity(part, entity, ok):
+def test_identity_must_quote_the_documents_own_entity(part, entity, ok):
     assert (identity_problem(part, entity) is None) is ok

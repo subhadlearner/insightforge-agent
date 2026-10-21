@@ -11,6 +11,9 @@ Cases, each judged by the production `judge_units` on the cited unit only:
   (stage_b1_cases.json), on the cited Passage's counterpart in the verifier's re-fetch, as B-1.
 - `b1_verified`: the 27 T18-verified Claims, expected per the versioned gold
   (b1_gold_v2.json: 24 SUPPORTED, 3 INSUFFICIENT_EVIDENCE), on the same counterpart.
+- `holdout`: tests/fixtures/research_integrity/support_holdout.json, written after the first
+  live attempt and before the second, with no variant of a case that attempt judged; negatives
+  are repeated.
 
 Decision, fixed before any paid call: FAIL if any negative (or a Claim adjudicated
 INSUFFICIENT_EVIDENCE) is SUPPORTED in any repetition, or any positive adjudicated clearly
@@ -54,6 +57,14 @@ def gold_cases(repeats: int) -> list[Case]:
                         repeats if not positive else 1,
                         meta={"kind": c["kind"], "class": c["class"]}))
     return out
+
+
+def holdout_cases(repeats: int) -> list[Case]:
+    return [Case("holdout", c["id"], c["statement"], c["passage"],
+                 "SUPPORTED" if c["expected"] == "SUPPORTED" else "NOT_SUPPORTED",
+                 c["document_entity"], 1 if c["expected"] == "SUPPORTED" else repeats,
+                 meta={"kind": c["kind"]})
+            for c in load("research_integrity/support_holdout.json")["cases"]]
 
 
 def b1_cases(con, repeats: int) -> list[Case]:

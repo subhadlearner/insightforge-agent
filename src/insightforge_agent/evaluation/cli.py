@@ -38,6 +38,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from qdrant_client import QdrantClient
 
 from insightforge_agent.config import Settings
+from insightforge_agent.domain.support import CHECKS_VERSION
 from insightforge_agent.evaluation.judge import JUDGE_PROMPT_VERSION, RUBRIC_VERSION
 from insightforge_agent.evaluation.library import (
     LibraryError,
@@ -164,6 +165,7 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         # ADR-0006: the evidence-bound pipeline and its prompt versions.
         "evidence_pipeline": "adr-0006",
         "support_prompt_version": SUPPORT_PROMPT_VERSION,
+        "support_checks_version": CHECKS_VERSION,
         "extract_prompt_version": EXTRACT_PROMPT_VERSION,
         "requirements_prompt_version": REQUIREMENTS_PROMPT_VERSION,
         "answers_prompt_version": ANSWERS_PROMPT_VERSION,

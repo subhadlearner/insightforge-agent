@@ -13,7 +13,7 @@ import pytest
 
 from insightforge_agent.domain.contracts import PassageRef
 from insightforge_agent.pipeline.support import Unit, render_request, request_tokens
-from tests.research_integrity_gate import b1_cases, decide, gold_cases
+from tests.research_integrity_gate import b1_cases, decide, gold_cases, holdout_cases
 
 pytestmark = pytest.mark.integration
 DB = os.environ.get("T18_EVAL_DB")
@@ -40,7 +40,7 @@ def test_every_gate_case_resolves_its_cited_passage(con):
 
 
 def test_each_request_holds_only_the_cited_unit_and_fits_the_cap(con):
-    for c in gold_cases(repeats=1) + b1_cases(con, repeats=1):
+    for c in gold_cases(repeats=1) + b1_cases(con, repeats=1) + holdout_cases(repeats=1):
         unit = Unit(PassageRef(observation_id=c.ref[0], index=c.ref[1]), c.passage, c.entity)
         request = render_request(c.statement, [unit])
         assert request.count("\n[1] ") == 1 and "[2]" not in request.split("\n[1] ", 1)[0]
@@ -50,8 +50,8 @@ def test_each_request_holds_only_the_cited_unit_and_fits_the_cap(con):
 
 
 def test_the_planned_judgment_count_and_a_dry_decision(con):
-    cases = gold_cases(repeats=3) + b1_cases(con, repeats=3)
+    cases = gold_cases(repeats=3) + b1_cases(con, repeats=3) + holdout_cases(repeats=3)
     judgments = sum(c.repeats for c in cases if c.expected != "REPORT") + sum(
         1 for c in cases if c.expected == "REPORT")
-    assert judgments < 160  # the call budget the authorisation request quotes
+    assert judgments == 159 + 24  # the first attempt's 159, and the held-out set's 6 + 6 x 3
     assert decide(cases, [])["status"] == "INCONCLUSIVE"  # nothing judged is never a pass
