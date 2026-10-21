@@ -105,6 +105,7 @@ from insightforge_agent.domain.requirements import (
     after_fact_check,
     aspect_ledger,
     assess,
+    decomposition_gaps,
     gap_lines,
     mark_reported,
     unverifiable,
@@ -697,7 +698,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                           answers=confirm_answers(deps, owner, run_id, ledger, kept),
                           unverifiable=unverifiable(
                               [e["payload"] for e in log if e["type"] == "evidence_dropped"]))
-        gaps = list(state.get("limitations", [])) + research_gaps(
+        # Second PR #77 review: a ledger that may not cover the whole Brief says so, after
+        # the Run's own limitations (a clarification that timed out comes first).
+        gaps = list(state.get("limitations", [])) + decomposition_gaps(ledger) + research_gaps(
             plan=plan, research=research, bundle=bundle, events=log, documents=documents,
             extraction=extraction) + gap_lines(statuses)
         draft = write_report(deps, state["owner_id"], state["run_id"], state["brief"], bundle,
@@ -706,7 +709,8 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         deps.log(owner, run_id, "requirements_assessed",
                  statuses=[{"id": r.id, "status": r.status, "evidence_ids": r.evidence_ids,
                             "claims": r.claims} for r in statuses])
-        return {"draft": draft.model_dump(), "ledger_status": [r.model_dump() for r in statuses]}
+        return {"draft": draft.model_dump(),
+                "ledger_status": [r.model_dump(exclude_defaults=True) for r in statuses]}
 
     def fact_checking(state: State) -> State:
         enter(state, RunState.FACT_CHECKING)
@@ -722,14 +726,15 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         if failed:
             draft = verified.draft
             verified = verified.model_copy(update={"draft": draft.model_copy(update={
-                "gaps": [*draft.gaps, *gap_lines(failed)],
+                # First, so the bounded Run summary keeps them (second PR #77 review).
+                "gaps": [*gap_lines(failed), *draft.gaps],
                 "quality": [*draft.quality,
                             f"requirements_unverified:{','.join(r.id for r in failed)}"]})})
         deps.log(owner, run_id, "requirements_fact_checked",
                  statuses=[{"id": r.id, "status": r.status, "fact_check": r.fact_check}
                            for r in statuses])
         return {"verified": verified.model_dump(),
-                "ledger_status": [r.model_dump() for r in statuses]}
+                "ledger_status": [r.model_dump(exclude_defaults=True) for r in statuses]}
 
     def historical_of(state: State) -> HistoricalContext:
         return HistoricalContext.model_validate(state.get("historical") or {})

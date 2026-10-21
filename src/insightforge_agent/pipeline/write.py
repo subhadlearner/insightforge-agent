@@ -75,6 +75,7 @@ from insightforge_agent.domain.evidence import (
     DROP_NO_CITATION,
     DROP_UNSUPPORTED,
     DROP_UNVERIFIED,
+    summary_text,
 )
 from insightforge_agent.domain.memory import (
     report_date_text,
@@ -118,7 +119,8 @@ in the evidence bundle; do not add totals, rates or names the evidence does not 
 summary sentence drawing on the historical background must show that item's report date
 inline exactly as "(reported YYYY-MM-DD)", as its historical claim does.
 Each evidence item shows its period ("as of ...") or, when none was stated, its source's
-publication date; a publication date is not the period a figure measures.
+publication date; a publication date is not the period a figure measures. An item marked
+"summarised" shows only its key fact (subject, relation, value): state no more than that.
 When the evidence or the research gaps do not cover something the brief asks for, say that
 this research did not establish it; never state that a source, document or company lacks or
 does not disclose information.
@@ -127,7 +129,8 @@ same period and scope; otherwise state each with its period and say why they are
 comparable. A comparison claim cites every item it compares."""
 # T18 CS4: writer-2 added the temporal, absence and comparison rules (writer-1 before).
 # ADR-0006: writer-3 adds premises, the requirement index and the no-new-numbers rule.
-WRITER_PROMPT_VERSION = "writer-3"
+# Second PR #77 review: writer-4 adds the rule for items summarised to fit the budget.
+WRITER_PROMPT_VERSION = "writer-4"
 MAX_PREMISES = 3
 
 SUMMARY_MAX_WORDS = 150
@@ -260,7 +263,9 @@ def render_bundle(bundle: EvidenceBundle) -> str:
     lines = []
     for s in bundle.sections:
         lines.append(f"## {s.heading} (confidence {s.confidence})")
-        lines += [f"- [{i.id}] ({i.confidence}; {_when(i)}) {i.statement}" for i in s.items]
+        lines += [f"- [{i.id}] ({i.confidence}; {_when(i)}; summarised) {summary_text(i)}"
+                  if i.compressed else f"- [{i.id}] ({i.confidence}; {_when(i)}) {i.statement}"
+                  for i in s.items]
     return "\n".join(lines)
 
 
@@ -315,10 +320,12 @@ def coverage_problems(draft: ReportDraft, bundle: EvidenceBundle,
 
 
 def unanswered(draft: ReportDraft, statuses: list[RequirementStatus]) -> list[RequirementStatus]:
-    """Required, supported requirements no current Claim of `draft` cites an item of."""
+    """Required, supported or partly answered requirements no current Claim of `draft` cites
+    an item of."""
     cited = {e for s in draft.sections for c in s.claims if not c.historical
              for e in c.evidence_ids()}
-    return [r for r in statuses if r.priority == "required" and r.status == "supported"
+    return [r for r in statuses if r.priority == "required"
+            and r.status in ("supported", "partial")
             and r.evidence_ids and not cited & set(r.evidence_ids)]
 
 

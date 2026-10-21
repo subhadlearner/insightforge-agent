@@ -80,13 +80,14 @@ def joint_verdict(user: str, verdict=lambda statement, texts: "SUPPORTED") -> di
 
 
 def answer_verdicts(user: str, answers=lambda question, statement: True) -> dict:
-    """A scripted requirement answer check (`confirm_answers`): `answers(question, statement)`
-    per numbered statement, quoting the whole statement when it answers."""
+    """A scripted requirement answer check (`confirm_answers`): the whole question as its one
+    part, and `answers(question, statement)` per numbered statement, quoting the whole statement
+    when it states that part."""
     import re as _re
 
     question = user.split("\n", 1)[0].removeprefix("Question: ")
     out = []
     for n, t in _re.findall(r"^\[(\d+)\] (.+)$", user, _re.MULTILINE):
         yes = answers(question, t)
-        out.append({"statement": int(n), "answers": yes, "excerpt": t if yes else ""})
-    return {"answers": out}
+        out.append({"statement": int(n), "parts": [1] if yes else [], "excerpt": t if yes else ""})
+    return {"parts": [question.rstrip("?")], "answers": out}

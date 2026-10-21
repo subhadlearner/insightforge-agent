@@ -166,7 +166,7 @@ def test_more_evidence_than_the_budget_is_cut_lowest_rank_first_and_logged(make_
 
 def test_the_writer_is_told_how_to_state_absence_and_when_to_compare():
     prompt = " ".join(SYSTEM.split())
-    assert WRITER_PROMPT_VERSION == "writer-3"
+    assert WRITER_PROMPT_VERSION == "writer-4"
     assert "say that this research did not establish it" in prompt
     assert "never state that a source, document or company lacks" in prompt
     assert "same thing, in the same unit, for the same period and scope" in prompt

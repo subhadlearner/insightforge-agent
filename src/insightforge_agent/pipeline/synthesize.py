@@ -22,8 +22,10 @@ ADR-0006).
 4. Confidence counts SUPPORTED Passages only, over distinct Sources; two Sources whose
    supporting Passages are the same text (a syndicated story or a re-posted release) are not
    independent, whatever their domains.
-5. Rank by the specified tuple, then cut whole lowest-ranked items to fit the budget, never the
-   last kept support of a required research requirement while anything else can go."""
+5. Rank by the specified tuple, then fit the budget: first summarise lower-ranked items to
+   their structured fact (same id and citation; logged `evidence_compressed`), then, only if
+   still over, cut whole lowest-ranked items, never the last kept support of a required research
+   requirement while anything else can go (logged `evidence_cut`)."""
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -55,6 +57,7 @@ from insightforge_agent.domain.evidence import (
     recency_bucket,
     section_label,
     sources_independent,
+    summary_text,
     syndicated,
 )
 from insightforge_agent.domain.extraction import group_key, normalise, same_value
@@ -297,13 +300,20 @@ def synthesize(
         return [r for r in links(item, ledger) if r in required and not any(
             r in links(other, ledger) for other in kept if other is not item)]
 
-    kept, cut = compress_to_budget(
+    kept, cut, short = compress_to_budget(
         ranked, lambda chosen: bundle_tokens(build(chosen)) <= deps.evidence_budget_tokens,
         lambda item, chosen: bool(essential(item, chosen)))
+    rank = {i.id: n for n, i in enumerate(ranked, start=1)}
+    for item in short:
+        deps.log(owner_id, run_id, "evidence_compressed",
+                 reason="over evidence budget: shown to the Writer as its structured fact",
+                 evidence_id=item.id, subtask_id=item.subtask_id, confidence=item.confidence,
+                 rank=rank[item.id], statement_tokens=estimate_tokens(item.statement),
+                 shown_tokens=estimate_tokens(summary_text(item)))
     for item in cut:
         deps.log(owner_id, run_id, "evidence_cut", reason="over evidence budget",
                  evidence_id=item.id, subtask_id=item.subtask_id, confidence=item.confidence,
-                 rank=ranked.index(item) + 1, requirement_ids=links(item, ledger),
+                 rank=rank[item.id], requirement_ids=links(item, ledger),
                  last_support_of=essential(item, [*kept, item]))
     _log_recovery_outcome(deps, owner_id, run_id, research, items, kept)
     return build(kept)

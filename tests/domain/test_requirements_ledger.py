@@ -132,7 +132,7 @@ def test_budget_compression_keeps_the_last_support_of_a_required_requirement():
         return any(r in ("R1", "R2") and not any(r in o.requirement_ids for o in kept if o is not i)
                    for r in i.requirement_ids)
 
-    kept, cut = compress_to_budget(ranked, lambda chosen: len(chosen) <= 2, essential)
+    kept, cut, _ = compress_to_budget(ranked, lambda chosen: len(chosen) <= 2, essential)
     assert [i.id for i in kept] == ["ev_a", "ev_c"] and [i.id for i in cut] == ["ev_b"]
-    kept, cut = compress_to_budget(ranked, lambda chosen: len(chosen) <= 1, essential)
+    kept, cut, _ = compress_to_budget(ranked, lambda chosen: len(chosen) <= 1, essential)
     assert [i.id for i in cut] == ["ev_b", "ev_c"]  # only when nothing else can go

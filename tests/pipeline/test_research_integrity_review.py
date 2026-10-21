@@ -36,7 +36,7 @@ from insightforge_agent.pipeline.fact_check import fact_check
 from insightforge_agent.pipeline.write import write_report
 from tests.pipeline.test_extraction_synthesis import world  # noqa: F401
 from tests.pipeline.test_t6_writer_fact_check import URL, Fetcher, evidence
-from tests.scripted import ScriptedChat, support_verdicts
+from tests.scripted import ScriptedChat, answer_verdicts, support_verdicts
 
 JOINT = "You check whether numbered passages, taken together"
 SUPPORT = "You check whether numbered passages support one statement"
@@ -69,12 +69,8 @@ def judge(verdict=lambda statement, text: "SUPPORTED" if contains(statement, tex
             return AIMessage(content=json.dumps(
                 {"verdicts": support_verdicts(user, verdict)}))
         if system.startswith("You check which numbered evidence statements answer"):
-            question = user.split("\n", 1)[0].removeprefix("Question: ")
-            out = []
-            for n, t in units:
-                yes = (answers or (lambda q, s: True))(question, t)
-                out.append({"statement": int(n), "answers": yes, "excerpt": t if yes else ""})
-            return AIMessage(content=json.dumps({"answers": out}))
+            return AIMessage(content=json.dumps(
+                answer_verdicts(user, answers or (lambda q, s: True))))
         return AIMessage(content="A page.")
     return ScriptedChat(reply=reply)
 
@@ -231,11 +227,13 @@ def test_a_failed_requirement_check_is_verification_incomplete_not_answered(make
 def test_an_answer_quote_that_is_not_in_the_statement_does_not_count(make_deps):
     from insightforge_agent.pipeline.requirements import confirm_answers
 
-    lying = ScriptedChat(reply=lambda m: AIMessage(content=json.dumps({"answers": [
-        {"statement": 1, "answers": True, "excerpt": "AMD's China revenue was $6.2 billion"}]})))
+    lying = ScriptedChat(reply=lambda m: AIMessage(content=json.dumps({
+        "parts": ["AMD's China revenue in 2025"], "answers": [
+            {"statement": 1, "parts": [1], "excerpt": "AMD's China revenue was $6.2 billion"}]})))
     deps = make_deps(light_model=lying)
     answers = confirm_answers(deps, "alice", "run_1", AMD_LEDGER, [LAUNCH])
-    assert answers.answers == {"R1": []}
+    # A fabricated quote is a failed check (second PR #77 review), never an answer.
+    assert answers.answers == {"R1": []} and answers.failed == ["R1"]
 
 
 def test_brief_terms_no_requirement_covers_are_sent_back_once_then_recorded(make_deps):

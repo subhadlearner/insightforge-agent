@@ -88,7 +88,7 @@ def test_every_brief_completes_and_the_report_records_each_t18_behaviour(on, off
         assert {s["status"] for s in samples(report).values()} == {"complete"}
         c = report["providers"][0]["conditions"]
         assert (c["draft_structured_output"], c["draft_passage_cap"], c["fact_check_method"],
-                c["writer_prompt_version"]) == (*expected, "writer-3")
+                c["writer_prompt_version"]) == (*expected, "writer-4")
 
 
 def test_only_extraction_used_the_native_path_and_each_call_held_at_most_the_cap(on):

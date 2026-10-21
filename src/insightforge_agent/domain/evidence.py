@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from insightforge_agent.domain.contracts import CONFIDENCE_ORDER, Confidence, EvidenceItem
 from insightforge_agent.domain.periods import period_end
+from insightforge_agent.domain.tokens import estimate_tokens
 
 # Why a drafted candidate was not kept: logged by Synthesis, counted by the Report's gap lines.
 DROP_NO_CITATION = "draft cites no Passage"
@@ -83,15 +84,43 @@ def rank_key(
     return (-recency, -credibility, -round(item.relevance, 6), priority, item.id)
 
 
+def summary_text(item: EvidenceItem) -> str:
+    """An item's structured fact, as a compressed item is shown to the Writer: subject,
+    relation and value (which Synthesis kept only if a supporting Passage states it), and its
+    scope. The period is shown beside it, as for every item."""
+    scope = f" ({item.scope})" if item.scope else ""
+    return f"{item.entity}: {item.predicate.replace('_', ' ')} {item.value}{scope}"
+
+
+def summarised(item: EvidenceItem) -> EvidenceItem | None:
+    """The item compressed to its structured fact, or None when it has none (no entity,
+    relation and stated value) or the fact is not shorter than its statement."""
+    if item.compressed or not (item.entity and item.predicate and item.value):
+        return None
+    if estimate_tokens(summary_text(item)) >= estimate_tokens(item.statement):
+        return None
+    return item.model_copy(update={"compressed": True})
+
+
 def compress_to_budget(
     ranked: list[EvidenceItem], fits: Callable[[list[EvidenceItem]], bool],
     essential: Callable[[EvidenceItem, list[EvidenceItem]], bool] = lambda item, kept: False,
-) -> tuple[list[EvidenceItem], list[EvidenceItem]]:
-    """Cut the lowest-ranked items until `fits`. Whole items go, never half a statement. An
-    item that is `essential` (ADR-0006: the last kept support of a required requirement) goes
-    only when nothing else can, and an item that is the last of its Aspect only after every
-    other non-essential one. Returns (kept, cut)."""
-    kept, cut = list(ranked), []
+    shorten: Callable[[EvidenceItem], EvidenceItem | None] = summarised,
+) -> tuple[list[EvidenceItem], list[EvidenceItem], list[EvidenceItem]]:
+    """Fit the bundle to the budget the way the assignment asks, by compressing lower-priority
+    items before cutting any. First, lowest-ranked first, each item that has a structured fact
+    is summarised to it (`shorten`): same id and citation, so provenance is unchanged. Only if
+    that is not enough are the lowest-ranked items cut, whole, never half a statement. An item
+    that is `essential` (ADR-0006: the last kept support of a required requirement) goes only
+    when nothing else can, and an item that is the last of its Aspect only after every other
+    non-essential one. Returns (kept, cut, summarised)."""
+    kept, cut, short = list(ranked), [], []
+    for n in range(len(kept) - 1, -1, -1):
+        if fits(kept):
+            break
+        if (s := shorten(kept[n])) is not None:
+            kept[n] = s
+            short.append(s)
     while kept and not fits(kept):
         counts: dict[str, int] = {}
         for i in kept:
@@ -101,7 +130,7 @@ def compress_to_budget(
                       spare[0] if spare else kept[-1])
         kept.remove(victim)
         cut.append(victim)
-    return kept, cut
+    return kept, cut, [s for s in short if any(s is k for k in kept)]
 
 
 def domain_of(locator: str) -> str:

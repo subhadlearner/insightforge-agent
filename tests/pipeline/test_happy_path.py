@@ -53,7 +53,9 @@ def test_graph_state_carries_no_source_body(make_deps):
     assert stored > 20_000  # the body really is big, and really is in the store
     assert snapshots
     for snap in snapshots:
-        assert len(json.dumps(snap)) < 20_000
+        # Smaller than the one big Passage, so it cannot hold it (the ADR-0006 ledger made a
+        # fixed 20,000 too tight a proxy); and the text itself is never there.
+        assert len(json.dumps(snap)) < stored
         assert "A very long paragraph" not in json.dumps(snap)
 
 

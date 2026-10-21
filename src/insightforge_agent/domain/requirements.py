@@ -7,6 +7,8 @@ Its status is decided in code from the Run's own records, never from similarity:
   ledger fell back to one requirement per Aspect) was verified by the support contract and,
   when the answer check ran (`AnswerCheck`), was judged to answer its question: a link is
   model output, so a valid but wrong requirement id never answers it (PR #77 review);
+- partial: verified, answering items state some of the parts of its question (one per
+  company, measure, period...) but not all; the gap line names the parts not established;
 - contradictory: its only verified, answering items conflict;
 - incomplete: nothing verified, and a Sub-task researching it failed or a work unit covering
   its Sub-tasks' material could not be read after bounded recovery;
@@ -25,7 +27,9 @@ Aspect has some Claim: a Claim must cite an item linked to that requirement.
 
 Whether the ledger captures everything the Brief asks is checked only lexically
 (`uncovered_brief_terms`): Brief content words no requirement mentions are sent back once and
-then recorded on the ledger. That is a backstop, not proof that the decomposition is complete."""
+then recorded on the ledger, and the Report states that its coverage of the Brief is uncertain
+(`decomposition_gaps`). That is a backstop, not proof that the decomposition is complete or
+that a word names a missing question."""
 
 from typing import Literal
 
@@ -44,7 +48,7 @@ from insightforge_agent.domain.support import content_terms
 
 MAX_REQUIREMENTS = 12
 
-Status = Literal["supported", "contradictory", "incomplete", "verification_incomplete",
+Status = Literal["supported", "partial", "contradictory", "incomplete", "verification_incomplete",
                  "no_evidence", "background", "reported", "reported_unverified"]
 
 
@@ -74,17 +78,21 @@ class RequirementStatus(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)  # kept, verified items linked to it
     claims: list[str] = Field(default_factory=list)  # "section.claim" of Claims citing them
     reasons: list[str] = Field(default_factory=list)
+    missing_parts: list[str] = Field(default_factory=list)  # parts of the question not stated
     # After fact-checking: "section.claim" -> verified | unverified | page_drift | unchecked,
     # for the Claims above that were sampled.
     fact_check: dict[str, str] = Field(default_factory=dict)
 
 
 class AnswerCheck(BaseModel):
-    """Which kept items answer each requirement's question (PR #77 review): per requirement,
-    the linked items the answer check confirmed, and the requirements whose check failed."""
+    """Which kept items answer each requirement's question (PR #77 reviews): per requirement,
+    the parts of its question, the parts each linked item states (items stating none left out),
+    the items stating any part, and the requirements whose check failed."""
 
     answers: dict[str, list[str]] = Field(default_factory=dict)
     failed: list[str] = Field(default_factory=list)
+    parts: dict[str, list[str]] = Field(default_factory=dict)
+    states: dict[str, dict[str, list[int]]] = Field(default_factory=dict)
 
 
 # Words of a Brief that ask rather than name what is asked about.
@@ -92,7 +100,7 @@ _INSTRUCTIONS = frozenset("""
 assess compare estimate name summarise summarize update using use uploaded say describe explain
 analyse analyze identify list research provide give find determine evaluate review outline
 discuss examine keep keeping set against earlier briefing brief report what where how which
-whether new
+whether new tell show me us you your our my please about need want like know look focus cover
 """.split())
 
 
@@ -154,6 +162,18 @@ def links(item: EvidenceItem, ledger: RequirementLedger) -> list[str]:
     return [r for r in item.requirement_ids if r in known]
 
 
+def decomposition_gaps(ledger: RequirementLedger) -> list[str]:
+    """The Report's statement that its requirements may not cover the whole Brief, when Brief
+    words remain in no requirement (`uncovered_brief_terms`). Worded as uncertainty: a word in
+    no requirement is not shown to be a question the Brief asked."""
+    if not ledger.uncovered_brief_terms:
+        return []
+    terms = ", ".join(f'"{t}"' for t in ledger.uncovered_brief_terms[:12])
+    return [f"The research requirements this Run tracked may not cover all of the Brief: no "
+            f"requirement mentions {terms}. Anything the Brief asks about these may not have been "
+            "researched; this was not checked further."]
+
+
 def unverifiable(drops: list[dict]) -> list[tuple[str, list[str]]]:
     """From `evidence_dropped` payloads: the Aspect and requirement links of each candidate
     dropped because its support check failed (`DROP_UNVERIFIED`)."""
@@ -211,8 +231,15 @@ def assess(ledger: RequirementLedger, plan: SubTaskPlan, research: ResearchResul
             reasons.append(f"{n} Passage(s) of {len(lost)} Source(s) could not be read after "
                            "bounded retries")
         good = [i for i in items if not i.conflicting]
-        if good:
-            status: Status = "supported"
+        parts = (answers.parts.get(req.id, []) if answers else [])
+        stated = {k for i in good for k in (answers.states.get(req.id, {}).get(i.id, [])
+                                            if answers else [])}
+        missing = [p for k, p in enumerate(parts, start=1) if k not in stated]
+        if good and missing:
+            status: Status = "partial"
+            reasons.append("not established: " + ", ".join(missing))
+        elif good:
+            status = "supported"
         elif items:
             status = "contradictory"
             reasons.append("its Evidence conflicts")
@@ -227,7 +254,8 @@ def assess(ledger: RequirementLedger, plan: SubTaskPlan, research: ResearchResul
             status = "no_evidence"
         out.append(RequirementStatus(id=req.id, question=req.question, priority=req.priority,
                                      status=status, evidence_ids=[i.id for i in items],
-                                     reasons=reasons))
+                                     reasons=reasons,
+                                     missing_parts=missing if status == "partial" else []))
     return out
 
 
@@ -287,6 +315,10 @@ def gap_lines(statuses: list[RequirementStatus]) -> list[str]:
     for s in statuses:
         if s.status in ("supported", "reported"):
             continue
+        if s.status == "partial":
+            out.append(f"Requirement {s.id} ({s.question}): answered only in part; this research "
+                       f"did not establish {', '.join(s.missing_parts)}.")
+            continue
         if s.status == "reported_unverified":
             out.append(f"Requirement {s.id} ({s.question}): the Claim(s) answering it "
                        f"({', '.join(s.claims)}) failed the independent fact-check and are "
@@ -304,6 +336,9 @@ def coverage_index(statuses: list[RequirementStatus]) -> str:
     for s in statuses:
         if s.status == "supported":
             what = "answered by " + ", ".join(s.evidence_ids[:6])
+        elif s.status == "partial":
+            what = ("answered in part by " + ", ".join(s.evidence_ids[:6]) + "; NOT established: "
+                    + ", ".join(s.missing_parts) + "; say this research did not establish them")
         elif s.status == "contradictory":
             what = "conflicting evidence " + ", ".join(s.evidence_ids[:6]) + "; say so"
         else:
