@@ -249,3 +249,36 @@ The gold floors were re-measured (`support-gold-3`, no `expected` label changed)
 **Next (not run).** A fresh Gate A is a new attempt and needs its own authorisation. It should add held-out cases written before it runs, so the result is not judged only on cases already seen. Prompt and code stay frozen in between.
 
 Offline after the correction: tests pinning the new contract replace the five operator tests in `test_research_integrity_review.py`, and the identity test now asserts quotation.
+
+## 14. First capped end-to-end Run, the seven-call replay and the corrections
+
+**The Run.** Authorised by the owner with a $1.00 allowance and a 20-search limit, outside the test suite, on `b31ffc2`. One Brief ("Compare BYD and Tesla in battery electric vehicles: 2025 sales volume, pricing strategy and battery technology."), every role on Claude Haiku 5.5. A callback on every chat model refused any call that could pass the allowance (worst case reserved before the call, provider-reported usage after), and the search provider refused after 20. Result: `run_c11947913dc5` **COMPLETE**, one Report, **$0.317**, 711 model calls (4 planner, 13 researcher, 3 writer, 691 light, 457 of them support judgments), 7 searches, 43 minutes, no call refused. The record (Report body, events, per-call usage) is kept outside the repository (`insightforge-e2e/20261021T115817Z/`).
+
+**What the Report got wrong.** Its Claims answer each of the six requirements, but every requirement was `verification_incomplete` and its gap line said this research did not establish it; the Brief coverage check failed too. Separately, all three Writer drafts broke the number and name rules, so 25 Claims were replaced by their items' statements, and two Claims citing one item became duplicates three times.
+
+**Diagnosis: a seven-call replay** (owner-authorised, $0.02 hard limit; $0.0039 spent, 7 calls, no search). Inputs were rebuilt from the saved Report body; the rebuilt requests equal the Run's byte for byte (tested). All seven failures reproduced, and the raw replies (kept as `tests/fixtures/research_integrity/run_c11947913dc5_checks.json`, text only) show:
+
+| Check | Reason logged | What the model did |
+|---|---|---|
+| Brief coverage | an ask is not words of the text | quoted non-adjacent words joined by "...": "BYD and Tesla in battery electric vehicles: ... pricing strategy" (the Brief names both companies once, then three measures) |
+| R3-R6 answers | a part is not words of the question | worded each part as a noun phrase: "the pricing strategy Tesla uses for its battery electric vehicles" |
+| R1, R2 answers (and R3-R6 next) | statement N has 0 entries | listed only the statements that answer (3 of 21, 3 of 43 ...), in all six replies |
+| Writer | names ['One'], ['EV', 'January'], values ['2026'] not in evidence | "One item reports ...", "EV" for "electric vehicle", a source's publication date |
+
+None is a semantic error: each is a format rule the model does not follow, enforced as a veto.
+
+**Corrections (no word list, exception or lexical rule added):**
+- `coverage-2`: a quote may join non-adjacent words with " ... "; each piece must still be words of the text, in order (`requirements.quoted`).
+- `answers-4`: the proposer lists only statements that state a part; one it leaves out states none (a repeated, conflicting or unknown entry and a quote not in its statement still fail). Parts are in the model's words; whether a part is asked is now the coverage check's judgment: a part covering no ask is dropped with its claimed answers. Later batches are given the first batch's parts, so a reworded split can no longer fail a long requirement.
+- Writer: the number and name rules stay as retry feedback. Once retries are spent, a draft whose only Claim problems are those rules is kept and each flagged Claim goes to the existing semantic check against its cited Passage (`ungrounded_claims`, `writer_claims_ungrounded`), never replaced unchecked. A Claim the check rejects is restated only if no published Claim already states that statement or cites that item alone; otherwise it is removed. Historical Claims keep every rule. Rules ledger row 17 records the change, pending owner approval.
+
+**Offline verification against the saved Run** (`tests/pipeline/test_research_integrity_e2e1.py`, 9 tests; 8 fail on `b31ffc2`, 1 control passes):
+- the saved Brief coverage reply is now read, and every ask is covered;
+- every saved answer reply is now read, with unlisted statements stating no part;
+- with the later judgments scripted (coverage of each split, the verifier: never made in the Run), every requirement is decided.
+
+The Writer's last draft, rebuilt from the saved records, was run through the new fallback and check at both bounds of the support verdicts, which the Run did not save. All 25 flagged Claims go to the check.
+- **Every judgment SUPPORTED:** 35 Claims, 1 verbatim, no duplicate text.
+- **Every judgment INSUFFICIENT:** 32 Claims, all verbatim, each item once, the 3 duplicates removed.
+
+**Not established offline.** What the coverage check of each split, the verifier and the support judgments of the 25 Claims actually return can only be measured live. The Writer's attempt 3 also wrote "This research did not establish ..." Claims because of the wrong gap lines; with those fixed, its drafts will differ. A fresh capped end-to-end Run needs its own authorisation.
