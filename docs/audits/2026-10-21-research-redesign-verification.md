@@ -137,7 +137,7 @@ Classes: **FN** production false negative; **FP** semantic false positive; **GL*
 9. **Same model, same contract.** Synthesis and the sampled Fact-Checker use the same judge; the sample is not an independent oracle.
 10. **Intermediate commits** are review slices; the suite is verified at the branch head.
 11. **Operator word lists** (support check 5). Negation, hedging, exclusivity, universality and comparison are fixed word lists; an operator worded otherwise ("failed to", "outpaced") is the model's to judge, and a faithful paraphrase that drops one is refused. A genuine quote attached to a part it does not state is not caught by code (only the live gate measures it).
-12. **Answer check and Brief coverage are model and lexical.** Whether an item answers a requirement is a light-model judgment with a code-checked quote; whether the ledger covers the Brief is a lexical term check. Neither proves the decomposition complete; Gate B's human review must.
+12. **Answer check and Brief coverage are model judgments.** Since the final review (§12) both are semantic: a proposer, an independent coverage check and an independent verifier, with code checking only quotes, references and schemas. Neither proves the decomposition complete; Gate B's human review must.
 13. **More calls before publication.** One support call per reworded Claim, one joint call per summary sentence not reused verbatim, and up to one answer call per requirement with linked items (at most 12) per Run.
 
 ## 9. Proposed live validation (NOT authorised; nothing run)
@@ -186,3 +186,38 @@ The second review confirmed the eight corrections above and reported three P1 an
 
 Found while correcting: the name check first read an Aspect-name question's capitalised first word ("Sales") as a name, which would have refused every fallback-ledger answer; a word now counts as a name only where the question capitalises it mid-sentence (test above). The coverage line also first counted conversational Brief words ("tell", "me") and preceded a timed-out clarification's limitation; both corrected (instruction words extended; Run limitations first), caught by the T9 clarification tests. Graph state stores ledger statuses without default fields; the T5 state-size test now bounds state by the planted body's length instead of a fixed 20,000 characters.
 
+
+## 12. Final architectural review (`f05ee6a`) and the corrections
+
+The final review asked that the remaining issues be fixed without heuristics: deterministic code enforces objective invariants (valid references, quotations that exist, schemas, budgets, failure accounting) and semantic decisions belong to the semantic checks. Each point was checked against the code at `f05ee6a`, and all three were valid. `tests/pipeline/test_research_integrity_review3.py` gave **20 failed, 1 passed** at `f05ee6a`; the one that passed is a control, two items answering every part. It passes after the corrections. Most failures are mechanisms that did not exist then. The behavioural ones:
+- A split that dropped two companies was "supported", a false acceptance.
+- "The company's revenue..." was refused for not repeating "Northwind", a false rejection.
+- A "did not establish" sentence carrying a finding was published.
+- An item was cut rather than shortened.
+
+| # | Finding | Verdict at `f05ee6a` | Correction | Tests (false acceptance / false rejection) |
+|---|---|---|---|---|
+| 1a | Brief completeness trusted to word matching | Valid. `uncovered_brief_terms` used an instruction word list and a 4-letter stem rule. A ledger using every Brief word with the years swapped passed. "tell", "deck" and similar words were flagged unless listed | `check_coverage` (`coverage-1`), an independent semantic check, lists what the Brief asks (quoted) and which requirements cover each ask. Code checks quotes, item numbers and schema only. An uncovered ask is sent back once; if still uncovered it is recorded (`uncovered_asks`) and given a gap line as not established. A failed check is recorded (`coverage_failed`) and the Report says coverage could not be checked | swapped years; omission retried; omission persisting; instruction wording not an omission; 4 unusable replies |
+| 1b | Model-made parts trusted complete; answers restricted by a capitalisation rule | Valid. A split omitting Azure made AWS-only Evidence "supported". `_names` was the only guard against a lumped part, and it refused correct answers that do not repeat the name | `answers-3`. The proposer's split is checked by `check_coverage` against the question, and asks it missed become unstated parts. An independent verifier judges every claimed (part, statement) pair, and only ANSWERS counts. UNSURE leaves the part unresolved and is named in the gap line. A malformed reply from any of the three judgments fails the check. `_names` and `_QUESTION_WORDS` are removed | lumped split overruled; dropped part unresolved; unsure unresolved; 5 malformed verifier replies; failed split coverage; name not repeated still answers; two items answer all parts (control) |
+| 2 | Compression rebuilt facts from entity + predicate + value + scope | Valid. `summary_text` could drop a hedge, direction or scope with nothing checking it | `summary_text` and `summarised` are removed. A light-model shorter wording (`shorten-1`) is used only when two support judgments are both SUPPORTED: the statement supports the wording, and the wording supports the statement. The support contract's own invariants (quotes, coverage, figures) apply both ways. Any other outcome keeps the item whole (`evidence_compression_refused`). A cut's coverage consequence is recorded: a requirement whose only verified Evidence was cut is `budget_omitted`, never "no evidence" | dropped hedge refused; changed figure refused despite a permissive judge; not shorter or unusable reply stays whole; equivalent wording kept with same id and citation; bundle shortened before any cut; cut requirement reported |
+| 3 | Lexical heuristics as proof of correctness | Valid for three rules that could accept or decide: the Brief word check (1a), the name rule (1b), and `_EVIDENCE_QUALIFIED`, which let a figure-free "research did not establish" summary sentence skip the semantic check | All three are removed from decisions. Every non-verbatim summary sentence is judged jointly against the published Claims and the Report's gap lines. `_EVIDENCE_QUALIFIED` remains only in the T18 absence measurement, which removes nothing | a limit sentence carrying a finding is removed; a faithful limit sentence is kept on its gap line |
+
+**No new semantic heuristic was introduced.** The corrections add no keyword list, capitalisation rule, regex exception or case-specific patch. The new code only checks schemas, that quotes exist (`find_excerpt`), references (item, part and pair numbers), token budgets and failure accounting.
+
+Three lexical rules remain, all pre-existing veto checks that can refuse a SUPPORTED but never grant one:
+- check 2's function-word list (ledger row 24);
+- check 5's operator lists (row 29);
+- the Writer's name and number grounding (rows 17 and 2).
+
+Two ordering heuristics also remain: the summary-unit ranking by shared words, and syndication overlap (row 27). The ranking only chooses which units fit one call; syndication can only lower Confidence. Removing check 5 would re-open the first review's operator finding, and gold cases NW-N04 and NW-N06 are currently caught by code. Gate A records `model_verdict` before code's checks, so it can measure whether the model alone holds those negatives. Retiring check 5 is left to that measurement.
+
+Also changed:
+- Planning-stage calls (the requirement derivation and the Brief coverage check) are not counted against the Run's token cap, as the Planner's are not; the answer-check judgments and shortening are.
+- Eval conditions record `answers_prompt_version`, `coverage_prompt_version` and `shorten_prompt_version`.
+- Writer prompt `writer-5`.
+- The scripted test models give the new checks a permissive default (`ScriptedChat.checks`), so only tests about those checks script them.
+- Superseded tests in the review 1 and 2 files were replaced by the block 1-3 tests above.
+
+**Cost.** Per requirement with linked Evidence, the answer check is now three judgments, not one. The Brief coverage check adds one or two light calls per Run. Shortening costs one light call and two support judgments for each item it tries. Gate A is unchanged: it does not exercise these paths. Gate B's call count rises again, and it still has no hard cap.
+
+**Limits.** Every judgment the corrections rely on is a model's: coverage, the answer verifier and equivalence. Scripted tests prove the code paths, not live accuracy. Bidirectional support lets a shortening remove only redundancy. A wording that drops content is not equivalent, so most over-budget items will still be cut, now with that consequence on the ledger.
