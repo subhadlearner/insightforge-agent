@@ -1,0 +1,42 @@
+{
+  "_note": "Versioned, adjudicated gold for the 27 T18-verified Claims (support-gold-b1-v2), taken mechanically from the B-1 historical Claim audit table (docs/audits/2026-10-21-t18-b1-historical-claim-audit.md, section B.1) whose adjudication was accepted. It supersedes nothing: the B-1 records, stage_b1_cases.json, stage_b1_verified_adjudication.json and the T18 gate decisions stay as they were. Use: the expected verdict for each Claim in a new, separately authorised live gate of the ADR-0006 support contract, together with the 40 B-1 negatives and 10 positives (stage_b1_cases.json) and the support_cases.json qualifier-leak negatives. Claim and Passage text are read from the saved T18 eval.db at run time, never committed (third-party web text).",
+  "version": "support-gold-b1-v2",
+  "source": {
+    "audit": "docs/audits/2026-10-21-t18-b1-historical-claim-audit.md",
+    "audit_sha256": "de054c640ecc54017d215cb41d6a8a9e26a9f87aff7f7253539eb4df1d0d03b8",
+    "t18_eval_db_sha256": "d061f8b123c4702d6463d054bf0f2144687f02bc3b4199734c43da488ccf9aff"
+  },
+  "counts": {
+    "SUPPORTED": 24,
+    "INSUFFICIENT_EVIDENCE": 3
+  },
+  "claims": {
+    "run_ab1c836b61f4 0.4": "SUPPORTED",
+    "run_ab1c836b61f4 0.6": "SUPPORTED",
+    "run_ab1c836b61f4 1.5": "INSUFFICIENT_EVIDENCE",
+    "run_ab1c836b61f4 1.6": "SUPPORTED",
+    "run_ab1c836b61f4 2.7": "SUPPORTED",
+    "run_ab1c836b61f4 2.9": "INSUFFICIENT_EVIDENCE",
+    "run_ab1c836b61f4 3.2": "SUPPORTED",
+    "run_0b45a66fd66d 0.0": "SUPPORTED",
+    "run_0b45a66fd66d 0.1": "SUPPORTED",
+    "run_0b45a66fd66d 0.3": "SUPPORTED",
+    "run_0b45a66fd66d 2.5": "SUPPORTED",
+    "run_f388cc91cf2a 0.1": "SUPPORTED",
+    "run_f388cc91cf2a 1.2": "SUPPORTED",
+    "run_f388cc91cf2a 2.0": "SUPPORTED",
+    "run_06105d324454 1.1": "SUPPORTED",
+    "run_06105d324454 1.7": "SUPPORTED",
+    "run_06105d324454 2.6": "SUPPORTED",
+    "run_06105d324454 3.0": "SUPPORTED",
+    "run_06105d324454 3.1": "SUPPORTED",
+    "run_06105d324454 3.3": "INSUFFICIENT_EVIDENCE",
+    "run_06105d324454 3.6": "SUPPORTED",
+    "run_7be9b5b129d0 0.2": "SUPPORTED",
+    "run_7be9b5b129d0 1.3": "SUPPORTED",
+    "run_7be9b5b129d0 2.0": "SUPPORTED",
+    "run_7be9b5b129d0 3.1": "SUPPORTED",
+    "run_fc1c9560577b 2.4": "SUPPORTED",
+    "run_fc1c9560577b 3.7": "SUPPORTED"
+  }
+}
