@@ -23,7 +23,17 @@ Claim-rule violations still fail the Run, with one conservative fallback (T18 St
 draft's Claims pass, a current Claim that cites an existing Evidence item but adds a number or
 name gets that item's exact statement as its text (`replace_ungrounded_claims`, logged as
 `writer_claims_replaced`); an unknown Evidence id, a blank Claim or a Historical Claim's problem
-is never repaired, and anything still wrong fails the Run."""
+is never repaired, and anything still wrong fails the Run.
+
+Requirements and analysis (ADR-0006). The Writer is also shown a compact index of the Run's
+research requirements (what the Brief asks, which items answer each, which were not
+established), outside the Evidence budget. Every required, supported requirement must be
+answered by a Claim citing one of its items; a draft that leaves one out is retried, and repair
+fills it with the item's statement. An analytical Claim may rest on further items (`premises`):
+its numbers and names must appear in one of its cited items, it may not cite Historical items,
+and before publication it is judged against the primary Passages of all its items together
+(`judge_joint`); one that is not SUPPORTED is removed and logged. Everything repair does is
+recorded in the draft's `quality` flags: a flagged Report is degraded output, not synthesis."""
 
 import re
 
@@ -32,6 +42,7 @@ from insightforge_agent.domain.contracts import (
     Claim,
     EvidenceBundle,
     EvidenceItem,
+    ExtractionResult,
     HistoricalContext,
     ReportDraft,
     ReportSection,
@@ -47,14 +58,24 @@ from insightforge_agent.domain.memory import (
 from insightforge_agent.domain.passages import named_entities_in, numbers_in
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.plan import SubTaskPlan
+from insightforge_agent.domain.requirements import RequirementStatus, coverage_index
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.errors import RunFailed
 
-SYSTEM = """You write a cited intelligence report from an Evidence bundle. Reply with JSON only:
+SYSTEM = """You write a cited intelligence report that answers a brief from an Evidence bundle.
+Reply with JSON only:
 {"title": str, "summary": str, "sections": [{"heading": str, "claims":
-[{"text": str, "evidence_id": str, "historical": bool}]}]}
-Rules: every claim cites exactly one evidence_id and states only what that item says; every
-number and name in a claim must appear in the cited item. Do not invent evidence ids.
+[{"text": str, "evidence_id": str, "premises": [str], "historical": bool}]}]}
+Rules: every claim cites its main item as "evidence_id". A claim restating one item leaves
+"premises" empty and states only what that item says. An analytical claim (a comparison, a
+reconciliation of items that disagree, or a conclusion across items) lists the other items it
+rests on in "premises", at most 3, and states only what follows directly from all of them. Every
+number and name in a claim must appear in one of its cited items; never compute a new number
+(no totals, differences, rates or growth figures the items do not state). Do not invent
+evidence ids, and never use a historical item as a premise.
+Answer the brief: the research requirements list what it asks and which items answer each.
+Every answered requirement needs a claim citing one of its items. Where items disagree or
+measure different things, say so and why in an analytical claim instead of listing them.
 Current evidence: write one section per bundle section, with its heading, holding claims that
 cite that section's items with "historical": false.
 Historical background, when given, comes from the user's earlier reports, not from current
@@ -76,9 +97,11 @@ this research did not establish it; never state that a source, document or compa
 does not disclose information.
 Compare two figures directly only when they measure the same thing, in the same unit, for the
 same period and scope; otherwise state each with its period and say why they are not directly
-comparable."""
-# T18 CS4: writer-2 adds the temporal, absence and comparison rules above (writer-1 before).
-WRITER_PROMPT_VERSION = "writer-2"
+comparable. A comparison claim cites every item it compares."""
+# T18 CS4: writer-2 added the temporal, absence and comparison rules (writer-1 before).
+# ADR-0006: writer-3 adds premises, the requirement index and the no-new-numbers rule.
+WRITER_PROMPT_VERSION = "writer-3"
+MAX_PREMISES = 3
 
 SUMMARY_MAX_WORDS = 150
 
@@ -139,6 +162,9 @@ def violations(draft: ReportDraft, bundle: EvidenceBundle,
                 problems.append(f"the claim citing {c.evidence_id!r} under {section.heading!r} "
                                 "has no text; state what the item says")
                 continue
+            if c.historical and c.premises:
+                problems.append(f"historical claim {c.text!r} cannot have premises")
+                continue
             if c.historical:
                 h = background.get(c.evidence_id)
                 if h is None:
@@ -167,7 +193,20 @@ def violations(draft: ReportDraft, bundle: EvidenceBundle,
             if item is None:
                 problems.append(f"claim {c.text!r} cites unknown evidence_id {c.evidence_id!r}")
                 continue
-            problems += _grounding(c.text, item.statement, item.entity, f"evidence {item.id}")
+            premises = [p for p in c.premises if p != c.evidence_id]
+            bad = [p for p in premises if p not in items]
+            if bad:
+                problems.append(f"claim {c.text!r} has premises {bad} that are not current "
+                                "evidence items")
+                continue
+            if len(premises) > MAX_PREMISES:
+                problems.append(f"claim {c.text!r} has {len(premises)} premises; at most "
+                                f"{MAX_PREMISES}")
+                continue
+            cited = [item] + [items[p] for p in premises]
+            problems += _grounding(c.text, " ".join(i.statement for i in cited),
+                                   " ".join(i.entity for i in cited),
+                                   "evidence " + ", ".join(i.id for i in cited))
     headings = {_heading_key(h.heading): h.heading for h in background.values()}
     for key, heading in headings.items():
         if key not in covered:
@@ -231,12 +270,29 @@ def place_claims(draft: ReportDraft, bundle: EvidenceBundle) -> tuple[ReportDraf
     return draft.model_copy(update={"sections": kept}), moved
 
 
-def coverage_problems(draft: ReportDraft, bundle: EvidenceBundle) -> list[str]:
-    """Evidence sections that no current Claim cites."""
-    cited = {c.evidence_id for s in draft.sections for c in s.claims if not c.historical}
-    return [f"the evidence section headed {s.heading!r} has no claims; add at least one claim "
-            f"citing its items ({', '.join(i.id for i in s.items)})"
-            for s in bundle.sections if not cited & {i.id for i in s.items}]
+def coverage_problems(draft: ReportDraft, bundle: EvidenceBundle,
+                      statuses: list[RequirementStatus] | None = None) -> list[str]:
+    """Evidence sections that no current Claim cites, and required, supported research
+    requirements that no current Claim answers (cites one of their items)."""
+    cited = {e for s in draft.sections for c in s.claims if not c.historical
+             for e in c.evidence_ids()}
+    out = [f"the evidence section headed {s.heading!r} has no claims; add at least one claim "
+           f"citing its items ({', '.join(i.id for i in s.items)})"
+           for s in bundle.sections if not cited & {i.id for i in s.items}]
+    kept = {i.id for s in bundle.sections for i in s.items}
+    for r in unanswered(draft, statuses or []):
+        ids = [e for e in r.evidence_ids if e in kept]
+        out.append(f"the research requirement {r.id} ({r.question}) is answered by "
+                   f"{', '.join(ids)} but no claim cites them; add a claim that answers it")
+    return out
+
+
+def unanswered(draft: ReportDraft, statuses: list[RequirementStatus]) -> list[RequirementStatus]:
+    """Required, supported requirements no current Claim of `draft` cites an item of."""
+    cited = {e for s in draft.sections for c in s.claims if not c.historical
+             for e in c.evidence_ids()}
+    return [r for r in statuses if r.priority == "required" and r.status == "supported"
+            and r.evidence_ids and not cited & set(r.evidence_ids)]
 
 
 # Capitalised words that open a summary sentence without naming anything, beyond `_OPENERS`.
@@ -435,7 +491,7 @@ def replace_ungrounded_claims(draft: ReportDraft, bundle: EvidenceBundle,
                     and _grounding(c.text, item.statement, item.entity, f"evidence {item.id}")):
                 replaced.append({"section": si, "claim": ci, "evidence_id": item.id,
                                  "original_text": c.text[:300]})
-                c = c.model_copy(update={"text": item.statement})
+                c = c.model_copy(update={"text": item.statement, "premises": []})
             claims.append(c)
         sections.append(section.model_copy(update={"claims": claims}))
     draft = draft.model_copy(update={"sections": sections})
@@ -444,22 +500,50 @@ def replace_ungrounded_claims(draft: ReportDraft, bundle: EvidenceBundle,
     return draft, replaced
 
 
+def _fill_requirements(draft: ReportDraft, bundle: EvidenceBundle,
+                       statuses: list[RequirementStatus]) -> tuple[ReportDraft, list[str]]:
+    """Answer each unanswered required requirement with one Claim stating its best-ranked kept
+    item verbatim, filed under that item's section."""
+    order = [i for s in bundle.sections for i in s.items]
+    rank = {i.id: n for n, i in enumerate(order)}
+    extra, filled = [], []
+    for r in unanswered(draft, statuses):
+        ids = sorted((e for e in r.evidence_ids if e in rank), key=rank.__getitem__)
+        if ids:
+            item = order[rank[ids[0]]]
+            extra.append(ReportSection(heading="", claims=[Claim(text=item.statement,
+                                                                evidence_id=item.id)]))
+            filled.append(r.id)
+    if not extra:
+        return draft, []
+    grown, _ = place_claims(draft.model_copy(update={"sections": draft.sections + extra}), bundle)
+    return grown, filled
+
+
 def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
-            historical: HistoricalContext, brief: str, claims_replaced: int = 0) -> ReportDraft:
+            historical: HistoricalContext, brief: str, claims_replaced: int = 0,
+            statuses: list[RequirementStatus] | None = None) -> ReportDraft:
     """A draft whose Claims pass, made publishable in code once retries are spent. The
     published summary is non-empty, at most `SUMMARY_MAX_WORDS`, and holds only whole
-    supported sentences, whole Claims or `NO_SUMMARY`."""
+    supported sentences, whole Claims or `NO_SUMMARY`. What it did is in `quality`."""
     draft, filled = _fill_uncovered(draft, bundle)
+    draft, answered = _fill_requirements(draft, bundle, statuses or [])
     unsupported = unsupported_summary_sentences(draft.summary, bundle, historical, brief)
     dropped = {sentence for sentence, _ in unsupported}
     supported = [t for t in _summary_sentences(draft.summary) if t not in dropped]
     summary, shortened = fit_summary(supported, draft)
     draft = draft.model_copy(update={"summary": summary})
     deps.log(owner_id, run_id, "writer_repaired", filled_sections=filled,
+             filled_requirements=answered,
              removed_summary_sentences=sorted(dropped), summary_rebuilt=not supported,
              summary_shortened=shortened, summary_words=summary_words(summary),
              claims_replaced=claims_replaced)
-    if (violations(draft, bundle, historical) or coverage_problems(draft, bundle)
+    flags = ([f"claims_replaced_verbatim:{claims_replaced}"] if claims_replaced else []) + (
+        [f"sections_filled_verbatim:{len(filled)}"] if filled else []) + (
+        [f"requirements_filled_verbatim:{','.join(answered)}"] if answered else []) + (
+        ["summary_rebuilt_from_claims"] if shortened in ("claims", "placeholder") else [])
+    draft = draft.model_copy(update={"quality": [*draft.quality, *flags]})
+    if (violations(draft, bundle, historical) or coverage_problems(draft, bundle, statuses)
             or not summary.strip() or summary_words(summary) > SUMMARY_MAX_WORDS):
         raise RunFailed("the Writer's draft could not be repaired")
     return draft
@@ -468,9 +552,14 @@ def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: 
 def write_report(
     deps: Deps, owner_id: str, run_id: str, brief: str, bundle: EvidenceBundle, gaps: list[str],
     historical: HistoricalContext | None = None,
+    statuses: list[RequirementStatus] | None = None,
 ) -> ReportDraft:
     historical = historical or HistoricalContext()
+    statuses = statuses or []
     background = ""
+    if statuses:  # ADR-0006: the requirement index, outside the Evidence budget
+        background += ("\n\nResearch requirements (what the brief asks; not evidence):\n"
+                       + coverage_index(statuses))
     if gaps:  # T18 CS4: what this research did not establish, as the pipeline recorded it
         background += ("\n\nResearch gaps (stated by the pipeline):\n"
                        + "\n".join(f"- {g}" for g in gaps))
@@ -494,11 +583,13 @@ def write_report(
             last = violations(draft, bundle, historical)
             if not last:
                 usable = draft
-            last += coverage_problems(draft, bundle)
+            last += coverage_problems(draft, bundle, statuses)
             last += summary_problems(draft, bundle, historical, brief)
         except BadModelReply as e:
             last = [f"the reply was not valid report JSON: {e.brief}"]
         if not last:
+            draft = _verified_analysis(deps, owner_id, run_id, draft, bundle, historical,
+                                       brief, statuses)
             _flag_absence(deps, owner_id, run_id, draft.summary)
             return draft.model_copy(update={"gaps": gaps})
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
@@ -513,10 +604,54 @@ def write_report(
             # verified by this step nor the Writer's synthesis.
             deps.log(owner_id, run_id, "writer_claims_replaced", replaced=replaced)
     if usable is not None:
-        draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief, len(replaced))
+        draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief, len(replaced),
+                        statuses)
+        draft = _verified_analysis(deps, owner_id, run_id, draft, bundle, historical, brief,
+                                   statuses)
         _flag_absence(deps, owner_id, run_id, draft.summary)
         return draft.model_copy(update={"gaps": gaps})
     raise RunFailed(f"the Writer broke the citation rules after {deps.writer_retries} retries")
+
+
+def _verified_analysis(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
+                       bundle: EvidenceBundle, historical: HistoricalContext, brief: str,
+                       statuses: list[RequirementStatus]) -> ReportDraft:
+    """ADR-0006 §6: every current Claim with premises, judged against the primary Passages of
+    all its items together before publication. One that is not SUPPORTED is removed (logged as
+    `analytical_claim_rejected`), and the draft is repaired if that left a section or
+    requirement unanswered. A published analytical Claim has therefore been checked against
+    every premise; the sampled Fact-Checker checks some again, independently."""
+    from insightforge_agent.pipeline.support import cited_units, judge_joint
+
+    items = {i.id: i for s in bundle.sections for i in s.items}
+    rejected: list[dict] = []
+    sections = []
+    for si, section in enumerate(draft.sections):
+        claims = []
+        for ci, c in enumerate(section.claims):
+            if c.historical or not c.premises:
+                claims.append(c)
+                continue
+            cited = [items[e] for e in c.evidence_ids()]
+            units = cited_units(deps, owner_id, c.text, [i.primary for i in cited])
+            joint = judge_joint(deps, owner_id, run_id, c.text, units, section=si, claim=ci)
+            if joint.verdict == "SUPPORTED":
+                claims.append(c)
+            else:
+                rejected.append({"section": si, "claim": ci, "evidence_ids": c.evidence_ids(),
+                                 "verdict": joint.verdict, "problems": list(joint.problems)})
+        sections.append(section.model_copy(update={"claims": claims}))
+    if not rejected:
+        return draft
+    deps.log(owner_id, run_id, "analytical_claim_rejected", rejected=rejected)
+    draft = draft.model_copy(update={
+        "sections": [s for s in sections if s.claims],
+        "quality": [*draft.quality, f"analytical_claims_removed:{len(rejected)}"]})
+    if coverage_problems(draft, bundle, statuses) or unsupported_summary_sentences(
+            draft.summary, bundle, historical, brief):
+        draft = _repair(deps, owner_id, run_id, draft, bundle, historical, brief,
+                        statuses=statuses)
+    return draft
 
 
 # T18 CS4: a summary sentence asserting that a source lacks something. Measured, never removed.
@@ -544,12 +679,14 @@ _PROVENANCE_DROP = {DROP_LITERAL, DROP_NO_CITATION}
 
 
 def research_gaps(*, plan: SubTaskPlan, research: ResearchResults, bundle: EvidenceBundle,
-                  events: list[dict], documents: list[tuple[str, list[Passage]]]) -> list[str]:
+                  events: list[dict], documents: list[tuple[str, list[Passage]]],
+                  extraction: ExtractionResult | None = None) -> list[str]:
     """What this Run did not establish, from its own records, in fixed wording (T18 CS4):
     a failed Sub-task with its reported reason; a recovered documents Sub-task with what was
-    kept; a Sub-task whose material produced no kept Evidence, with why; and the sections of an
-    uploaded document no Sub-task read. Never that a Source lacks something, and never that
-    retrieved material was verified."""
+    kept; a Sub-task whose material produced no kept Evidence, with why; a Sub-task some of whose
+    Passages could not be read after bounded retries (ADR-0006 §4), whatever else it kept; and
+    the sections of an uploaded document no Sub-task read. Never that a Source lacks something,
+    and never that retrieved material was verified."""
     by_type: dict[str, list[dict]] = {}
     for e in events:
         by_type.setdefault(e["type"], []).append(e["payload"])
@@ -589,7 +726,7 @@ def research_gaps(*, plan: SubTaskPlan, research: ResearchResults, bundle: Evide
             drops = logged("evidence_dropped", t.id)
             provenance = sum(p["reason"] in _PROVENANCE_DROP for p in drops)
             unsupported = sum(p["reason"] == DROP_UNSUPPORTED for p in drops)
-            failed_calls = len(logged("draft_batch_failed", t.id))
+            failed_calls = len(logged("draft_batch_failed", t.id))  # T5-T18 Run logs
             line = f"{head}: this research did not establish it"
             if drops:
                 line += (f"; {len(drops)} drafted item(s) were not kept ({provenance} failed the "
@@ -598,6 +735,18 @@ def research_gaps(*, plan: SubTaskPlan, research: ResearchResults, bundle: Evide
             if failed_calls:
                 line += f"{',' if drops else ';'} and {failed_calls} drafting call(s) failed"
             lines.append(line + ".")
+    lost = (extraction or ExtractionResult()).failed_units
+    for t in sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id)):
+        r = results.get(t.id)
+        if r is None or r.status != "succeeded":
+            continue
+        mine = {s.source_id for s in r.source_refs}
+        units = [u for u in lost if u.source_id in mine]
+        if units:
+            lines.append(f"Sub-task {t.id} ({t.query}): {sum(len(u.passages) for u in units)} "
+                         f"Passage(s) in {len(units)} extraction batch(es) could not be read "
+                         "after bounded retries (" + ", ".join(sorted({u.reason for u in units}))
+                         + "); facts they may state were not considered.")
     used = {(p.observation_id, p.index) for r in research.results if r.status == "succeeded"
             for ref in r.source_refs for p in ref.passages}
     for title, passages in documents:

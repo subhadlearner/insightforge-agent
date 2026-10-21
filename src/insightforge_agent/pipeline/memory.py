@@ -73,7 +73,9 @@ class Lineage:
 
 def claim_lineage(report: Report, section: int, claim: int) -> Lineage | None:
     """The lineage of one Claim, or None when there is no such Claim, the Fact-Checker marked
-    it unverified, or its Evidence or Historical item is missing from the Report."""
+    it unverified, its Evidence or Historical item is missing from the Report, or it is an
+    analytical Claim (ADR-0006: it rests on several items, and a Historical item carries one
+    lineage, so it never becomes background)."""
     body = report.body
     draft = ReportDraft.model_validate(body["draft"])
     if not (0 <= section < len(draft.sections) and 0 <= claim < len(draft.sections[section].claims)):
@@ -82,6 +84,8 @@ def claim_lineage(report: Report, section: int, claim: int) -> Lineage | None:
            for v in body.get("verified", {}).get("verdicts", [])):
         return None
     c = draft.sections[section].claims[claim]
+    if c.premises and not c.historical:
+        return None
     if c.historical:  # reuse the stored lineage: the original Report and Passages, not this one
         h = HistoricalContext.model_validate(body.get("historical") or {}).by_id().get(
             c.evidence_id)

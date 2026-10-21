@@ -96,8 +96,17 @@ from insightforge_agent.pipeline.memory import (
     resolve_historical,
     summaries_for_planner,
 )
+from insightforge_agent.pipeline.requirements import derive_requirements
 from insightforge_agent.pipeline.synthesize import synthesize
 from insightforge_agent.pipeline.write import research_gaps, write_report
+from insightforge_agent.domain.requirements import (
+    RequirementLedger,
+    RequirementStatus,
+    aspect_ledger,
+    assess,
+    gap_lines,
+    mark_reported,
+)
 
 IMPLEMENTED_SOURCE_TYPES = ["web", "documents", "memory"]
 
@@ -150,6 +159,8 @@ class State(TypedDict, total=False):
     question: str  # the Planner's one clarifying question, once asked
     clarification: dict  # its stored resolution: question, resolution, answer
     limitations: list[str]  # Gaps & limitations decided before writing (a timed-out question)
+    requirements: dict  # ADR-0006 RequirementLedger, derived once the plan is accepted
+    ledger_status: list  # RequirementStatus per requirement, after writing
 
 
 def summaries_from_log(deps: Deps, owner_id: str, run_id: str) -> dict[str, SourceRef]:
@@ -429,7 +440,9 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
             limitations.append(timeout_limitation(clarification["question"],
                                                   plan_assumption(thread_messages)[:500]))
             deps.log(owner, run_id, "plan_assumption", detail=limitations[0])
-        return {"plan": plan.model_dump(), "repaired": False, "limitations": limitations}
+        ledger = derive_requirements(deps, owner, run_id, state["brief"], plan)
+        return {"plan": plan.model_dump(), "repaired": False, "limitations": limitations,
+                "requirements": ledger.model_dump()}
 
     def clarify(state: State) -> State:
         """AWAITING_CLARIFICATION: the graph stops here, checkpointed, until `resume_run` resumes
@@ -628,11 +641,20 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                         + (f", pages {', '.join(map(str, pages))}" if pages else "")))
         return out
 
+    def ledger_of(state: State) -> RequirementLedger:
+        """The Run's requirements ledger; a Run checkpointed before ADR-0006 has none, and gets
+        the one-per-Aspect fallback."""
+        if state.get("requirements"):
+            return RequirementLedger.model_validate(state["requirements"])
+        return aspect_ledger(SubTaskPlan.model_validate(state["plan"]))
+
     def extracting(state: State) -> State:
         enter(state, RunState.EXTRACTING)
         research = ResearchResults.model_validate(state["research"])
         scope = research.passage_scope()
-        result = extract(deps, state["owner_id"], state["run_id"], list(scope), scope)
+        result = extract(deps, state["owner_id"], state["run_id"], list(scope), scope,
+                         plan=SubTaskPlan.model_validate(state["plan"]), research=research,
+                         ledger=ledger_of(state))
         return {"extraction": result.model_dump()}
 
     def synthesizing(state: State) -> State:
@@ -642,6 +664,7 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
             SubTaskPlan.model_validate(state["plan"]),
             ResearchResults.model_validate(state["research"]),
             ExtractionResult.model_validate(state["extraction"]),
+            ledger_of(state),
         )
         if not bundle.sections and not historical_of(state).items:
             raise RunFailed("no Evidence item survived synthesis")
@@ -658,12 +681,24 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         for sid in state.get("documents", []):
             contents = deps.store.read_run_source(owner, run_id, sid)
             documents.append((contents.source.title, contents.passages))
+        plan = SubTaskPlan.model_validate(state["plan"])
+        extraction = ExtractionResult.model_validate(state["extraction"])
+        historical = historical_of(state)
+        # ADR-0006 §5: each requirement's status from the kept items, before writing; what is
+        # not established becomes a gap line, so Gaps & limitations matches the ledger.
+        statuses = assess(ledger_of(state), plan, research, extraction,
+                          [i for s in bundle.sections for i in s.items],
+                          {h.aspect_id for h in historical.items})
         gaps = list(state.get("limitations", [])) + research_gaps(
-            plan=SubTaskPlan.model_validate(state["plan"]), research=research, bundle=bundle,
-            events=log, documents=documents)
+            plan=plan, research=research, bundle=bundle, events=log, documents=documents,
+            extraction=extraction) + gap_lines(statuses)
         draft = write_report(deps, state["owner_id"], state["run_id"], state["brief"], bundle,
-                             gaps, historical_of(state))
-        return {"draft": draft.model_dump()}
+                             gaps, historical, statuses)
+        statuses = mark_reported(statuses, draft)
+        deps.log(owner, run_id, "requirements_assessed",
+                 statuses=[{"id": r.id, "status": r.status, "evidence_ids": r.evidence_ids,
+                            "claims": r.claims} for r in statuses])
+        return {"draft": draft.model_dump(), "ledger_status": [r.model_dump() for r in statuses]}
 
     def fact_checking(state: State) -> State:
         enter(state, RunState.FACT_CHECKING)
@@ -691,7 +726,15 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                 body={"brief": state["brief"], "draft": draft.model_dump(mode="json"),
                       "verified": verified.model_dump(mode="json"),
                       "evidence": EvidenceBundle.model_validate(state["bundle"]).model_dump(mode="json"),
-                      "historical": historical_of(state).model_dump(mode="json")},
+                      "historical": historical_of(state).model_dump(mode="json"),
+                      # ADR-0006: the requirements ledger and what could not be read.
+                      "ledger": {
+                          **ledger_of(state).model_dump(mode="json"),
+                          "status": [RequirementStatus.model_validate(r).model_dump(mode="json")
+                                     for r in state.get("ledger_status") or []],
+                          "failed_units": [u.model_dump(mode="json") for u in
+                                           ExtractionResult.model_validate(
+                                               state.get("extraction") or {}).failed_units]}},
             )
             # Index and summarise first, store the Report last: a stored Report is always
             # finalised, so no COMPLETE Run (or recovered one) lacks its summary or index.

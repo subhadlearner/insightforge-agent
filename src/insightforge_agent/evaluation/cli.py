@@ -63,6 +63,9 @@ from insightforge_agent.llm import (
     configured_model_name,
 )
 from insightforge_agent.pipeline.deps import Deps
+from insightforge_agent.pipeline.extract import EXTRACT_PROMPT_VERSION
+from insightforge_agent.pipeline.requirements import REQUIREMENTS_PROMPT_VERSION
+from insightforge_agent.pipeline.support import SUPPORT_PROMPT_VERSION
 from insightforge_agent.pipeline.write import WRITER_PROMPT_VERSION
 from insightforge_agent.pipeline.wiring import build_deps
 from insightforge_agent.stores.sqlite import SqliteRepos
@@ -145,11 +148,20 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         "passage_token_cap": deps.passage_token_cap,
         "run_token_cap": deps.run_token_cap,
         "writer_retries": deps.writer_retries,
-        # T18 remediation behaviours: a run under them is never the T18 baseline.
+        # T18 remediation behaviours: a run under them is never the T18 baseline. Since ADR-0006
+        # the structured-output setting and the Passage cap apply to Extraction, the only call
+        # that proposes facts.
         "draft_structured_output": "on" if deps.native_json is not None else "off",
         "draft_passage_cap": deps.draft_passage_cap,
-        "fact_check_method": "f2+counterpart-v1" if deps.fact_check_counterpart else "f2",
+        "fact_check_method": (f"{SUPPORT_PROMPT_VERSION}+cited" if deps.fact_check_counterpart
+                              else SUPPORT_PROMPT_VERSION),
         "writer_prompt_version": WRITER_PROMPT_VERSION,
+        # ADR-0006: the evidence-bound pipeline and its prompt versions.
+        "evidence_pipeline": "adr-0006",
+        "support_prompt_version": SUPPORT_PROMPT_VERSION,
+        "extract_prompt_version": EXTRACT_PROMPT_VERSION,
+        "requirements_prompt_version": REQUIREMENTS_PROMPT_VERSION,
+        "work_unit_retry_cap": deps.work_unit_retry_cap,
         # The effective Evidence thresholds: they set Confidence and ranking.
         "credibility_high": deps.thresholds.credibility_high,
         "credibility_medium": deps.thresholds.credibility_medium,

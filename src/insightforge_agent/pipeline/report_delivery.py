@@ -193,18 +193,18 @@ def _claim_sources(
     seen: set[str] = set()
     for section in verified.draft.sections:
         for claim in section.claims:
-            ref = refs.get(claim.evidence_id)
-            if ref is None:
-                raise ProvenanceError(
-                    f"report {report.id}: claim cites unknown item {claim.evidence_id}"
-                )
-            try:
-                source = store.source_for_passage(owner_id, ref)
-            except NotFoundError as e:
-                raise ProvenanceError(f"report {report.id}: {e}") from e
-            if source.id not in seen:
-                sources.append(source)
-                seen.add(source.id)
+            # ADR-0006: an analytical Claim's premises are Sources it rests on too.
+            for eid in ([claim.evidence_id] if claim.historical else claim.evidence_ids()):
+                ref = refs.get(eid)
+                if ref is None:
+                    raise ProvenanceError(f"report {report.id}: claim cites unknown item {eid}")
+                try:
+                    source = store.source_for_passage(owner_id, ref)
+                except NotFoundError as e:
+                    raise ProvenanceError(f"report {report.id}: {e}") from e
+                if source.id not in seen:
+                    sources.append(source)
+                    seen.add(source.id)
     return verified, dates, sources
 
 
@@ -239,11 +239,15 @@ def markdown_export(report: Report, store: SourceStore, owner_id: str) -> str:
     for section, confidence in zip(draft.sections, confidences, strict=True):
         lines += [f"## {section.heading}", "", f"*{confidence_label(confidence)}*", ""]
         for claim in section.claims:
-            source = store.source_for_passage(owner_id, refs[claim.evidence_id])
+            cited = list({source.id: source for source in (
+                store.source_for_passage(owner_id, refs[e])
+                for e in ([claim.evidence_id] if claim.historical else claim.evidence_ids()))
+            }.values())
             historical = (f"Background from an earlier Report of {dates[claim.evidence_id]}: "
                           if claim.historical and claim.evidence_id in dates
                           else "Background from an earlier Report: " if claim.historical else "")
-            lines.append(f"- {historical}{claim.text} {inline_source(source)}")
+            lines.append(f"- {historical}{claim.text} "
+                         + " ".join(inline_source(source) for source in cited))
         lines.append("")
     if draft.gaps:
         lines += ["## Gaps & limitations", ""]

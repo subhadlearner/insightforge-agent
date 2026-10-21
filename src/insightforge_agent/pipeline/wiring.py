@@ -58,6 +58,7 @@ def build_deps(settings: Settings, repos: Any, checkpointer: Any,
         native_json=native_json if settings.draft_structured_output else None,
         draft_passage_cap=settings.draft_passage_cap,
         fact_check_counterpart=settings.fact_check_counterpart,
+        work_unit_retry_cap=settings.work_unit_retry_cap,
         timeouts=timeouts,
         clarification_timeout=timedelta(minutes=settings.clarification_timeout_minutes),
         thresholds=Thresholds(

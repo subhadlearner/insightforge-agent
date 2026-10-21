@@ -43,12 +43,15 @@ class Settings(BaseSettings):
     fact_check_rate: float = 0.2
     fact_check_minimum: int = 5
     similarity_threshold: float = 0.85
-    # T18 CS3: drafting through the provider's native structured output (where one exists),
-    # and an optional bound on Passages per drafting call (None: only the token cap bounds it).
+    # T18 CS3: native structured output (where one exists) and an optional bound on Passages
+    # per call (None: only the token cap bounds it); since ADR-0006 both apply to Extraction,
+    # the only call that proposes facts.
     draft_structured_output: bool = True
     draft_passage_cap: int | None = Field(default=None, gt=0)
-    # T18 CS1A: the Fact-Checker's cited-Passage counterpart fallback.
+    # T18 CS1A, ADR-0006 §7: the Fact-Checker looks up the cited Passage on the re-fetched page.
     fact_check_counterpart: bool = True
+    # ADR-0006 §4: retries one Run may spend recovering truncated or invalid work units.
+    work_unit_retry_cap: int = Field(default=12, ge=0)
     credibility_high: float = 0.65
     credibility_medium: float = 0.4
     recency_fresh_days: int = 365

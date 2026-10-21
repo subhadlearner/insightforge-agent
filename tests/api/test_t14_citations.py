@@ -120,7 +120,8 @@ def test_a_current_claim_resolves_to_its_primary_passage_and_source(app):
         "source_title": "Title src_obs_1", "source_domain": "example.com",
         "published_at": "2029-11-05T00:00:00Z",
         "credibility_score": 0.8, "passage": {"observation_id": "obs_1", "index": 2},
-        "passage_text": "obs_1 p2", "page": None, "section_heading": None}]
+        "passage_text": "obs_1 p2", "page": None, "section_heading": None,
+        "premises": []}]  # ADR-0006: a single-item Claim rests on no premise
 
 
 def test_a_document_passage_carries_its_page_and_heading(app):
@@ -321,4 +322,4 @@ def test_the_openapi_schema_is_a_typed_citation_list(app):
     citation = spec["components"]["schemas"]["Citation"]
     assert {"section", "claim", "evidence_id", "source_id", "source_title", "source_domain",
             "published_at", "credibility_score", "passage", "passage_text", "page",
-            "section_heading"} == set(citation["properties"])
+            "section_heading", "premises"} == set(citation["properties"])

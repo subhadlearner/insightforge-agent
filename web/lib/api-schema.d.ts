@@ -552,6 +552,8 @@ export interface components {
             page?: number | null;
             /** Section Heading */
             section_heading?: string | null;
+            /** Premises */
+            premises?: components["schemas"]["Citation"][];
         };
         /** Claim */
         Claim: {
@@ -564,6 +566,8 @@ export interface components {
              * @default false
              */
             historical: boolean;
+            /** Premises */
+            premises?: string[];
         };
         /**
          * Clarification

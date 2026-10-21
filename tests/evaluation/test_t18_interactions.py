@@ -83,21 +83,22 @@ def events(repos, owner, run_id, type_=None):
 
 
 def test_every_brief_completes_and_the_report_records_each_t18_behaviour(on, off):
-    for report, expected in ((on[0], ("on", 2, "f2+counterpart-v1")),
-                             (off[0], ("off", None, "f2"))):
+    for report, expected in ((on[0], ("on", 2, "support-1+cited")),
+                             (off[0], ("off", None, "support-1"))):
         assert {s["status"] for s in samples(report).values()} == {"complete"}
         c = report["providers"][0]["conditions"]
         assert (c["draft_structured_output"], c["draft_passage_cap"], c["fact_check_method"],
-                c["writer_prompt_version"]) == (*expected, "writer-2")
+                c["writer_prompt_version"]) == (*expected, "writer-3")
 
 
-def test_only_drafting_used_the_native_path_and_each_call_held_at_most_the_cap(on):
+def test_only_extraction_used_the_native_path_and_each_call_held_at_most_the_cap(on):
     _, world, _, native = on
-    assert native.schemas and set(native.schemas) == {"_Drafts"}
+    assert native.schemas and set(native.schemas) == {"_Facts"}
     light = world.built["anthropic"].light_model
-    drafts = [str(c[-1].content) for c in light.seen
-              if str(c[0].content).startswith("You draft evidence")]
-    assert drafts and all(len(re.findall(r"^\[\d+\] ", d, re.MULTILINE)) <= 2 for d in drafts)
+    extractions = [str(c[-1].content) for c in light.seen
+                   if str(c[0].content).startswith("You extract facts")]
+    assert extractions and all(len(re.findall(r"^\[\d+\] ", d, re.MULTILINE)) <= 2
+                               for d in extractions)
 
 
 def test_switched_off_the_fallback_never_runs(off):
@@ -107,13 +108,13 @@ def test_switched_off_the_fallback_never_runs(off):
 
 
 @pytest.mark.parametrize("which", ["on", "off"])
-def test_no_claim_is_verified_without_an_entailment_supported(which, on, off):
+def test_no_claim_is_verified_without_a_supported_judgment(which, on, off):
     report, _, repos = (on[0], on[1], on[2]) if which == "on" else off
     for s in samples(report).values():
         body = repos.reports.get_for_run(s["owner_id"], s["run_id"]).body
         supported = {(e.payload["section"], e.payload["claim"])
-                     for e in events(repos, s["owner_id"], s["run_id"], "fact_check_entailment")
-                     if any(vs == ["SUPPORTED"] for vs in e.payload["verdicts"].values())}
+                     for e in events(repos, s["owner_id"], s["run_id"], "fact_check_support")
+                     if "SUPPORTED" in e.payload["verdicts"]}
         for v in body["verified"]["verdicts"]:
             if v["verdict"] == "verified":
                 assert (v["section"], v["claim"]) in supported, (s["sample_id"], v)

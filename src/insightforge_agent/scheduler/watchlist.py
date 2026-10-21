@@ -312,8 +312,8 @@ class WatchlistScheduler:
 def report_seeds(deps, owner_id, report) -> list[BaselineSeed]:
     """A successful Report's current Claims with their structured Evidence and provenance.
     Used for the Baseline seed and, by the Diff, for every later Run: the same eligibility
-    (current Claims only, never Historical or unverified ones; every supporting Observation
-    fetched by this Run from a web Source). Raises InvalidBaselineCandidate only for defects of
+    (current single-item Claims only, never Historical, analytical or unverified ones; every
+    supporting Observation fetched by this Run from a web Source). Raises InvalidBaselineCandidate only for defects of
     the Report's own stored data; anything else (a store outage, a bug) propagates and is
     retried."""
     body = report.body
@@ -340,7 +340,9 @@ def report_seeds(deps, owner_id, report) -> list[BaselineSeed]:
     seeds = []
     for si, section in enumerate(verified.draft.sections):
         for ci, claim in enumerate(section.claims):
-            if claim.historical or (si, ci) in rejected:
+            # An analytical Claim (ADR-0006: with premises) is derived from several items: it
+            # never establishes or confirms a Finding.
+            if claim.historical or claim.premises or (si, ci) in rejected:
                 continue
             item = items.get(claim.evidence_id)
             if item is None:

@@ -82,7 +82,7 @@ def test_a_stated_period_is_never_flagged_whatever_the_publication_date():
 
 def test_synthesis_sets_publication_date_and_window_flag_conservatively(make_deps):
     from tests.pipeline.test_extraction_synthesis import BRIEF, NOW, OWNER, RUN, all_supported, light
-    from insightforge_agent.domain.contracts import ExtractionResult
+    from insightforge_agent.pipeline.extract import extract
     from insightforge_agent.pipeline.synthesize import synthesize
 
     deps = make_deps(now=lambda: NOW)
@@ -105,7 +105,9 @@ def test_synthesis_sets_publication_date_and_window_flag_conservatively(make_dep
                 source_type="web", time_horizon_months=6, priority=1)])
     research = ResearchResults(results=[SubTaskResult(subtask_id="s1", status="succeeded",
         source_refs=[SourceRef(source_id=s, title=u, summary="s") for u, s in sources.items()])])
-    b = synthesize(deps, OWNER, RUN, BRIEF, plan, research, ExtractionResult())
+    scope = research.passage_scope()
+    extraction = extract(deps, OWNER, RUN, list(scope), scope, plan=plan, research=research)
+    b = synthesize(deps, OWNER, RUN, BRIEF, plan, research, extraction)
     by_text = {i.statement: i for s in b.sections for i in s.items}
     old, new, dated = (by_text[t] for t in (
         "BYD cut prices by 34% to stimulate demand.", "BYD cut prices by 12% to clear stock.",
@@ -136,7 +138,7 @@ def test_the_budget_counts_exactly_the_bundle_text_the_writer_is_shown(make_deps
 
 def test_more_evidence_than_the_budget_is_cut_lowest_rank_first_and_logged(make_deps):
     from tests.pipeline.test_extraction_synthesis import BRIEF, NOW, OWNER, RUN, all_supported, light
-    from insightforge_agent.domain.contracts import ExtractionResult
+    from insightforge_agent.pipeline.extract import extract
     from insightforge_agent.pipeline.synthesize import synthesize
 
     deps = make_deps(now=lambda: NOW, evidence_budget_tokens=400)
@@ -151,7 +153,9 @@ def test_more_evidence_than_the_budget_is_cut_lowest_rank_first_and_logged(make_
                 priority=1)])
     research = ResearchResults(results=[SubTaskResult(subtask_id="s1", status="succeeded",
         source_refs=[SourceRef(source_id=sid, title="x", summary="s")])])
-    b = synthesize(deps, OWNER, RUN, BRIEF, plan, research, ExtractionResult())
+    scope = research.passage_scope()
+    extraction = extract(deps, OWNER, RUN, list(scope), scope, plan=plan, research=research)
+    b = synthesize(deps, OWNER, RUN, BRIEF, plan, research, extraction)
     cut = [e.payload for e in deps.repos.events.read_after(OWNER, RUN) if e.type == "evidence_cut"]
     kept = sum(len(s.items) for s in b.sections)
     assert bundle_tokens(b) <= 400 and kept + len(cut) == 60 and cut
@@ -162,7 +166,7 @@ def test_more_evidence_than_the_budget_is_cut_lowest_rank_first_and_logged(make_
 
 def test_the_writer_is_told_how_to_state_absence_and_when_to_compare():
     prompt = " ".join(SYSTEM.split())
-    assert WRITER_PROMPT_VERSION == "writer-2"
+    assert WRITER_PROMPT_VERSION == "writer-3"
     assert "say that this research did not establish it" in prompt
     assert "never state that a source, document or company lacks" in prompt
     assert "same thing, in the same unit, for the same period and scope" in prompt

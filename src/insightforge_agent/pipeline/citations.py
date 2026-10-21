@@ -2,7 +2,9 @@
 
 Independent of the Fact-Checker's sample, so the citation drawer works for all Claims. A
 Historical Claim resolves to the original primary Passage it inherited from the earlier Report.
-Any gap in that chain raises ProvenanceError: no Claim is ever skipped or given a stand-in."""
+An analytical Claim (ADR-0006: with premises) also carries the primary citation of each premise,
+so a conclusion resting on several Sources never shows as resting on one. Any gap in that chain
+raises ProvenanceError: no Claim is ever skipped or given a stand-in."""
 
 from typing import NamedTuple
 
@@ -47,10 +49,16 @@ def claim_citations(store: SourceStore, owner_id: str, report: Report) -> list[C
             if ref is None:
                 resolved: Citation | ProvenanceError = ProvenanceError(
                     f"report {report.id}: claim {si}.{ci} cites unknown item {c.evidence_id}")
+            elif any(p not in primary for p in c.premises if not c.historical):
+                resolved = ProvenanceError(
+                    f"report {report.id}: claim {si}.{ci} has a premise that is not an item")
             else:
                 try:
-                    resolved = store.citation(owner_id, ref).model_copy(
-                        update={"section": si, "claim": ci, "evidence_id": c.evidence_id})
+                    resolved = store.citation(owner_id, ref).model_copy(update={
+                        "section": si, "claim": ci, "evidence_id": c.evidence_id,
+                        "premises": [store.citation(owner_id, primary[p]).model_copy(update={
+                            "section": si, "claim": ci, "evidence_id": p})
+                            for p in c.premises if p != c.evidence_id and not c.historical]})
                 except NotFoundError as e:
                     resolved = ProvenanceError(f"report {report.id}: claim {si}.{ci}: {e}")
                     resolved.__cause__ = e  # as `raise ... from e` would chain it

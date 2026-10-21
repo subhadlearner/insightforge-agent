@@ -13,7 +13,7 @@ from tests.api.support import App, Gate, T0, wait_until
 from tests.api.test_t11_lifecycle import setup, tick
 from tests.pipeline import fakes
 from tests.pipeline.test_t9_clarification import Clock
-from tests.scripted import ScriptedChat
+from tests.scripted import SUPPORT_PREFIX, ScriptedChat, support_verdicts
 
 PRICE_URL = "https://www.example-auto-news.com/pricing-war"
 PRICE = "Tesla cut the starting price of the Model 3 to {} dollars in China."
@@ -36,9 +36,9 @@ class MutableSearch(fakes.FixtureSearch):
 
 
 def structured_light():
-    """fakes.light(), except: the price sentence is drafted as a structured fact, entailment
-    says the passage asserts a present state (so the period is derived from the fetch), and
-    the Finding judge leaves every unstructured Claim unsupported."""
+    """fakes.light(), except: the price sentence is extracted as a structured fact, the support
+    judgment says the passage asserts a present state (so the period is derived from the fetch),
+    and the Finding judge leaves every unstructured Claim unsupported."""
     base = fakes.light()
 
     def reply(messages):
@@ -49,21 +49,18 @@ def structured_light():
             return AIMessage(content=json.dumps({"judgments": [
                 {"index": c["index"], "predicate": "unsupported", "polarity": "affirmed"}
                 for c in claims]}))
-        if system.startswith("You draft evidence"):
-            items = []
+        if system.startswith("You extract facts"):
+            facts = []
             for i, text in re.findall(r"\[(\d+)\] (.+)", user):
-                item = {"statement": text.strip(), "passages": [int(i)], "entities": []}
+                fact = {"passage_index": int(i), "statement": text.strip(), "entities": []}
                 m = re.search(r"Model 3 to ([\d,]+ dollars) in China", text)
                 if m:
-                    item.update(entity="Model 3", predicate="starting_price",
+                    fact.update(entity="Model 3", predicate="starting_price",
                                 value=m.group(1), scope="China")
-                items.append(item)
-            return AIMessage(content=json.dumps({"items": items}))
-        if system.startswith("You judge whether"):
-            verdicts = [{"passage": int(i), "verdict": "SUPPORTED",
-                         "asserts_present_state": True}
-                        for i in re.findall(r"^\[(\d+)\] ", user, re.MULTILINE)]
-            return AIMessage(content=json.dumps({"verdicts": verdicts}))
+                facts.append(fact)
+            return AIMessage(content=json.dumps({"facts": facts}))
+        if system.startswith(SUPPORT_PREFIX):
+            return AIMessage(content=json.dumps({"verdicts": support_verdicts(user, present=True)}))
         return base.reply(messages)
     return ScriptedChat(reply=reply)
 
