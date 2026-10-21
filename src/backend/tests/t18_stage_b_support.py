@@ -1,5 +1,5 @@
-"""What the paid T18 Stage B harness (tests/live/test_t18_stage_b.py) runs, kept outside
-tests/live so it is exercised offline (tests/test_t18_stage_b_support.py): the models, the
+"""What the paid T18 Stage B harness (tests/live/test_historical_stage_b_live.py) runs, kept outside
+tests/live so it is exercised offline (tests/test_historical_stage_b_harness.py): the models, the
 spending guard, the saved-data access and the B-1 entailment step. No model is called here."""
 
 import hashlib

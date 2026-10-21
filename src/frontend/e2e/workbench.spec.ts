@@ -303,7 +303,7 @@ test("a one-shot Brief stops at 500 characters in the browser and at the API", a
   await brief.fill("\u{1F697}".repeat(500)); // 1000 UTF-16 code units, 500 characters
   await expect(page.getByTestId("brief-count")).toHaveText("500/500");
 
-  // The server counts the same way (that no Run is created is src/backend/tests/api/test_t20_brief_limit.py).
+  // The server counts the same way (that no Run is created is src/backend/tests/api/test_brief_length_limit.py).
   expect((await request.post("/api/session", { data: { persona_id: "alice" } })).ok()).toBeTruthy();
   for (const over of ["a".repeat(501), "\u{1F697}".repeat(501)]) {
     const refused = await request.post("/api/research/run", { data: { brief: over } });

@@ -1,6 +1,6 @@
 """T18 live-validation acceptance rules (Stages B and C), as pure functions over recorded
-results, so each rule is unit-tested offline before any paid run (tests/test_t18_acceptance.py)
-and applied unchanged by the live harness (tests/live/test_t18_stage_b.py) or to a finished
+results, so each rule is unit-tested offline before any paid run (tests/test_historical_acceptance_rules.py)
+and applied unchanged by the live harness (tests/live/test_historical_stage_b_live.py) or to a finished
 evaluation:
 
     uv run python -m tests.t18_acceptance b3 <judge-report.json>

@@ -36,8 +36,8 @@ from insightforge_agent.stores.doc_chunks import DocChunkIndex
 from insightforge_agent.stores.report_sections import ReportSectionIndex
 from insightforge_agent.stores.source_store import PassageDraft, SourceStore
 from tests.pipeline import fakes
-from tests.pipeline.test_t8_memory import MEMORY_QUERIES
-from tests.pipeline.test_t8_memory import writer as historical_writer
+from tests.pipeline.test_memory_research import MEMORY_QUERIES
+from tests.pipeline.test_memory_research import writer as historical_writer
 from tests.scripted import ScriptedChat, ai, call
 from tests.paths import REPO_ROOT
 

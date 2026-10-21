@@ -14,7 +14,7 @@ vi.mock("@/lib/navigation", () => ({ hardNavigate: vi.fn() }));
 const m = vi.mocked(api);
 const PERSONA: api.Persona = { id: "bob", display_name: "Bob Strategist", source_toggles: { web: true, documents: false, memory: true } };
 
-// The same cases src/backend/tests/api/test_t20_brief_limit.py sends to the server.
+// The same cases src/backend/tests/api/test_brief_length_limit.py sends to the server.
 type Case = { name: string; prefix: string; unit: string; repeat: number; suffix: string; length: number };
 const CASES: Case[] = fixture.cases;
 const textOf = (c: Case) => c.prefix + c.unit.repeat(c.repeat) + c.suffix;

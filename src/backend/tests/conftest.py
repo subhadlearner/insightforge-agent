@@ -17,7 +17,7 @@ _TIER_OF = {
                  _HERE / "test_llm.py"],
     "replay": [_HERE / "benchmark" / "test_judge_and_recording.py",
                _HERE / "benchmark" / "test_report_and_cli.py",
-               _HERE / "benchmark" / "test_integrity_corrections.py"],
+               _HERE / "benchmark" / "test_recording_and_ledger_integrity.py"],
 }
 
 

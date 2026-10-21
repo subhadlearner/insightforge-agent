@@ -207,12 +207,12 @@ def test_a_thinking_only_reply_is_empty_text(monkeypatch):
     assert (d.kind, d.length, d.stop_reason, d.reasoning_tokens) == ("empty", 0, "max_tokens", 4096)
 
 
-# ---- the proposed live probe (tests/live/test_f3_json_probe.py) is set up right, offline ----
+# ---- the proposed live probe (tests/live/test_drafting_output_ceiling_probe.py) is set up right, offline ----
 
 def test_the_f3_probe_fills_exactly_one_full_drafting_batch():
     from insightforge_agent.domain.passages import batch_passages, render_batch
     from insightforge_agent.domain.tokens import estimate_tokens
-    from tests.live.test_f3_json_probe import probe_batch, probe_passages
+    from tests.live.test_drafting_output_ceiling_probe import probe_batch, probe_passages
 
     cap = Settings(llm_provider="fake", search_providers="fake").passage_token_cap
     batch = probe_batch(cap)
@@ -222,7 +222,7 @@ def test_the_f3_probe_fills_exactly_one_full_drafting_batch():
 
 
 def test_the_f3_probe_model_is_the_light_model_with_sdk_retries_off():
-    from tests.live.test_f3_json_probe import probe_model
+    from tests.live.test_drafting_output_ceiling_probe import probe_model
 
     model = probe_model(Settings(llm_provider="anthropic", anthropic_api_key="x",
                                  tavily_api_key="t"))

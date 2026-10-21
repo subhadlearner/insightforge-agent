@@ -11,7 +11,7 @@ from insightforge_agent.domain.models import RunState
 from insightforge_agent.pipeline.citations import report_citations
 from insightforge_agent.pipeline.graph import run_brief
 from insightforge_agent.stores.doc_chunks import COLLECTION, DocChunkIndex
-from tests.pipeline.test_t7_documents import events, researchers
+from tests.pipeline.test_uploaded_documents import events, researchers
 from tests.scripted import ScriptedChat, ai, call
 from tests.paths import REPO_ROOT
 

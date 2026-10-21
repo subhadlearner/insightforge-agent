@@ -1,7 +1,7 @@
 """The ADR-0006 live support gate: what it asks, and how its result is decided. No model is
-called here; tests/live/test_research_integrity_live.py runs it (paid, owner-authorised only),
-tests/test_research_integrity_gate.py checks the decision offline, and
-tests/integration/test_research_integrity_gate_plan.py builds every request from the saved T18
+called here; tests/live/test_support_gate_live.py runs it (paid, owner-authorised only),
+tests/test_support_gate_decision.py checks the decision offline, and
+tests/integration/test_historical_support_gate_plan.py builds every request from the saved T18
 database without a call.
 
 Cases, each judged by the production `judge_units` on the cited unit only:
