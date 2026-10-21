@@ -1,6 +1,8 @@
 # M1.5 review integration plan
 
-**Status: PROPOSED.** A plan for the step *after* the owner's blind review; none of it is implemented in the preparation PR (issue [#34](https://github.com/subhadlearner/insightforge-agent/issues/34), parent [#26](https://github.com/subhadlearner/insightforge-agent/issues/26)). Owner instructions: [owner-review.md](owner-review.md).
+> **Archived, superseded.** This plan was written before the owner's blind review and was never implemented as written. What actually happened is recorded in [review-outcome.md](../benchmark/review-outcome.md) (owner-reviewed; the independent second review was waived). Kept for its rationale; moved from `docs/benchmark/review-integration-plan.md` on 2026-10-22.
+
+**Status: PROPOSED.** A plan for the step *after* the owner's blind review; none of it is implemented in the preparation PR (issue [#34](https://github.com/subhadlearner/insightforge-agent/issues/34), parent [#26](https://github.com/subhadlearner/insightforge-agent/issues/26)). Owner instructions: [owner-review.md](../benchmark/owner-review.md).
 
 ## What exists after preparation
 

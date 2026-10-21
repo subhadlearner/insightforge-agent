@@ -64,7 +64,7 @@ New fields have defaults (`Claim.premises`, `EvidenceItem.requirement_ids`, `Cit
 
 ## Review corrections (independent review of `86584c2`)
 
-Each finding was confirmed against the code and fixed with an adversarial regression test that fails at `86584c2` (19 of 22, the other 3 are controls) and passes after (`tests/pipeline/test_research_integrity_review.py`): Fact-Checker verifying on support elsewhere (§7); reworded Claims published without a semantic check (§6); requirement links taken as answers (§5); operators treated as stopwords (§1, check 5); failed checks recorded as insufficient Evidence (§5, `DROP_UNVERIFIED`); rejected analysis surviving in the summary (§6); the ledger not reflecting the Fact-Checker (§5); a single truncated Passage lost (§4). The gold set became `support-gold-2`: floors re-measured with a `sentence` persona, no label changed; the live gate now repeats every negative.
+Each finding was confirmed against the code and fixed with an adversarial regression test that fails at `86584c2` (19 of 22, the other 3 are controls) and passes after (`src/backend/tests/pipeline/test_cited_passage_and_publication_checks.py`): Fact-Checker verifying on support elsewhere (§7); reworded Claims published without a semantic check (§6); requirement links taken as answers (§5); operators treated as stopwords (§1, check 5); failed checks recorded as insufficient Evidence (§5, `DROP_UNVERIFIED`); rejected analysis surviving in the summary (§6); the ledger not reflecting the Fact-Checker (§5); a single truncated Passage lost (§4). The gold set became `support-gold-2`: floors re-measured with a `sentence` persona, no label changed; the live gate now repeats every negative.
 
 ## Exit criteria (to call the redesign verified, not just implemented)
 

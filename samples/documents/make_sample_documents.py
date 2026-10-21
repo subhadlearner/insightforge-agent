@@ -2,7 +2,7 @@
 
     uv run python samples/documents/make_sample_documents.py
 
-`tests/test_sample_library.py` checks that the committed PDFs match this script's output."""
+`src/backend/tests/test_sample_library.py` checks that the committed PDFs match this script's output."""
 
 from pathlib import Path
 

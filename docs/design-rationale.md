@@ -128,7 +128,7 @@ A second session derived the next steps from the documents above. The docs were 
 - **Free-tier development.** Gemini free tier by default (Groq selectable), local `fastembed` embeddings, Tavily with SerpAPI fallback. Anthropic only for the final verification. Embeddings stay the same across providers, and Anthropic has no embedding API.
 - **Fake models by default, `live` marker for real ones.** Free tiers are rate-limited and vary in tool-calling quality, so the default suite must be deterministic. The spike and the happy-path ticket are the exceptions and need a live run.
 - **Provider-dependent results are recorded per provider.** The spike's criteria 1 to 3 must pass on Anthropic as well, because Gemini passing proves nothing about Anthropic compatibility.
-- **Next.js frontend added to the design.** The assignment mandates it, and the design was silent. A `web/` directory with an `/api/*` rewrite proxy keeps one origin for the cookie and SSE.
+- **Next.js frontend added to the design.** The assignment mandates it, and the design was silent. A `src/frontend/` directory with an `/api/*` rewrite proxy keeps one origin for the cookie and SSE.
 - **No `/to-spec`.** `design.md` is the spec, so tickets cite its sections.
 - **Stretch goals and bonuses are out of scope.** Citation drawer is not the citation-trace bonus, and an optional LangSmith setting is not the tracing bonus. LangSmith was removed from ticket 0.
 - **`max_runs` on Watchlist Items.** Allows a short demo cadence without unbounded provider calls. A field, not a status.

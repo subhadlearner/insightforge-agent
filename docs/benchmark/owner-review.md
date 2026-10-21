@@ -57,7 +57,7 @@ The packet and sheet are already generated and committed. Regenerating is refuse
    ```
    uv run insightforge-agent bench review compare
    ```
-   It lists every case where your label differs from the proposed one. It changes nothing and resolves nothing. Disagreements are yours to adjudicate (see [review-integration-plan.md](review-integration-plan.md)).
+   It lists every case where your label differs from the proposed one. It changes nothing and resolves nothing. Disagreements are yours to adjudicate (see [review integration plan (archived)](../archive/benchmark-review-integration-plan.md)).
 
 ## Synthetic example (not a benchmark case)
 
@@ -74,7 +74,7 @@ R000,SAME_FACT|DIFFERENT_FACT|CONTRADICTORY,DIFFERENT_FACT,yes,"Might be a typo 
 
 ## Second reviewer
 
-About 10 cases (about 20%) are judged again, blind, by a **different person**, preferably at least 7 days after your review; the actual gap is recorded from the two real dates. They get a packet like yours (neutral ids, no labels, no yours), fill in the same kind of sheet, and the tool compares only after both are frozen. With about 10 cases the agreement figure is weak evidence and will be reported with that caveat. Details: [review-integration-plan.md](review-integration-plan.md).
+About 10 cases (about 20%) are judged again, blind, by a **different person**, preferably at least 7 days after your review; the actual gap is recorded from the two real dates. They get a packet like yours (neutral ids, no labels, no yours), fill in the same kind of sheet, and the tool compares only after both are frozen. With about 10 cases the agreement figure is weak evidence and will be reported with that caveat. Details: [review integration plan (archived)](../archive/benchmark-review-integration-plan.md).
 
 ## Rules the tooling enforces
 

@@ -2,7 +2,7 @@
 
 **Status: PROPOSED.** Nothing here is accepted until the owner approves it at the M1 review gate (#35). Part of the spike [#26](https://github.com/subhadlearner/insightforge-agent/issues/26), implemented by M1.2 ([#30](https://github.com/subhadlearner/insightforge-agent/issues/30)) and M1.3 ([#31](https://github.com/subhadlearner/insightforge-agent/issues/31)). M1 is entirely offline: no model is called, and `insightforge-agent bench` has no command that runs one (`bench baseline` runs only the production deterministic logic).
 
-Code: `src/insightforge_agent/benchmark/`. Cases: `benchmarks/evidence/cases.jsonl` (the 48-case pilot, M1.4 / #32) and the separate few-shot set `benchmarks/evidence/fewshot.jsonl`. Test fixtures live apart, in `tests/fixtures/benchmark/`.
+Code: `src/backend/insightforge_agent/benchmark/`. Cases: `benchmarks/evidence/cases.jsonl` (the 48-case pilot, M1.4 / #32) and the separate few-shot set `benchmarks/evidence/fewshot.jsonl`. Test fixtures live apart, in `src/backend/tests/fixtures/benchmark/`.
 
 ## Judgment types, labels and positive classes
 
@@ -36,7 +36,7 @@ Usage (input and output tokens, latency, retries, parse failures) is optional an
 - Ground truth lives only in the case file. Predictions are stored apart (`verdicts.jsonl`, `raw.jsonl`) and joined to cases at report time; no write path goes from predictions to cases.
 - Label status: `proposed` (no review data), `reviewed` (reviewer and date; an optional second review must be by a different person and agree), `disputed` (needs a note).
 - **Qualification metrics use `reviewed` labels only.** Disputed labels are always excluded. Proposed labels, critical or not, are excluded unless `--allow-proposed` is passed; such a report is stamped `EXPLORATORY`, says it is not a qualification result, and counts the proposed cases it included. When proposed critical cases are excluded the report says how many.
-- A second review stores the second reviewer's own label (`second_label`), reviewer and date. A reviewed case needs the second label to equal `expected`; a differing one makes the case `disputed` with both labels kept and a note. The review workflow itself (M1.5) is not part of M1.2. Reviewed cases also keep `proposed_label` (the original proposal), `first_label` (the reviewer's blind judgment) and, where `expected` differs from it, a required `adjudication_note`. The offline owner-review tooling (blind packet, decision sheet, `bench review`) is described in [owner-review.md](owner-review.md); the plan for reconciling, second review and agreement statistics is [review-integration-plan.md](review-integration-plan.md).
+- A second review stores the second reviewer's own label (`second_label`), reviewer and date. A reviewed case needs the second label to equal `expected`; a differing one makes the case `disputed` with both labels kept and a note. The review workflow itself (M1.5) is not part of M1.2. Reviewed cases also keep `proposed_label` (the original proposal), `first_label` (the reviewer's blind judgment) and, where `expected` differs from it, a required `adjudication_note`. The offline owner-review tooling (blind packet, decision sheet, `bench review`) is described in [owner-review.md](owner-review.md); the plan for reconciling, second review and agreement statistics is [review integration plan (archived)](../archive/benchmark-review-integration-plan.md).
 - Case ids must not contain a label name, so an id cannot leak the answer.
 
 ## Denominators
@@ -119,7 +119,7 @@ A Verdict may carry `evidence_disposition` (and `evidence_reason`) diagnostics, 
 |---|---|---|---|
 | 1 | `baseline` | the real deterministic production logic on cases | blocked |
 | 2 | `replay` | recorded predictions, replay, stale recordings, reports | blocked |
-| 3 | `scripted` | parsing, invalid output, retries and failure handling, using `tests/scripted.py` | blocked |
+| 3 | `scripted` | parsing, invalid output, retries and failure handling, using `src/backend/tests/scripted.py` | blocked |
 | 4 | `live` | a real model or server; needs `-m live` and `INSIGHTFORGE_ALLOW_LIVE_TESTS=1` | allowed |
 
 `pytest` excludes `live` through `addopts` (`-m 'not live'`), and CI runs `uv run pytest -m baseline`, `-m replay`, `-m scripted`, then the rest (`.github/workflows/ci.yml`). Tiers 1-3 (every non-`live` test) fail on a connection to a non-loopback address or a DNS lookup of a non-loopback name; the attempt is remembered, so code that swallows the error still fails the test at teardown. **Live tests need two opt-ins: `-m live` and `INSIGHTFORGE_ALLOW_LIVE_TESTS=1`.** Without the variable they are skipped before any fixture runs, so no provider is reached; they use your real environment and `.env` and make paid calls. A recording can never replace a reviewed label (predictions and cases are stored apart), and a live recording needs review before becoming a fixture.
