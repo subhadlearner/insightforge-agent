@@ -1,6 +1,6 @@
 name: CI
 
-# Offline only: tiers 1-3 run here and fail on any outbound network use (tests/conftest.py).
+# Offline only: tiers 1-3 run here and fail on any outbound network use (src/backend/tests/conftest.py).
 # Tier 4 (`live`) needs a real model or server, is excluded by pytest's addopts, and is never run
 # in CI. No secrets are configured or needed.
 on:
@@ -41,11 +41,11 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: src/frontend/package-lock.json
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --locked
       - name: Install web dependencies
-        working-directory: web
+        working-directory: src/frontend
         run: npm ci
       - name: Generated API schema is current
         run: |
@@ -57,22 +57,22 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:8201/openapi.json >/dev/null
-          cd web
+          cd src/frontend
           INSIGHTFORGE_API_ORIGIN=http://127.0.0.1:8201 npm run api:types
-          cd ..
-          git diff --exit-code -- web/lib/api-schema.d.ts
+          cd ../..
+          git diff --exit-code -- src/frontend/lib/api-schema.d.ts
       - name: Frontend unit and component tests
-        working-directory: web
+        working-directory: src/frontend
         run: npm test
       - name: TypeScript
-        working-directory: web
+        working-directory: src/frontend
         run: npm run typecheck
       - name: Production build
-        working-directory: web
+        working-directory: src/frontend
         run: npm run build
       - name: Install Chromium
-        working-directory: web
+        working-directory: src/frontend
         run: npx playwright install --with-deps chromium
       - name: Browser E2E
-        working-directory: web
+        working-directory: src/frontend
         run: npm run test:e2e

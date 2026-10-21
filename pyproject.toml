@@ -1,7 +1,7 @@
 [project]
 name = "insightforge-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "Autonomous multi-agent market research: a Brief in, a cited and fact-checked Report out, with scheduled Watchlist monitoring and Alerts"
 readme = "README.md"
 authors = [
     { name = "Subhadeep Majumder", email = "subhadlearner@gmail.com" }
@@ -35,6 +35,9 @@ insightforge-agent = "insightforge_agent:main"
 requires = ["uv_build>=0.12.5,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+module-root = "src/backend"
+
 [dependency-groups]
 dev = [
     "import-linter>=2.15",
@@ -42,8 +45,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["src/backend/tests"]
+pythonpath = ["src/backend"]
 markers = [
     "baseline: tier 1, the real deterministic T5/T6 production baseline (offline)",
     "replay: tier 2, recorded predictions, replay and stale-recording checks (offline)",

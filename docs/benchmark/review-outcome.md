@@ -2,6 +2,8 @@
 
 **Status: owner-reviewed. Independent second review WAIVED. Issue #34's original second-review and agreement criteria are NOT met.**
 
+The plan written before this review is kept, superseded, as the [archived review integration plan](../archive/benchmark-review-integration-plan.md).
+
 ## What was done
 
 - The owner independently reviewed all 48 pilot cases blind on 2026-10-11 (`benchmarks/evidence/review/owner-decisions.csv`, frozen in `owner-decisions.frozen.json`; both committed unchanged).

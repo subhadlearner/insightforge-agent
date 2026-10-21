@@ -161,3 +161,25 @@ Caveats:
   `docs/audits/2026-10-21-research-redesign-verification.md` §13 to §15).
 - The README changes on the T17 branch are documentation only, plus three `.gitignore`
   patterns, so these results apply to that branch.
+
+## After the repository restructure (2026-10-22)
+
+Branch `chore/repository-layout-cleanup` at `dce952a` (layout move and test renames), cloned
+into an empty directory. Paths above this section are the pre-move paths (`tests/`, `web/`);
+`docs/README.md` maps them. No paid call.
+
+| Check | Before (`main` `32b0fc4`) | After (`dce952a`) |
+|---|---|---|
+| Collected (all markers) | 2,591 | 2,595 (+4 new layout tests; every earlier node id maps one to one to its renamed file) |
+| Tiers baseline / replay / scripted / live / integration | 22 / 76 / 919 / 10 / 31 | unchanged |
+| `uv run pytest` | 2,550 passed, 41 deselected | 2,554 passed, 41 deselected |
+| `uv run pytest -m integration` | 19 passed, 12 skipped | 19 passed, 12 skipped (same `T18_EVAL_*` reasons) |
+| `uv run lint-imports` | 5 kept | 5 kept (same five contracts) |
+| `demo` | 7/7 PASS | 7/7 PASS |
+| Vitest / typecheck / build | 205 / clean / 8 routes | 205 / clean / 8 routes |
+| Browser E2E | 23 passed | 23 passed |
+| `uv build` | not run | wheel = `insightforge_agent` only; installs and imports in a clean venv |
+| `npm run api:types` vs committed schema | CI only | unchanged locally |
+
+The loopback Qdrant warning (5 in the first record, 4 here) comes from the same tests reaching
+the local Docker Qdrant; it is recorded for T20 (#49), not fixed.

@@ -4,13 +4,18 @@ An autonomous research platform: a user submits a research question (a **Brief**
 a cited intelligence **Report**. Standing Briefs can be re-researched on a schedule, and
 material changes are surfaced as **Alerts**.
 
+**Demo video (6 min 19 s):** [watch or download the MP4](https://github.com/subhadlearner/insightforge-agent/releases/download/demo-2026-10-21/InsightForge-Demo-2026-10-21.mp4), from the [demo release](https://github.com/subhadlearner/insightforge-agent/releases/tag/demo-2026-10-21).
+It follows one live Run through the web UI, from Brief to cited Report, export and Alerts
+([what the Run did and did not establish](#live-end-to-end-runs-after-adr-0006)).
+
 > **The persona picker is identity selection for the demo. It is not authentication and must
 > not be treated as a security boundary.** Anyone who can reach the API can select any persona
 > in `users.yml`. The session cookie is signed (HMAC with `SESSION_SECRET`) and HttpOnly only so
 > that a browser cannot switch persona by editing it; there are no passwords and no sign-up.
 
 Vocabulary is defined in [`CONTEXT.md`](CONTEXT.md), the design in
-[`docs/design.md`](docs/design.md), and hard-to-reverse decisions in [`docs/adr/`](docs/adr/).
+[`docs/design.md`](docs/design.md), and hard-to-reverse decisions in [`docs/adr/`](docs/adr/). [`docs/README.md`](docs/README.md)
+indexes every document, current and historical.
 This README uses those terms exactly (Source, Observation, Passage, Evidence item, Claim,
 Finding, Historical Claim, Baseline, Alert, Run summary).
 
@@ -38,7 +43,7 @@ This describes the code as of ADR-0006 (PR #77). Open work is tracked in
 1. [What InsightForge does](#what-insightforge-does)
 2. [Quick start](#quick-start)
 3. [Features](#features)
-4. [Architecture](#architecture)
+4. [Architecture](#architecture), including the [repository layout](#repository-layout)
 5. [Getting started from a fresh clone](#getting-started-from-a-fresh-clone)
 6. [Running it](#running-it), including the [UI walkthrough](#ui-walkthrough)
 7. [Testing](#testing)
@@ -100,16 +105,17 @@ cd insightforge-agent
 uv sync --locked
 uv run insightforge-agent demo        # real Extraction and synthesis, scripted model, PASS/FAIL list
 uv run pytest                         # default offline suite; outbound network is blocked
-cd web && npm ci && npx playwright install chromium && npm run test:e2e   # the whole app in a browser, scripted models
+cd src/frontend && npm ci && npx playwright install chromium && npm run test:e2e   # the whole app in a browser, scripted models
 ```
 
 **The real app** (makes real model and search calls):
 
 ```bash
 cp .env.example .env      # set SESSION_SECRET (32+ chars), LLM_PROVIDER and its key, TAVILY_API_KEY
+                          # SESSION_SECRET: uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
 docker compose up -d qdrant                      # or set QDRANT_URL=:memory: in .env
 uv run insightforge-agent serve --port 8000      # terminal 1
-cd web && npm run dev                            # terminal 2, then open http://localhost:3000
+cd src/frontend && npm run dev                   # terminal 2, then open http://localhost:3000
 ```
 
 Details, prerequisites and troubleshooting follow in
@@ -125,15 +131,15 @@ Details, prerequisites and troubleshooting follow in
 | HTTP API, persona session, live SSE progress with `Last-Event-ID` resume | `api/` | T10 |
 | Watchlist Items with `max_runs`, Baselines, Findings, Diffs, Alerts and an optional Slack-format webhook | `api/watchlist.py`, `scheduler/`, `domain/diff.py` | T11, T12 |
 | Retention sweep for raw material; Reports are kept | `scheduler/retention.py` | T13 |
-| Next.js workbench: Brief input, runtime estimate, live progress, Report viewer, citation drawer | `web/` | T14 |
-| Watchlist and Alerts pages, Markdown and PDF export, revocable Share links | `web/`, `api/delivery.py` | T15 |
+| Next.js workbench: Brief input, runtime estimate, live progress, Report viewer, citation drawer | `src/frontend/` | T14 |
+| Watchlist and Alerts pages, Markdown and PDF export, revocable Share links | `src/frontend/`, `api/delivery.py` | T15 |
 | Sample Brief library and the `eval` command (fact-check rate, citation accuracy, synthesis judge) | `samples/briefs/`, `evaluation/` | T16 |
 | Evidence-bound support judgment, one Evidence pipeline, bounded work-unit recovery, requirements ledger, checks before publication | `domain/support.py`, `domain/requirements.py`, `pipeline/` | ADR-0006 (#75, #76) |
 
 ## Architecture
 
 ```
-Browser ── Next.js (web/) ──/api/* rewrite──> FastAPI (api/) ── RunExecutor (bounded threads)
+Browser ── Next.js (src/frontend/) ──/api/* rewrite──> FastAPI (api/) ── RunExecutor (bounded threads)
                                                   │                       │
                                        APScheduler (scheduler/)     LangGraph outer graph (pipeline/)
                                        ticks, Diffs, webhook,        │  PLANNING + RESEARCHING:
@@ -146,7 +152,7 @@ Browser ── Next.js (web/) ──/api/* rewrite──> FastAPI (api/) ── 
                                       Qdrant (doc_chunks, report_sections) + local FastEmbed
 ```
 
-| Package (`src/insightforge_agent/`) | Responsibility |
+| Package (`src/backend/insightforge_agent/`) | Responsibility |
 |---|---|
 | `domain/` | Pydantic stage contracts and pure rules: plan bounds, periods, quantities, Confidence, Findings, Diff. No I/O, and it imports no other package |
 | `pipeline/` | The LangGraph outer graph (`graph.py`), with one module per stage: `ingest`, `research`, `extract`, `synthesize`, `write`, `fact_check`. Also citations, memory, recovery and the bounded `RunExecutor` |
@@ -156,6 +162,29 @@ Browser ── Next.js (web/) ──/api/* rewrite──> FastAPI (api/) ── 
 | `scheduler/` | APScheduler jobs: Watchlist ticks, Diff, webhook delivery, clarification timeout, retention |
 | `evaluation/` | The `eval` command, metrics, the synthesis judge and the report writer (T16) |
 | `benchmark/` | The offline Evidence-quality benchmark tools (`insightforge-agent bench`) |
+
+### Repository layout
+
+```
+insightforge-agent/
+├── pyproject.toml, uv.lock        one Python project; run uv and the CLI from here
+├── users.yml, .env.example        personas and settings, read from the working directory
+├── docker-compose.yml             the optional Qdrant server
+├── src/
+│   ├── backend/
+│   │   ├── insightforge_agent/    the Python package (uv_build module-root = src/backend)
+│   │   └── tests/                 pytest suites, fixtures and the scripted browser-E2E backend
+│   └── frontend/                  the Next.js app, its Vitest and Playwright tests, render-pdf.mjs
+├── samples/                       the five sample Briefs and the fictional Northwind PDF (eval inputs)
+├── benchmarks/evidence/           the 48-case Evidence-quality benchmark and the owner review record
+└── docs/                          design, ADRs, audits and verification records (see docs/README.md)
+```
+
+Run `uv`, `pytest` and `insightforge-agent` from the repository root: the CLIs default to
+root-relative `samples/briefs`, `benchmarks/evidence` and `users.yml`. Run `npm` commands in
+`src/frontend/`. The Python import name stays `insightforge_agent` and the command stays
+`insightforge-agent`. The Northwind Health annual report is **fictional** test material and is
+never evidence about a real company.
 
 How the pieces connect:
 
@@ -205,8 +234,8 @@ git clone https://github.com/subhadlearner/insightforge-agent.git
 cd insightforge-agent
 uv sync --locked                                  # Python dependencies (downloads packages)
 uv run insightforge-agent models download         # optional: FastEmbed and Docling model files
-cd web && npm install && cd ..                    # web UI dependencies
-cd web && npx playwright install chromium && cd ..   # optional: PDF export and browser tests
+cd src/frontend && npm install && cd ../..                      # web UI dependencies
+cd src/frontend && npx playwright install chromium && cd ../..  # optional: PDF export and browser tests
 ```
 
 `models download` fetches model files from Hugging Face once into the local cache. It needs
@@ -218,6 +247,26 @@ or something is embedded, and the integration tests skip.
 ```bash
 cp .env.example .env
 ```
+
+`SESSION_SECRET` (and `SHARE_JWT_SECRET`, if you want Share links signed with a separate key)
+is a random string of your own of at least 32 characters. It is not issued by any service.
+Generate one and paste it into `.env`. Each command below prints 64 random characters:
+
+```bash
+uv run python -c "import secrets; print(secrets.token_urlsafe(48))"   # any OS, uses the project's Python
+openssl rand -hex 32                                                    # macOS, Linux, Git Bash
+```
+
+```powershell
+[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))   # PowerShell 7
+```
+
+```dotenv
+SESSION_SECRET=<paste the printed value>
+```
+
+Changing it later signs out every browser session, and Share links stop working too when they
+use the same key. Keep it out of git like the API keys.
 
 `.env` is git-ignored. Never commit it, and never put keys in `users.yml`. What you need
 depends on what you run:
@@ -285,14 +334,14 @@ still be refused with 422.
 
 ### Web UI (T14)
 
-The Next.js app in `web/` is the research workbench: pick a persona, write a Brief, choose
+The Next.js app in `src/frontend/` is the research workbench: pick a persona, write a Brief, choose
 sources and attach PDFs, see the runtime estimate, follow the Run live (stage rail, each
 Sub-task's state, workflow milestones, elapsed time and an activity log), answer a clarifying
 question, and read the Report with a table of contents and a citation drawer for every Claim. Run the API as above,
 then in a second terminal:
 
 ```bash
-cd web
+cd src/frontend
 npm run dev
 ```
 
@@ -341,7 +390,7 @@ Confidence labels and decision reasons, corroboration across number formats ("4.
 "4,270,000"), a contradiction between two Sources, and the candidates the pipeline rejects. It
 ends with a PASS/FAIL list and exits non-zero if any expectation fails.
 
-Only the model is scripted (`src/insightforge_agent/demo.py`); every decision shown is made by
+Only the model is scripted (`src/backend/insightforge_agent/demo.py`); every decision shown is made by
 the production pipeline. To see the whole app working without keys, run the browser E2E suite
 (below). It drives the real API through the UI with scripted models and recorded search.
 
@@ -412,7 +461,7 @@ establishing Reports.
 Report actions provide Markdown and PDF downloads plus a revocable Share link. Markdown uses
 the fact-checked Report and preserves `[UNVERIFIED]` markings. PDF does not maintain a second
 Report template: the API launches Playwright headless Chromium through
-`web/scripts/render-pdf.mjs`, signs the owner's persona cookie for that browser context, and
+`src/frontend/scripts/render-pdf.mjs`, signs the owner's persona cookie for that browser context, and
 prints the existing `/reports/{id}` viewer HTML. It therefore needs `npx playwright install
 chromium` and a running Next app at `WEB_ORIGIN` (default `http://localhost:3000`, to match the
 required `next dev` hostname).
@@ -426,7 +475,7 @@ required `next dev` hostname).
 | `SearchError: no implemented search provider is usable` | Only a SerpAPI or Brave key is set, or `tavily` is missing from `SEARCH_PROVIDERS`. Set `TAVILY_API_KEY` and keep `tavily` in the list |
 | `failed to connect to the docker API` | Docker is not running. Start it, or set `QDRANT_URL=:memory:` for a throwaway in-process Qdrant |
 | The UI loads without styles or scripts | You opened `127.0.0.1:3000`. Use `http://localhost:3000` |
-| PDF export fails | Run `npx playwright install chromium` in `web/`, and keep the Next app running at `WEB_ORIGIN` |
+| PDF export fails | Run `npx playwright install chromium` in `src/frontend/`, and keep the Next app running at `WEB_ORIGIN` |
 | `pytest -m integration` reports skips | Model files are not cached. Run `uv run insightforge-agent models download` once |
 | Loopback HTTP tests fail behind a proxy | Unset `ALL_PROXY`/`HTTP(S)_PROXY` for the test process (see [`docs/t11-verification.md`](docs/t11-verification.md)) |
 
@@ -434,41 +483,38 @@ required `next dev` hostname).
 
 | Suite | Command (from the repo root unless noted) | Needs | In CI |
 |---|---|---|---|
-| Default offline suite (tiers 1-3 and everything not `live` or `integration`) | `uv run pytest` | nothing; outbound network is blocked by `tests/conftest.py` | yes, split by tier |
+| Default offline suite (tiers 1-3 and everything not `live` or `integration`) | `uv run pytest` | nothing; outbound network is blocked by `src/backend/tests/conftest.py` | yes, split by tier |
 | One tier | `uv run pytest -m baseline` / `replay` / `scripted` | nothing | yes |
 | Integration (real Docling, FastEmbed, in-memory Qdrant) | `uv run pytest -m integration` | model files from `models download`; runs offline and **skips** without them | the step runs, but CI has no model cache, so these tests skip there |
 | Live (real model or server) | `INSIGHTFORGE_ALLOW_LIVE_TESTS=1 uv run pytest -m live` | real keys; **makes paid calls** | never |
 | Import contracts | `uv run lint-imports` | nothing | yes |
-| Frontend unit and component tests (Vitest) | `npm test` in `web/` | `npm install` | yes |
-| TypeScript | `npm run typecheck` in `web/` | `npm install` | yes |
-| Production build | `npm run build` in `web/` | `npm install` | yes |
-| Browser E2E (Playwright) | `npm run test:e2e` in `web/` | `npx playwright install chromium` and `uv`. Starts `tests/web_e2e/server.py` (the real app, scripted models, no keys, every outbound connection blocked) and `next start` itself | yes |
-| Real-PDF browser E2E (part of the above) | `npx playwright test e2e/real-pdf.spec.ts` in `web/` | model files from `models download`. Uploads the sample PDF through the browser; the real Docling, FastEmbed and in-process Qdrant read, index and retrieve it, and the citation drawer must show the cited passage with its page and section. Only chat models are scripted. **Skips** with the reason when the model cache is missing | the step runs, but CI has no model cache, so this test skips there |
-| Generated API types are current | `npm run api:types` in `web/` against a running API, then `git diff` | a running API | yes |
+| Frontend unit and component tests (Vitest) | `npm test` in `src/frontend/` | `npm install` | yes |
+| TypeScript | `npm run typecheck` in `src/frontend/` | `npm install` | yes |
+| Production build | `npm run build` in `src/frontend/` | `npm install` | yes |
+| Browser E2E (Playwright) | `npm run test:e2e` in `src/frontend/` | `npx playwright install chromium` and `uv`. Starts `src/backend/tests/web_e2e/server.py` (the real app, scripted models, no keys, every outbound connection blocked) and `next start` itself | yes |
+| Real-PDF browser E2E (part of the above) | `npx playwright test e2e/real-pdf.spec.ts` in `src/frontend/` | model files from `models download`. Uploads the sample PDF through the browser; the real Docling, FastEmbed and in-process Qdrant read, index and retrieve it, and the citation drawer must show the cited passage with its page and section. Only chat models are scripted. **Skips** with the reason when the model cache is missing | the step runs, but CI has no model cache, so this test skips there |
+| Generated API types are current | `npm run api:types` in `src/frontend/` against a running API, then `git diff` | a running API | yes |
 
 In PowerShell, set the variable first: `$env:INSIGHTFORGE_ALLOW_LIVE_TESTS = "1"; uv run pytest -m live`
 (it stays set for that session; `Remove-Item Env:INSIGHTFORGE_ALLOW_LIVE_TESTS` clears it).
 `pytest -m live` alone is not enough: live tests also need `INSIGHTFORGE_ALLOW_LIVE_TESTS=1`,
 and skip without it.
 
-Results on a fresh clone of `main` at `32b0fc4` (PR #77 merge), 2026-10-22, Windows 11, uv
-0.12.5, Node 24.20.0, npm 11.19.0. The uv, model and Chromium caches were already warm, so cold
-downloads were not exercised. No `.env`, no keys, no paid call. Details and caveats are in
-[`docs/t17-verification.md`](docs/t17-verification.md):
+Results after the repository restructure (branch `chore/repository-layout-cleanup` at
+`dce952a`, cloned into an empty directory), 2026-10-22, Windows 11, uv 0.12.5, Node 24.20.0.
+Caches were warm, there was no `.env` and no paid call. The previous record (`main` at
+`32b0fc4`) is in [`docs/t17-verification.md`](docs/t17-verification.md).
 
 | Check | Result |
 |---|---|
-| `uv sync --locked` | exit 0 (14 s) |
+| `uv sync --locked`, `uv build` | exit 0; the wheel holds the 113 modules of `insightforge_agent` and no tests, and installs and imports in a clean venv |
 | `uv run lint-imports` | 5 kept, 0 broken |
 | `uv run insightforge-agent demo` | exit 0, 7 of 7 expectations PASS |
-| `uv run pytest` | **2,550 passed**, 41 deselected, 5 warnings (10 min 22 s) |
-| `uv run pytest -m integration` | 19 passed, **12 skipped**: the T18 replay tests need `T18_EVAL_DB`/`T18_EVAL_DIR` pointing at the saved T18 evaluation, which is kept outside the repository. The 19 passes depend on the warm local model cache; CI has none and skips them |
-| `npm ci` (in `web/`) | exit 0, 0 vulnerabilities |
-| `npm test` / `typecheck` / `build` | 205 passed in 14 files / clean / built, 8 routes |
-| `npm run test:e2e` | **23 passed** (4.1 min), including the real-PDF test |
-| `docker compose up -d qdrant` | the `qdrant/qdrant:v1.12.4` container was already running from the demo; a cold start was not re-run |
-
-The previous record (`main` at `22dad4d`, 2026-10-18: 1,887 passed) is kept in the same file.
+| `uv run pytest` | **2,554 passed**, 41 deselected (12 min 30 s): the previous 2,550 plus 4 new layout tests |
+| `uv run pytest -m integration` | 19 passed, **12 skipped** (the T18 replays need `T18_EVAL_DB`/`T18_EVAL_DIR`, kept outside the repository; the passes depend on the warm local model cache, which CI lacks) |
+| `npm ci` / `npm test` / `typecheck` / `build` (in `src/frontend/`) | exit 0 / 205 passed in 14 files / clean / 8 routes |
+| `npm run test:e2e` | **23 passed** (4.0 min), including the real-PDF test and PDF export through the real renderer |
+| `npm run api:types` against the scripted backend | `lib/api-schema.d.ts` unchanged |
 
 Test counts show coverage, not correctness. The default suite uses scripted models, so it
 proves orchestration, persistence, provenance and the deterministic rules. It does not prove
@@ -483,15 +529,15 @@ at a time.
 
 | Boundary | Why it limits context growth | Status and evidence |
 |---|---|---|
-| **Store by reference.** Sources, Observations and Passages live in SQLite (PDF chunks also in Qdrant) behind `SourceStore`. Graph state and checkpoints carry IDs and short structured values, never page bodies | A 20,000-character page costs the graph nothing. Only a stage that needs the text loads it | CI-tested: `tests/pipeline/test_happy_path.py::test_graph_state_carries_no_source_body` and `tests/pipeline/test_happy_path.py::test_no_source_body_in_any_checkpoint_or_intermediate_state` (a sentinel in a 23k-character page never appears in state or in either checkpoint) |
-| **Researchers see summaries, not pages.** The fetch tool writes each Source's one-line summary in its own bounded call. The Researcher sees only `{source_id, title, summary}` | Five full articles per search would otherwise sit in the Researcher's context ([design rationale Q18](docs/design-rationale.md)) | CI-tested: `tests/pipeline/test_isolation.py::test_each_researcher_receives_only_its_own_subtask` |
-| **Isolated Researchers.** Each Researcher is a DeepAgents subagent with its own `tools=` and only its Sub-task's task description. It does not see the Brief, the plan or its peers. Only its final message returns to the Planner | The Planner's thread grows by one short result per Sub-task, not by every search and fetch | CI-tested: same test, plus `tests/pipeline/test_isolation.py::test_the_researcher_subagent_has_its_own_tools_and_is_not_forked`. Isolation on a real model was checked in the T1 spike (`docs/design.md` section 12) |
-| **Planner memory is three Run summaries.** The Planner gets the last 3 Run summaries for the same Watchlist Item, or for the same User's one-shot Runs. Each summary is bounded (Brief 500 characters, 6 themes, 12 entities, 6 gaps). It never sees transcripts, earlier Reports or Passage text | Memory stays constant in size however many Runs a User has made | CI-tested: `tests/pipeline/test_t8_memory.py::test_the_planner_reads_exactly_the_newest_three_summaries_and_no_transcript`. The Run log records `run_summaries_loaded` with count and IDs only |
-| **Bounded Passage batches.** Extraction (one Source at a time), the support judgment (one Evidence item or sampled Claim at a time) and the Fact-Checker read Passage text in batches under `PASSAGE_TOKEN_CAP` (default 3,000 estimated tokens, measured on the call's user message). An oversized Passage is read in windows, never truncated | The cost of one call does not grow with page or document length | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_budget` (captures the payloads); `tests/pipeline/test_t5_review.py::test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synthesis` |
-| **Structured output and bounded recovery (T18, ADR-0006).** Extraction, the only call that proposes facts since ADR-0006, asks for the provider's native structured output where one exists (Anthropic: `output_config` JSON schema; `DRAFT_STRUCTURED_OUTPUT`, default on); `DRAFT_PASSAGE_CAP` (default off) can bound the Passages per call. A truncated, invalid or rejected batch is split and retried at most two levels deep within `WORK_UNIT_RETRY_CAP` (default 12) per Run; what stays unread is reported as a gap, never read as "no facts" | In the T18 evaluation 37 of 144 drafting calls failed (26 malformed JSON, 11 cut off), and the Stage C regulatory Run lost 5 drafting and 2 extraction batches at the output limit plus 1 invalid reply | CI-tested: `tests/test_llm_json.py`, `tests/pipeline/test_extraction_synthesis.py::test_only_extraction_uses_the_native_structured_path`, `tests/pipeline/test_research_integrity_work_units.py` |
-| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context and a compact requirement index (ADR-0006, outside the budget), and never sees Passage text. When the bundle is over budget, lower-ranked items are first shown in a shorter wording (same id and citation), each logged as `evidence_compressed`, but only when the support contract judges the wording equivalent to the statement both ways; otherwise the item stays whole (`evidence_compression_refused`); only if that is not enough are whole lowest-ranked items cut (never truncated mid-item), never the last kept support of a required research requirement while anything else can go, each logged as `evidence_cut` with its reason, Confidence, rank and requirements | The Writer's input is bounded however much research succeeded | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`, `tests/pipeline/test_research_integrity_review3.py::test_the_bundle_is_shortened_before_anything_is_cut`. Shortening costs a light call and two support judgments per item; only redundancy can be removed (a wording that drops content is not equivalent), so most over-budget items are still cut, and a requirement whose only verified Evidence was cut is reported as left out for the budget. Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
-| **Historical context stays apart.** Claims from earlier Reports enter as Historical items with their original Report, date and Passages, never as current Evidence items. They never establish or confirm a Finding | Old material cannot pose as current evidence, and its provenance stays checkable | CI-tested: `tests/pipeline/test_t8_memory.py::test_memory_findings_become_historical_claims_with_original_lineage`, `tests/pipeline/test_t8_historical_checks.py` |
-| **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway Passage reading | CI-tested: `tests/pipeline/test_extraction_synthesis.py::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner, Researcher and Writer calls are not counted, so it does not bound all model spend (design section 10) |
+| **Store by reference.** Sources, Observations and Passages live in SQLite (PDF chunks also in Qdrant) behind `SourceStore`. Graph state and checkpoints carry IDs and short structured values, never page bodies | A 20,000-character page costs the graph nothing. Only a stage that needs the text loads it | CI-tested: `src/backend/tests/pipeline/test_happy_path.py::test_graph_state_carries_no_source_body` and `src/backend/tests/pipeline/test_happy_path.py::test_no_source_body_in_any_checkpoint_or_intermediate_state` (a sentinel in a 23k-character page never appears in state or in either checkpoint) |
+| **Researchers see summaries, not pages.** The fetch tool writes each Source's one-line summary in its own bounded call. The Researcher sees only `{source_id, title, summary}` | Five full articles per search would otherwise sit in the Researcher's context ([design rationale Q18](docs/design-rationale.md)) | CI-tested: `src/backend/tests/pipeline/test_isolation.py::test_each_researcher_receives_only_its_own_subtask` |
+| **Isolated Researchers.** Each Researcher is a DeepAgents subagent with its own `tools=` and only its Sub-task's task description. It does not see the Brief, the plan or its peers. Only its final message returns to the Planner | The Planner's thread grows by one short result per Sub-task, not by every search and fetch | CI-tested: same test, plus `src/backend/tests/pipeline/test_isolation.py::test_the_researcher_subagent_has_its_own_tools_and_is_not_forked`. Isolation on a real model was checked in the T1 spike (`docs/design.md` section 12) |
+| **Planner memory is three Run summaries.** The Planner gets the last 3 Run summaries for the same Watchlist Item, or for the same User's one-shot Runs. Each summary is bounded (Brief 500 characters, 6 themes, 12 entities, 6 gaps). It never sees transcripts, earlier Reports or Passage text | Memory stays constant in size however many Runs a User has made | CI-tested: `src/backend/tests/pipeline/test_memory_research.py::test_the_planner_reads_exactly_the_newest_three_summaries_and_no_transcript`. The Run log records `run_summaries_loaded` with count and IDs only |
+| **Bounded Passage batches.** Extraction (one Source at a time), the support judgment (one Evidence item or sampled Claim at a time) and the Fact-Checker read Passage text in batches under `PASSAGE_TOKEN_CAP` (default 3,000 estimated tokens, measured on the call's user message). An oversized Passage is read in windows, never truncated | The cost of one call does not grow with page or document length | CI-tested: `src/backend/tests/pipeline/test_extraction_synthesis.py::test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_budget` (captures the payloads); `src/backend/tests/pipeline/test_extraction_synthesis_edge_cases.py::test_an_oversized_passage_is_read_in_bounded_windows_by_extraction_and_synthesis` |
+| **Structured output and bounded recovery (T18, ADR-0006).** Extraction, the only call that proposes facts since ADR-0006, asks for the provider's native structured output where one exists (Anthropic: `output_config` JSON schema; `DRAFT_STRUCTURED_OUTPUT`, default on); `DRAFT_PASSAGE_CAP` (default off) can bound the Passages per call. A truncated, invalid or rejected batch is split and retried at most two levels deep within `WORK_UNIT_RETRY_CAP` (default 12) per Run; what stays unread is reported as a gap, never read as "no facts" | In the T18 evaluation 37 of 144 drafting calls failed (26 malformed JSON, 11 cut off), and the Stage C regulatory Run lost 5 drafting and 2 extraction batches at the output limit plus 1 invalid reply | CI-tested: `src/backend/tests/test_llm_json.py`, `src/backend/tests/pipeline/test_extraction_synthesis.py::test_only_extraction_uses_the_native_structured_path`, `src/backend/tests/pipeline/test_extraction_work_unit_recovery.py` |
+| **Evidence budget for the Writer.** The Writer gets a ranked Evidence bundle under `EVIDENCE_BUDGET_TOKENS` (default 6,000) plus the Historical context and a compact requirement index (ADR-0006, outside the budget), and never sees Passage text. When the bundle is over budget, lower-ranked items are first shown in a shorter wording (same id and citation), each logged as `evidence_compressed`, but only when the support contract judges the wording equivalent to the statement both ways; otherwise the item stays whole (`evidence_compression_refused`); only if that is not enough are whole lowest-ranked items cut (never truncated mid-item), never the last kept support of a required research requirement while anything else can go, each logged as `evidence_cut` with its reason, Confidence, rank and requirements | The Writer's input is bounded however much research succeeded | CI-tested: `src/backend/tests/pipeline/test_extraction_synthesis.py::test_bundle_respects_the_budget_and_every_cut_is_logged`, `src/backend/tests/pipeline/test_evidence_compression_and_completeness.py::test_the_bundle_is_shortened_before_anything_is_cut`. Shortening costs a light call and two support judgments per item; only redundancy can be removed (a wording that drops content is not equivalent), so most over-budget items are still cut, and a requirement whose only verified Evidence was cut is reported as left out for the budget. Historical items are bounded by search k = 5 but are not counted in the 6,000 budget (T8 limitation) |
+| **Historical context stays apart.** Claims from earlier Reports enter as Historical items with their original Report, date and Passages, never as current Evidence items. They never establish or confirm a Finding | Old material cannot pose as current evidence, and its provenance stays checkable | CI-tested: `src/backend/tests/pipeline/test_memory_research.py::test_memory_findings_become_historical_claims_with_original_lineage`, `src/backend/tests/pipeline/test_historical_claim_checks.py` |
+| **Optional Run token cap.** `RUN_TOKEN_CAP` (none by default) fails a Run whose Passage-reading calls exceed it | A hard stop on runaway Passage reading | CI-tested: `src/backend/tests/pipeline/test_extraction_synthesis.py::test_a_run_over_its_token_cap_fails_with_the_reason`. Planner, Researcher and Writer calls are not counted, so it does not bound all model spend (design section 10) |
 
 ### Run-log compaction: what is and is not proven
 
@@ -501,7 +547,7 @@ Run log as a `context_compacted` event (issue #60). The evidence comes at three 
 | Level | Status | Evidence |
 |---|---|---|
 | (a) Compaction middleware configured | **Implemented (by the library).** `agents/planner.build_planner` calls `deepagents.create_deep_agent`. In the installed `deepagents` 0.7.23, that always appends `SummarizationMiddleware` to the Planner's stack and to each subagent's. If the chat model publishes a context-window profile, compaction triggers at 85% of it. Otherwise it triggers at 170,000 tokens and keeps the last 6 messages. For the default Planner models that means: Anthropic `claude-haiku-5-5`, no profile, so 170,000 tokens; Gemini `gemini-3.5-flash`, 85% of 1,048,576; Groq `openai/gpt-oss-120b`, 85% of 131,072. InsightForge does not change these thresholds | Read from the installed library source, and the profiles were read offline from the configured models; [`docs/t17-verification.md`](docs/t17-verification.md) |
-| (b) Each compaction recorded in the Run log, and tested | **Implemented and CI-tested (forced, offline).** `agents/compaction.CompactionRecorder` runs after the summarization middleware on the Planner and on every subagent, and reports each completed compaction. `pipeline/graph.py` writes it once per `compaction_id` to `run_events`. The tests make the **real** middleware compact by giving scripted models a small context-window profile, which is how deepagents sets its own trigger. No event is faked | `tests/pipeline/test_compaction_events.py`: Planner compactions, a later compaction recorded and none twice, a restart on the same checkpoint, a Run resumed after its SQLite repositories and checkpointer were closed and reopened from disk, Researcher attribution per Sub-task, durability in a reopened SQLite file, and nothing recorded at the normal thresholds. `tests/test_deepagents_facts.py` pins the library state contract the recorder reads |
+| (b) Each compaction recorded in the Run log, and tested | **Implemented and CI-tested (forced, offline).** `agents/compaction.CompactionRecorder` runs after the summarization middleware on the Planner and on every subagent, and reports each completed compaction. `pipeline/graph.py` writes it once per `compaction_id` to `run_events`. The tests make the **real** middleware compact by giving scripted models a small context-window profile, which is how deepagents sets its own trigger. No event is faked | `src/backend/tests/pipeline/test_compaction_events.py`: Planner compactions, a later compaction recorded and none twice, a restart on the same checkpoint, a Run resumed after its SQLite repositories and checkpointer were closed and reopened from disk, Researcher attribution per Sub-task, durability in a reopened SQLite file, and nothing recorded at the normal thresholds. `src/backend/tests/test_deepagents_facts.py` pins the library state contract the recorder reads |
 | (c) A real Run on a live model whose log shows a compaction | **Not observed.** Three live Runs have been made since the recorder was added (`run_c11947913dc5`, `run_846d12a50177`, `run_e7499e34e1e6`), and none logged a `context_compacted` event, as expected (below). So the recorder has not been seen to fire on a live model | [Live end-to-end Runs](#live-end-to-end-runs-after-adr-0006); `docs/live-runs/` (T3 to T5, before issue #60) |
 
 Persisted Run log from the forced offline scenario. The Planner has a 12,000-token profile and
@@ -531,7 +577,7 @@ How to read an event:
 - The event carries no message text.
 
 Reproduce it with
-`uv run pytest tests/pipeline/test_compaction_events.py -k durable -s`. That test prints this
+`uv run pytest src/backend/tests/pipeline/test_compaction_events.py -k durable -s`. That test prints this
 log and asserts its shape: two compactions at cutoffs 4 and 10, one on each side of the repair
 round. Run, compaction and session IDs differ on each run.
 
@@ -550,7 +596,7 @@ Limits:
 - The recorder reads deepagents' private `_summarization_event` state key, through the
   library's exported `SUMMARIZATION_EVENT_KEY`. No public hook reports a completed compaction
   in 0.7.23. A library upgrade that changes the key or the event's fields fails
-  `tests/test_deepagents_facts.py`.
+  `src/backend/tests/test_deepagents_facts.py`.
 - A compaction is identified by its agent, the id of its conversation's first message, its
   cumulative `cutoff_index` and its summary text. A compaction that summarises only the
   previous summary keeps the same `cutoff_index`, so the summary text tells the two apart.
@@ -619,7 +665,7 @@ What the measurements mean:
 
 Limits: one Run per Brief per provider, so there is no repeatability estimate. The Briefs'
 `checks` are descriptive, and no metric enforces them. The scripted tests
-(`tests/evaluation/`) show orchestration, persistence, subject relevance and provenance across
+(`src/backend/tests/evaluation/`) show orchestration, persistence, subject relevance and provenance across
 the five domains **within a scripted world** (the scripted models copy Passage sentences). They
 do not show real-model research quality. The T18 Anthropic verification ran this harness: the
 baseline five-Brief fact-check rate was 66.7%, and the later targeted Stage C acceptance gate
@@ -669,7 +715,7 @@ show where Report quality still falls short. They do not replace or overturn the
 | Gate A (support judgment only, not a Run) | owner-authorised harness, $0.50 cap | the B-1 gold Claims | **FAILED**, $0.0675: 8 of 9 wrong rejections were code vetoes (since retired); the model made 1 wrong acceptance and 1 wrong rejection. Not re-run | verification record §13 |
 | `run_c11947913dc5` | budget-capped harness ($1.00 cap, 20 searches), on `b31ffc2` | BYD vs Tesla BEVs: 2025 sales, pricing, battery technology | COMPLETE in 43 min, **$0.317**, 711 model calls, 7 searches. The Report marked all 6 requirements as not established and 25 Claims were restated verbatim. Both causes were fixed and pinned by tests | verification record §14 |
 | `run_846d12a50177` | same harness, on `9ddf640` | same Brief | COMPLETE in 52 min, **$0.385**, 852 model calls, 6 searches. All 6 requirements reported; 33 Claims, every citation resolves from a fresh connection; Fact-Checker sample 7/7 verified. It published a UK figure as Tesla's 2025 sales, and the BYD vs Tesla comparison was refused. Both were corrected afterwards (omission rule, footnoted-quote fix) and pinned by tests. The UI Run below ran the corrected code on a different Brief; this Brief has not been re-run | verification record §15 |
-| `run_e7499e34e1e6` | **the web UI**, recorded on video; checkout at `09db8dd` per the git reflog (the code of `main` at `32b0fc4`: the two later commits changed only a test and generated types), Docker Qdrant | Qdrant vs Weaviate for a self-hosted RAG app (hybrid search, metadata filtering, Docker operations, a recommendation for a solo developer) | COMPLETE in 1 h 37 min (Synthesis took 69 min). 6/6 Sub-tasks succeeded, 27 Sources, 57 Claims in 4 sections, Fact-Checker sample **12/12 verified**. Requirements ledger: 6 of 11 reported, 1 partial, 4 incomplete. **The recommendation was not established**: 5 extraction batches (56 and 309 Passages in two Sub-tasks) stayed unread after bounded retries (output truncated), and the Report says so in Gaps & limitations. Every section is LOW Confidence and every Source is undated. Cost not measured (no harness on UI Runs) | below |
+| `run_e7499e34e1e6` | **the web UI**, recorded on video; checkout at `09db8dd` per the git reflog (the code of `main` at `32b0fc4`: the two later commits changed only a test and generated types), Docker Qdrant | Qdrant vs Weaviate for a self-hosted RAG app (hybrid search, metadata filtering, Docker operations, a recommendation for a solo developer) | COMPLETE in 1 h 37 min (Synthesis took 69 min). 6/6 Sub-tasks succeeded, 27 Sources stored (15 cited in the Report), 57 Claims in 4 sections, Fact-Checker sample **12/12 verified**. Requirements ledger: 6 of 11 reported, 1 partial, 4 incomplete. **The recommendation was not established**: 5 extraction batches (56 and 309 Passages in two Sub-tasks) stayed unread after bounded retries (output truncated), and the Report says so in Gaps & limitations. Three of the four sections are LOW Confidence and one is MEDIUM; most cited Sources are undated (two have dates). Cost not measured (no harness on UI Runs) | below |
 
 **The UI demonstration** (2026-10-21) drove `run_e7499e34e1e6` through the whole
 [UI walkthrough](#ui-walkthrough): persona selection, Brief and estimate, live progress, the
@@ -684,9 +730,10 @@ Markdown and PDF export (`rep_3f4e32cbd7af0109`). Read from the API log:
   (1.12.4). Document search was not part of this Brief, so that path was not exercised against
   the Docker server.
 
-The video (`InsightForge-Demo-2026-10-21.mp4`), the raw recording, the exported Report (Markdown
-and PDF) and the API and web logs are kept outside the repository, like the harness records,
-because they are large and include local logs. Publishing the demo is T19 (#20).
+The edited video ([`InsightForge-Demo-2026-10-21.mp4`](https://github.com/subhadlearner/insightforge-agent/releases/download/demo-2026-10-21/InsightForge-Demo-2026-10-21.mp4), 6 min 19 s, captioned, with
+time-lapse speeds shown on screen) is a release asset, not a repository file. The raw recording,
+the exported Report (Markdown and PDF) and the API and web logs stay outside the repository.
+The demo post itself is T19 (#20).
 
 What these Runs do **not** show: repeatability (one Run per Brief), whether the corrections
 made after `run_846d12a50177` fix that Brief's Report, a re-run of the formal T18 gates, or the
