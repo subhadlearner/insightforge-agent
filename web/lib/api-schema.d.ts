@@ -767,6 +767,13 @@ export interface components {
              * @default 0
              */
             relevance: number;
+            /** Requirement Ids */
+            requirement_ids?: string[];
+            /**
+             * Shortened
+             * @default
+             */
+            shortened: string;
         };
         /**
          * FailedDiff
