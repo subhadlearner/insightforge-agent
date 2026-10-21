@@ -194,8 +194,9 @@ def test_a_supported_claim_the_word_rules_refuse_is_published_in_the_writers_wor
     assert not any(q.startswith("claims_restated_verbatim") for q in draft.quality)
 
 
-def test_two_unsupported_claims_on_one_item_leave_one_restatement_not_two(make_deps):
-    """The run's duplicates: two Claims citing one item, both rewritten to its statement."""
+def test_two_unsupported_claims_on_one_item_are_both_omitted_not_restated(make_deps):
+    """The run's duplicates: two Claims citing one item, both rewritten to its statement. Since
+    run_846d12a50177 a rejected Claim is omitted, never restated, so neither duplicates."""
     deps = make_deps(light_model=judge(),  # supports only a statement the Passage contains
                      writer_model=writer_of([
                          {"text": "BYD's 4.27 million beat Tesla's 1.64 million.",
@@ -205,9 +206,9 @@ def test_two_unsupported_claims_on_one_item_leave_one_restatement_not_two(make_d
                          {"text": PRICE, "evidence_id": "ev_1"}]))
     _, bundle = evidence(deps, [STATEMENT, PRICE])
     draft = write_report(deps, "alice", "run_1", "BYD", bundle, [])
-    assert texts(draft) == [("ev_0", STATEMENT), ("ev_1", PRICE)]
+    assert texts(draft) == [("ev_1", PRICE)]
     (checked,) = events(deps, "writer_claims_checked")
-    assert [r["action"] for r in checked["rejected"]] == ["restated", "removed"]
+    assert [r["action"] for r in checked["rejected"]] == ["omitted", "omitted"]
 
 
 def test_an_unsupported_claim_on_an_item_a_published_claim_states_is_removed(make_deps):
@@ -225,4 +226,4 @@ def test_an_unsupported_claim_on_an_item_a_published_claim_states_is_removed(mak
     assert texts(draft) == [("ev_0", reworded), ("ev_1", PRICE)]
     (checked,) = events(deps, "writer_claims_checked")
     assert [(r["original_text"], r["action"]) for r in checked["rejected"]] == [
-        (comparison, "removed")]
+        (comparison, "omitted")]

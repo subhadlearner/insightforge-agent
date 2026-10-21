@@ -6,9 +6,9 @@ Claim adding a name its cited item did not state ("BIS"/"Chinese", "Washington",
 item's exact statement. Since the live Run run_c11947913dc5 (25 Claims replaced, two pairs onto
 one item each), such a Claim instead goes to the semantic check (`_checked_claims`): kept in
 the Writer's words if its cited Passage supports it, else restated or removed there (tests in
-test_research_integrity_e2e1.py). Here no Passage is stored, so every check fails closed and
-the Claim is restated: the Stage C outcome, now reached by a judgment. Nothing else is ever
-guessed at."""
+test_research_integrity_e2e1.py). Here no Passage is stored, so every check fails closed: the
+Claim is omitted (run_846d12a50177: never restated), and repair fills its emptied section with
+the section's best-ranked item, verbatim. Nothing else is ever guessed at."""
 
 import pytest
 
@@ -59,11 +59,11 @@ def test_an_ungrounded_claim_goes_to_the_semantic_check_once_retries_are_spent(
     (flagged,) = logged(deps, "writer_claims_ungrounded")
     assert [(r["evidence_id"], r["original_text"]) for r in flagged["claims"]] == [
         (field, ENTITY if field == "ev_1" else CAVEAT)]
-    (repaired,) = logged(deps, "writer_repaired")
-    assert repaired["claims_ungrounded"] == 1
+    first, refill = logged(deps, "writer_repaired")  # after the retries; after the omission
+    assert first["claims_ungrounded"] == 1 and refill["filled_sections"] != []
     (checked,) = logged(deps, "writer_claims_checked")
     assert [(r["evidence_id"], r["verdict"], r["action"]) for r in checked["rejected"]] == [
-        (field, "VERIFICATION_ERROR", "restated")]
+        (field, "VERIFICATION_ERROR", "omitted")]
     assert len(draft.summary.split()) <= SUMMARY_MAX_WORDS
 
 

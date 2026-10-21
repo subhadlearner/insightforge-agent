@@ -147,10 +147,13 @@ def test_a_claim_that_reverses_its_evidence_is_never_published(make_deps):
     draft = write_report(deps, "alice", "run_1", "Northwind", bundle, [])
     texts = [c.text for c in claims_of(draft)]
     assert INCREASED not in texts and GRANTED not in texts
-    assert texts == [DECLINED, EXPECTED]  # the verified statements, verbatim, and said so
+    # Both are omitted, never restated (run_846d12a50177); the emptied section is then filled
+    # by repair with its best-ranked item, verbatim, and said so.
+    assert texts == [DECLINED]
     (rejected,) = events(deps, "writer_claims_checked")
-    assert {r["evidence_id"] for r in rejected["rejected"]} == {"ev_0", "ev_1"}
-    assert "claims_restated_verbatim:2" in draft.quality
+    assert {(r["evidence_id"], r["action"]) for r in rejected["rejected"]} == {
+        ("ev_0", "omitted"), ("ev_1", "omitted")}
+    assert "claims_removed:2" in draft.quality and "sections_filled_verbatim:1" in draft.quality
 
 
 def test_a_faithful_rewording_is_judged_and_kept(make_deps):

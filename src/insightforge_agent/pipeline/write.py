@@ -45,10 +45,11 @@ rules above are lexical: "revenue increased 20%" passes them for an item that sa
   a final stop aside; for a Historical Claim, without its report-date annotation) needs no
   second judgment: Synthesis judged that statement against the same Passage;
 - any other current or Historical Claim is judged by the support contract against its item's
-  primary Passage, the one its citation shows; one that is not SUPPORTED is restated as the
-  item's verified statement, or removed when a published Claim already states that statement
-  or cites that item as its only evidence (the item is then already in the Report: a second
-  Claim restating it is a duplicate), logged as `writer_claims_checked`;
+  primary Passage, the one its citation shows; one that is not SUPPORTED is omitted, with the
+  reason, logged as `writer_claims_checked` (`OMITTED`). It is never replaced by its item's
+  statement: nothing verifies that the bare statement keeps the scope or context the Writer's
+  wording carried (run_846d12a50177 published a UK sales figure as Tesla's 2025 sales that way,
+  after the check rejected the Writer's qualified wording of it);
 - an analytical Claim is judged against the primary Passages of all its items together
   (`judge_joint`); one that is not SUPPORTED is removed and logged.
 Then every Executive Summary sentence that is not one of the published Claims verbatim is
@@ -643,7 +644,7 @@ def write_report(
         fallback = ungrounded_claims(parsed, bundle, historical)
         if fallback is not None:
             # Each such Claim is judged against its cited Passage in `_checked_claims`; one
-            # that is not SUPPORTED is restated or removed there.
+            # that is not SUPPORTED is omitted there.
             usable, ungrounded = parsed, fallback
             deps.log(owner_id, run_id, "writer_claims_ungrounded", claims=ungrounded)
     if usable is not None:
@@ -694,19 +695,23 @@ def _supported(deps: Deps, owner_id: str, run_id: str, statement: str, ref: Pass
             [p for j in judged for p in j.problems][:4])
 
 
+# Why a rejected reworded Claim is omitted, never restated (module docstring).
+OMITTED = ("its cited Passage does not support this wording, and no check verifies that the "
+           "item's statement alone keeps the scope and context it carried")
+
+
 def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
                     bundle: EvidenceBundle, historical: HistoricalContext, brief: str,
                     statuses: list[RequirementStatus]) -> ReportDraft:
-    """Every Claim checked against what it cites (module docstring). A reworded Claim that is
-    not SUPPORTED is restated as its item's verified statement, or removed when another Claim
-    already states it; an analytical Claim that is not SUPPORTED is removed. The draft is
-    repaired if that left a section or requirement unanswered."""
+    """Every Claim checked against what it cites (module docstring). A reworded or analytical
+    Claim that is not SUPPORTED is omitted, with the reason. The draft is repaired if that left
+    a section or requirement unanswered."""
     from insightforge_agent.pipeline.support import cited_units, judge_joint
 
     items = {i.id: i for s in bundle.sections for i in s.items}
     background = historical.by_id()
     judged, rejected, analytical = 0, [], []
-    decided = []  # per section: (Claim, its verified statement if it is to be restated)
+    sections = []
     for si, section in enumerate(draft.sections):
         claims = []
         for ci, c in enumerate(section.claims):
@@ -722,7 +727,7 @@ def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
                 except Exception as e:  # noqa: BLE001 - fail closed
                     verdict, problems = "VERIFICATION_ERROR", [f"{type(e).__name__}"]
                 if verdict == "SUPPORTED":
-                    claims.append((c, None))
+                    claims.append(c)
                 else:
                     analytical.append({"section": si, "claim": ci,
                                        "evidence_ids": c.evidence_ids(), "verdict": verdict,
@@ -732,57 +737,29 @@ def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
                 h = background[c.evidence_id]
                 text, statement, ref = (without_report_date(c.text, h.report_date), h.statement,
                                         h.primary)
-                verbatim = (f"{h.statement.rstrip().rstrip('.')} "
-                            f"(reported {report_date_text(h.report_date)}).")
             else:
                 item = items[c.evidence_id]
-                text, statement, ref, verbatim = c.text, item.statement, item.primary, item.statement
+                text, statement, ref = c.text, item.statement, item.primary
             if _same(text, statement):
-                claims.append((c, None))
+                claims.append(c)
                 continue
             judged += 1
             verdict, problems = _supported(deps, owner_id, run_id, text, ref, section=si,
                                            claim=ci, evidence_id=c.evidence_id)
             if verdict == "SUPPORTED":
-                claims.append((c, None))
-                continue
-            rejected.append({"section": si, "claim": ci, "evidence_id": c.evidence_id,
-                             "verdict": verdict, "problems": problems,
-                             "original_text": c.text[:300]})
-            claims.append((c, verbatim))
-        decided.append((section, claims))
-    # A rejected Claim is restated only if its item is not already in the Report: no published
-    # Claim states that statement or cites that item as its only evidence.
-    stated = {_norm(c.text) for _, cs in decided for c, v in cs if v is None}
-    represented = {c.evidence_id for _, cs in decided for c, v in cs
-                   if v is None and not c.premises}
-    records = iter(rejected)
-    sections = []
-    for section, cs in decided:
-        claims = []
-        for c, verbatim in cs:
-            if verbatim is None:
                 claims.append(c)
                 continue
-            record = next(records)
-            key = _norm(verbatim)
-            if key in stated or c.evidence_id in represented:
-                record["action"] = "removed"
-                continue
-            record["action"] = "restated"
-            stated.add(key)
-            represented.add(c.evidence_id)
-            claims.append(c.model_copy(update={"text": verbatim, "premises": []}))
+            rejected.append({"section": si, "claim": ci, "evidence_id": c.evidence_id,
+                             "verdict": verdict, "problems": problems, "action": "omitted",
+                             "reason": OMITTED,
+                             "original_text": c.text[:300]})
         sections.append(section.model_copy(update={"claims": claims}))
     deps.log(owner_id, run_id, "writer_claims_checked", judged=judged, rejected=rejected)
     if analytical:
         deps.log(owner_id, run_id, "analytical_claim_rejected", rejected=analytical)
     if not rejected and not analytical:
         return draft
-    restated = sum(r["action"] == "restated" for r in rejected)
-    removed = len(rejected) - restated
-    flags = ([f"claims_restated_verbatim:{restated}"] if restated else []) + (
-        [f"claims_removed:{removed}"] if removed else []) + (
+    flags = ([f"claims_removed:{len(rejected)}"] if rejected else []) + (
         [f"analytical_claims_removed:{len(analytical)}"] if analytical else [])
     draft = draft.model_copy(update={"sections": [s for s in sections if s.claims],
                                      "quality": [*draft.quality, *flags]})
