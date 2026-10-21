@@ -17,14 +17,13 @@ What is real and what is scripted:
   wrong-year Claims before any model call."""
 
 import json
-import re
 
 import pytest
 from langchain_core.messages import AIMessage
 
 from insightforge_agent.pipeline.fact_check import fact_check, screen
 from tests.pipeline.test_t6_writer_fact_check import SALES, URL, Fetcher, draft_of, evidence
-from tests.scripted import ScriptedChat
+from tests.scripted import ScriptedChat, support_verdicts
 
 PARAGRAPH = (f"{SALES} Plug-in hybrids made up about half of those sales, the company said in "
              "its annual filing. The company expanded its overseas network to 70 countries and "
@@ -42,10 +41,9 @@ PRONOUN = "BYD is a Chinese automaker. It sold 3.02 million vehicles in 2023."
 
 def oracle(support: str | None) -> ScriptedChat:
     def reply(messages) -> AIMessage:
-        spans = re.findall(r"^\[(\d+)\] (.+)$", str(messages[-1].content), re.MULTILINE)
-        return AIMessage(content=json.dumps({"verdicts": [
-            {"passage": int(n), "verdict": "SUPPORTED" if support and support in text
-             else "INSUFFICIENT_EVIDENCE"} for n, text in spans]}))
+        return AIMessage(content=json.dumps({"verdicts": support_verdicts(
+            str(messages[-1].content), lambda _, text: "SUPPORTED" if support and support in text
+            else "INSUFFICIENT_EVIDENCE")}))
     return ScriptedChat(reply=reply)
 
 
