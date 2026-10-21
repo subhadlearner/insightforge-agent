@@ -591,7 +591,7 @@ and offline-tested, but its effect on the full five-Brief Anthropic rate was **n
 | Planner spike criteria 1–3 | PASS, thin evidence accepted by the owner |
 | **B-1: entailment calibration** | **FAIL** (three live attempts); documented exception, not a pass |
 | B-2: structured drafting smoke test | PASS (39/47 calls parsed; 8 hit the output-token limit) |
-| B-3: judge-only | NOT RUN |
+| B-3: judge-only | PASS (5/5 baseline Reports judged with valid score sheets; mean 2.40/5) |
 | **Stage C: targeted live end-to-end** | **FAIL** (acceptance exit 1; final attempt) |
 | Stage D: remediated five-Brief re-evaluation | NOT RUN (stopped after Stage C) |
 
@@ -613,7 +613,14 @@ fact-check or a substitute for the missing facts. Synthesis-judge scores were **
 **2.25/5**, respectively, reflecting unresolved comparisons and limited analytical synthesis.
 See [post-submission follow-up #76](https://github.com/subhadlearner/insightforge-agent/issues/76).
 
-The Stage C attempts are preserved separately. B-3 and Stage D were not run, so **there is no
+**B-3 judge-only.** The five stored baseline Reports were judged again, without research, by
+`claude-haiku-5-5` under `synthesis-rubric-v1` and `judge-prompt-2`: all five got a valid score
+sheet (acceptance PASS), with a mean of **2.40/5** and **2/5 on synthesis for every Report**.
+This shows only that the judge produced valid score sheets in this one run; it does not show
+good Report quality, factual accuracy, repeatability or a successful remediation. The baseline's own judge result (2 judged, 3 errors)
+stands unchanged and is not pooled with B-3. Its Anthropic usage and billing are **unknown**.
+
+The Stage C attempts are preserved separately. Stage D was not run, so **there is no
 verified remediated five-Brief Anthropic pass rate**. Actual Anthropic billing for Stage C
 and T18 overall is **unknown**; harness estimates are not billed amounts.
 

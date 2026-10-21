@@ -4,8 +4,9 @@ Refs #19. Branch `t18-verification` (PR #74, top of the T18 stack #68 to #74). F
 commit: `6cdcf32513348bf1b130e060f74606970dcff102`. Date: 2026-10-21.
 
 **Outcome: T18's live gates are not all met.** Stage C formally FAILED. B-1 FAILED and proceeds
-only under a documented exception. B-3 and Stage D were not run. This record reports what the
-evidence shows; it does not declare T18 complete or the remediation proven.
+only under a documented exception. B-3 PASSED (valid judge score sheets only). Stage D was not
+run. This record reports what the evidence shows; it does not declare T18 complete or the
+remediation proven.
 
 ## 1. Gate summary
 
@@ -15,13 +16,42 @@ evidence shows; it does not declare T18 complete or the remediation proven.
 | T18 baseline: five Briefs on Anthropic | All 5 COMPLETE; document and memory paths exercised; fact-check pooled **20/30 = 66.7%** (< 80%, section 11 remediation required); citation accuracy 115/115; judge 2 of 5 scored | baseline `eval-report.md` at `d1b3be8`; immutable, never pooled with later runs |
 | B-1 entailment calibration | **FAILED** (3 runs), documented gate exception | `docs/audits/2026-10-21-t18-b1-gate-exception.md` |
 | B-2 drafting smoke test | **PASS**: 47 calls, 39 parsed, 8 cut at max_tokens, 0 other failures; cap decision `undecided`, so production cap stays `None` | `stage-b2/b2.json` |
-| B-3 judge-only | **Not run** | |
+| B-3 judge-only | **PASS**: 5/5 baseline Reports judged with valid score sheets; mean 2.40/5 | section 1.1 |
 | Stage C targeted end-to-end (2 Briefs) | **FAILED** (acceptance exit 1) | section 2 |
 | Stage D full five-Brief re-evaluation | **Not run** (Stage C's stop rule) | |
 
 So the section 11 remediation has been built and partly exercised, but its effect on the
 five-Brief fact-check rate has not been measured on Anthropic. The 66.7% baseline is the only
 full-library Anthropic result.
+
+### 1.1 B-3 judge-only
+
+The five stored baseline Reports (from `d1b3be8`), judged again without any research:
+`insightforge-agent eval-judge --from <baseline evaluation> --judge-provider anthropic`, then
+`python -m tests.t18_acceptance b3 <judge-report.json>`. Run once, owner-authorised, at
+`0f342b9` (clean tree), 2026-10-21 03:01:42 to 03:02:19 UTC. Judge `claude-haiku-5-5`
+(Writer role, `max_tokens` 16000), `synthesis-rubric-v1`, `judge-prompt-2`.
+
+Judge command exit 0; acceptance exit 0, `{"status": "pass", "reasons": []}`. Twelve
+provenance checks made outside the acceptance rule all passed: kind, result count, source hash,
+Report ids, provider, model, runtime model, rubric, prompt, `max_tokens`, commit, clean tree.
+The source `eval-report.json` and `eval.db` hashes were unchanged after the run.
+
+| Brief | Report | Coverage | Organisation | Synthesis | Calibration | Mean |
+|---|---|---:|---:|---:|---:|---:|
+| competitive-landscape-cloud | `rep_3489459c430cef66` | 2 | 2 | 2 | 3 | 2.25 |
+| document-annual-report | `rep_741a37d0ab3d8397` | 2 | 3 | 2 | 3 | 2.50 |
+| market-sizing-solar | `rep_95e98f158ef7e398` | 2 | 2 | 2 | 3 | 2.25 |
+| memory-prior-report | `rep_6e48a16b54b2cc51` | 3 | 3 | 2 | 2 | 2.50 |
+| regulatory-impact-semiconductors | `rep_e0d086224779e53f` | 2 | 3 | 2 | 3 | 2.50 |
+
+Mean 2.40/5; rationales 437 to 546 characters. B-3 shows only that the judge returned a valid
+score sheet for every baseline Report (the baseline itself got 2 judged and 3 errors under
+`judge-prompt-1`; those stay its recorded result, not replaced or pooled). It does not show
+good Report quality, factual accuracy, repeatability or a successful remediation: every Report
+scored 2/5 on synthesis. The competitive-landscape rationale contradicts itself ("Every section
+heading is present" and "there is no Competitive position section"); it is kept as recorded,
+with its scores.
 
 ## 2. Stage C
 
@@ -116,6 +146,7 @@ replace attempt 2's formal FAILED.
 |---|---|
 | B-1 runs 1-3, B-2 | Harness estimates from provider-reported tokens: $0.0129, $0.0156, $0.0152, $0.0854. Not billed amounts |
 | Stage C attempts 1-3 | **Unknown.** The evaluation CLI records no token usage, and Console balances were not captured |
+| B-3 | **Unknown.** `eval-judge` records no token usage and SDK retries are not observable; 5 calls, about 28,000 input characters in all |
 | Actual Anthropic billing for T18 overall | **Unknown** |
 
 ## 4. Evidence
@@ -132,6 +163,7 @@ local databases; it should be copied to durable storage. Each stage folder has a
 | `stage-c-rerun/` | attempt 2 (`eval.db` `5e08b238...0fd`) | formal |
 | `stage-c-rerun-retrospective/` | re-applied checkers; NW-200 delay-risk manual note | diagnostic only |
 | `stage-c-final/` | attempt 3 (`eval.db` `ffa4464a...0afa`, `eval-report.json` `dd6bf18b...7f56`, `acceptance.log` `0c84d63d...d930`) | formal |
+| `stage-b3/` (separate persistent evidence store, beside a verified baseline copy) | B-3 (`judge-report.json` `00dc2830...3386`, `SHA256SUMS` `9664f6b9...ab24`); source `eval-report.json` `25827f95...a1ee`, `eval.db` `d061f8b1...9aff` | formal |
 
 ## 5. Follow-up (outside the capstone submission)
 
