@@ -2,6 +2,7 @@
 
 Pure functions, no I/O. The pipeline supplies the facts (Sources, scores, token costs)."""
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -81,15 +82,20 @@ def rank_key(
 
 def compress_to_budget(
     ranked: list[EvidenceItem], fits: Callable[[list[EvidenceItem]], bool],
+    essential: Callable[[EvidenceItem, list[EvidenceItem]], bool] = lambda item, kept: False,
 ) -> tuple[list[EvidenceItem], list[EvidenceItem]]:
-    """Cut the lowest-ranked items until `fits`. Whole items go, never half a statement, and an
-    item that is the last of its Aspect goes only when nothing else can. Returns (kept, cut)."""
+    """Cut the lowest-ranked items until `fits`. Whole items go, never half a statement. An
+    item that is `essential` (ADR-0006: the last kept support of a required requirement) goes
+    only when nothing else can, and an item that is the last of its Aspect only after every
+    other non-essential one. Returns (kept, cut)."""
     kept, cut = list(ranked), []
     while kept and not fits(kept):
         counts: dict[str, int] = {}
         for i in kept:
             counts[i.aspect_id] = counts.get(i.aspect_id, 0) + 1
-        victim = next((i for i in reversed(kept) if counts[i.aspect_id] > 1), kept[-1])
+        spare = [i for i in reversed(kept) if not essential(i, kept)]
+        victim = next((i for i in spare if counts[i.aspect_id] > 1),
+                      spare[0] if spare else kept[-1])
         kept.remove(victim)
         cut.append(victim)
     return kept, cut
@@ -103,6 +109,27 @@ def cites(passage_texts: list[str], locator: str) -> bool:
     """Whether a Source's text links to another Source, by its address or its domain."""
     domain = domain_of(locator)
     return any(locator.lower() in t.lower() or domain in t.lower() for t in passage_texts)
+
+
+_WORDS = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def syndicated(a_texts: list[str], b_texts: list[str], *, threshold: float = 0.8,
+               minimum: int = 12) -> bool:
+    """Whether two Sources' supporting Passages are the same text (a syndicated story, a
+    re-posted press release): word-set overlap of at least `threshold` between some pair of
+    Passages of at least `minimum` words. Such copies share one upstream source, so different
+    domains do not make them independent (ADR-0006 §3, Confidence)."""
+    def words(t: str) -> set[str]:
+        return {w.casefold() for w in _WORDS.findall(t)}
+
+    for a in a_texts:
+        wa = words(a)
+        for b in b_texts:
+            wb = words(b)
+            if min(len(wa), len(wb)) >= minimum and len(wa & wb) / len(wa | wb) >= threshold:
+                return True
+    return False
 
 
 def sources_independent(

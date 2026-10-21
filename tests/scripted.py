@@ -43,3 +43,23 @@ def call(name: str, args: dict, call_id: str) -> dict:
 
 def ai(*calls: dict, text: str = "") -> AIMessage:
     return AIMessage(content=text, tool_calls=list(calls))
+
+
+SUPPORT_PREFIX = "You check whether"  # pipeline/support.py: the ADR-0006 support judgment
+
+
+def support_verdicts(user: str, verdict=lambda statement, text: "SUPPORTED",
+                     present: bool = False) -> list[dict]:
+    """A scripted ADR-0006 support reply: `verdict(statement, passage_text)` per numbered
+    passage, each SUPPORTED one with the permissive 'full' support map (the whole statement as
+    one part, the whole shown passage as its excerpt), so code's checks still apply."""
+    import re as _re
+
+    statement = user.split("\n", 1)[0].removeprefix("Statement: ")
+    out = []
+    for n, text in _re.findall(r"^\[(\d+)\] (.+)$", user, _re.MULTILINE):
+        v = verdict(statement, text)
+        out.append({"passage": int(n), "verdict": v, "asserts_present_state": present,
+                    **({"parts": [{"part": statement, "excerpts": [text]}]}
+                       if v == "SUPPORTED" else {})})
+    return out

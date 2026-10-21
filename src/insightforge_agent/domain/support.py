@@ -182,3 +182,58 @@ def check_support(statement: str, parts: list[SupportPart], text: str,
         problems.append(f"no excerpt states {sorted(figures)}")
     return SupportCheck("INSUFFICIENT_EVIDENCE" if problems else "SUPPORTED", tuple(problems),
                         tuple(spans), tuple(identity))
+
+
+@dataclass(frozen=True)
+class JointPart:
+    """A part of an analytical statement judged against several cited units together: each
+    excerpt names the unit (1-based) it is quoted from; an identity part names its unit."""
+
+    part: str
+    excerpts: tuple[tuple[int, str], ...] = ()
+    identity_unit: int | None = None
+
+
+def check_joint(statement: str, parts: list[JointPart], texts: list[str],
+                entities: list[str | None]) -> SupportCheck:
+    """Checks 1-4 for a statement resting on several premises (ADR-0006 §6): every excerpt is in
+    the unit it names, the parts cover the statement, the excerpts together state every figure,
+    and identity is used only as `identity_problem` allows for the unit it names."""
+    if not parts:
+        return SupportCheck("INSUFFICIENT_EVIDENCE", ("no support map was given",), (), ())
+    spans: list[tuple[int, int]] = []
+    fabricated: list[str] = []
+    problems: list[str] = []
+    identity: list[str] = []
+    excerpts: list[str] = []
+    for p in parts:
+        if p.identity_unit is not None:
+            n = p.identity_unit
+            why = (identity_problem(p.part, entities[n - 1]) if 1 <= n <= len(texts)
+                   else f"identity part {p.part!r} names no cited unit")
+            if why:
+                problems.append(why)
+            else:
+                identity.append(p.part)
+            continue
+        if not p.excerpts:
+            problems.append(f"part {p.part!r} has no excerpt")
+        for n, e in p.excerpts:
+            found = find_excerpt(e, texts[n - 1]) if 1 <= n <= len(texts) else None
+            if found is None:
+                fabricated.append(e)
+            else:
+                spans.append(found)
+                excerpts.append(e)
+    if fabricated:
+        return SupportCheck("VERIFICATION_ERROR",
+                            tuple(f"excerpt not in the cited unit: {e[:120]!r}" for e in fabricated),
+                            tuple(spans), tuple(identity))
+    missing = uncovered_terms(statement, [p.part for p in parts])
+    if missing:
+        problems.append(f"no part covers {missing}")
+    figures = unsupported_numbers(statement, " \n ".join(excerpts))
+    if figures:
+        problems.append(f"no excerpt states {sorted(figures)}")
+    return SupportCheck("INSUFFICIENT_EVIDENCE" if problems else "SUPPORTED", tuple(problems),
+                        tuple(spans), tuple(identity))

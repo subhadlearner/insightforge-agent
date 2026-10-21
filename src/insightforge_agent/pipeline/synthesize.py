@@ -1,32 +1,34 @@
-"""SYNTHESIZING: validated, ranked Evidence items held to a token budget (design.md section 5).
+"""SYNTHESIZING: verified, ranked Evidence items held to a token budget (design.md section 5,
+ADR-0006).
 
-1. Draft: per Sub-task, over that Sub-task's Passages in bounded batches, a model call drafts
-   candidate Evidence items (statement, supporting Passages, entity, predicate, value, scope
-   and the As-of period the Passage states).
+1. Candidates: Extraction's facts are the only proposals (ADR-0006 §3); Synthesis no longer
+   drafts its own. Each fact becomes a candidate of the Sub-task it serves: the one Extraction
+   named, if that Sub-task read the fact's Passage, else the most important Sub-task that did.
 2. Merge: candidates that say the same thing (same structured key) become one item. A period
-   enters the key only if a cited window states it; with an UNKNOWN period the key also holds
-   the Observations cited, so only candidates citing the same Observations merge.
-3. Validate: each Passage must pass a deterministic provenance check and a literal-value
-   check; then one entailment call per item (chunked at the per-call cap) judges the rest
-   SUPPORTED, CONTRADICTED or INSUFFICIENT_EVIDENCE. An item with no SUPPORTED Passage is
-   dropped and logged. A CONTRADICTED Passage marks the item conflicting only when the
-   Extraction facts at that Passage share its entity, predicate and scope with an overlapping
-   period.
-4. Confidence counts SUPPORTED Passages only, over distinct Sources.
-5. Rank by the specified tuple, then cut whole lowest-ranked items to fit the budget."""
+   enters the key only if the cited Passage states it; with an UNKNOWN period the key also
+   holds the Observations cited, so only candidates citing the same Observations merge.
+3. Verify: each cited Passage must belong to this Run's Sources and exist (provenance), and
+   state every figure of the statement (an integrity backstop: exact quantities, so "$71
+   million" is "71 million dollars"). Then one support judgment per item (`pipeline/support`,
+   chunked at the per-call cap) decides SUPPORTED, CONTRADICTED, INSUFFICIENT_EVIDENCE or
+   VERIFICATION_ERROR for each Passage, with identity context only for Passages of an uploaded
+   document whose own text establishes its company. Names are the judge's to decide: no lexical
+   name rule refuses a candidate (the retired `literal_problem` stays only as the measured T18
+   baseline). An item with no SUPPORTED Passage is dropped and logged with its verification
+   errors. A CONTRADICTED Passage marks the item conflicting only when the Extraction facts at
+   that Passage share its entity, predicate and scope with an overlapping period.
+4. Confidence counts SUPPORTED Passages only, over distinct Sources; two Sources whose
+   supporting Passages are the same text (a syndicated story or a re-posted release) are not
+   independent, whatever their domains.
+5. Rank by the specified tuple, then cut whole lowest-ranked items to fit the budget, never the
+   last kept support of a required research requirement while anything else can go."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 from pydantic import BaseModel, Field
 
-from insightforge_agent.agents.llm_json import (
-    BadModelReply,
-    StructuredOutputRejected,
-    ask_json,
-    ask_structured,
-)
 from insightforge_agent.domain.contracts import (
     EvidenceBundle,
     EvidenceItem,
@@ -50,41 +52,36 @@ from insightforge_agent.domain.evidence import (
     recency_bucket,
     section_label,
     sources_independent,
+    syndicated,
 )
 from insightforge_agent.domain.extraction import group_key, normalise, same_value
-from insightforge_agent.domain.quantities import canonical_value, unsupported_numbers
 from insightforge_agent.domain.ids import derive_evidence_id
 from insightforge_agent.domain.models import Passage, Source
-from insightforge_agent.domain.passages import (
-    Window,
-    batch_passages,
-    numbers_in,
-    render_batch,
-    split_by_passages,
-    value_in_text,
-)
-from insightforge_agent.domain.provenance import (
-    common_words,
-    credited_by_document,
-    credited_names,
-    document_entity,
-    missing_names,
-    without_credited_names,
-)
+from insightforge_agent.domain.passages import value_in_text
 from insightforge_agent.domain.periods import (
     UNKNOWN,
     parse_period,
     period_stated_in,
     periods_overlap,
-    stated_period,
 )
 from insightforge_agent.domain.plan import SubTask, SubTaskPlan
+from insightforge_agent.domain.provenance import (
+    common_words,
+    credited_by_document,
+    document_entity,
+    missing_names,
+)
+from insightforge_agent.domain.quantities import canonical_value, unsupported_numbers
+from insightforge_agent.domain.requirements import RequirementLedger, aspect_ledger, links
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import cosine
 from insightforge_agent.pipeline.deps import Deps
-from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM, EntailmentVerdicts
+from insightforge_agent.pipeline.support import judge_units, passage_units
 from insightforge_agent.pipeline.write import render_bundle
 
+# Historical (T5-T18): the drafting prompt and reply schema Synthesis used before ADR-0006.
+# Production no longer drafts; they are kept, unchanged, for the T18 B-2 harness and the F3
+# live probe, which measured exactly this call.
 DRAFT_SYSTEM = """You draft evidence items from numbered passages for one research sub-task.
 Reply with JSON only:
 {"items": [{"statement": "<one self-contained sentence, keeping every number and name exactly
@@ -97,6 +94,7 @@ Only state what the passages say. Leave entity, predicate and value empty if the
 When passages explicitly state management outlook or forward financial guidance relevant to the
 research sub-task, draft it as a separate Evidence item with its stated period. Do not infer,
 calculate, or invent guidance."""
+
 
 class _DraftItem(BaseModel):
     statement: str
@@ -125,14 +123,15 @@ class _Candidate:
     value: str
     scope: str
     period: str  # as the Passage states it, or UNKNOWN
+    requirement_ids: list[str] = field(default_factory=list)
 
 
 def merge_identity(
     *, statement: str, entity: str, predicate: str, value: str, scope: str, period: str,
     observations: Iterable[str],
 ) -> str:
-    """What makes two drafted candidates the same Evidence item (step 2, Merge). A candidate with
-    an entity, predicate and value is keyed by its group key, stated period and canonical value;
+    """What makes two candidates the same Evidence item (step 2, Merge). A candidate with an
+    entity, predicate and value is keyed by its group key, stated period and canonical value;
     any other is keyed by its normalised statement. `period` is the already-normalised stated
     period (`stated_period`). The Evidence id is `derive_evidence_id(run_id, identity)`.
 
@@ -160,7 +159,9 @@ def bundle_tokens(bundle: EvidenceBundle) -> int:
 def synthesize(
     deps: Deps, owner_id: str, run_id: str, brief: str, plan: SubTaskPlan,
     research: ResearchResults, extraction: ExtractionResult,
+    ledger: RequirementLedger | None = None,
 ) -> EvidenceBundle:
+    ledger = ledger or aspect_ledger(plan)
     by_id: dict[str, SubTask] = {t.id: t for t in plan.sub_tasks}
     sources_of: dict[str, list[str]] = {t.id: [] for t in plan.sub_tasks}
     # Per Sub-task: Source ID -> the exact Passages a Doc Reader retrieved (None: the whole Source).
@@ -186,20 +187,8 @@ def synthesize(
                 obs = deps.repos.observations.get(owner_id, obs_id)
                 source_by_obs[obs_id], fetched_on[obs_id] = contents[sid].source, obs.fetched_at.date()
 
-    def passages_for(task_id: str, sid: str) -> list[Passage]:
-        refs = scope_of[task_id].get(sid)
-        if refs is None:
-            return contents[sid].passages
-        ordered = sorted(refs, key=lambda r: (r.observation_id, r.index))
-        return [p for r in ordered for p in deps.store.get_passages(owner_id, r.observation_id, [r.index])]
-
-    # 1. Draft, one Sub-task at a time.
-    drafted: list[_Candidate] = []
-    for task in sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id)):
-        passages = [p for sid in sources_of[task.id] for p in passages_for(task.id, sid)]
-        for batch in batch_passages(passages, deps.passage_token_cap):
-            for part in split_by_passages(batch, deps.draft_passage_cap):
-                drafted += _draft(deps, owner_id, run_id, task, part)
+    # 1. Candidates from Extraction's facts, each under a Sub-task that read its Passage.
+    drafted = _candidates(deps, owner_id, run_id, plan, extraction, sources_of, scope_of)
 
     # 2. Merge candidates that say the same thing; the most important Sub-task keeps the item.
     merged: dict[str, _Candidate] = {}
@@ -212,14 +201,16 @@ def synthesize(
             have.subtask = c.subtask
         have.refs += [r for r in c.refs if r not in have.refs]
         have.entities += [e for e in c.entities if e not in have.entities]
+        have.requirement_ids += [r for r in c.requirement_ids if r not in have.requirement_ids]
 
-    # 3-4. Validate, then label with As-of period and Confidence.
+    # 3-4. Verify, then label with As-of period and Confidence.
     facts_at: dict[tuple[str, int], list[ExtractedFact]] = {}
     for f in extraction.facts:
-        facts_at.setdefault(_key(f.passage), []).append(f)
+        if f.passage is not None:
+            facts_at.setdefault(_key(f.passage), []).append(f)
     facts_by_group: dict[tuple[str, str, str], list[ExtractedFact]] = {}
     for f in extraction.facts:
-        if f.entity and f.predicate and f.value:
+        if f.entity and f.predicate and f.value and f.passage is not None:
             facts_by_group.setdefault(group_key(f.entity, f.predicate, f.scope), []).append(f)
     texts_of: dict[str, list[str]] = {}  # source id -> its Passage text, to see who cites whom
 
@@ -228,24 +219,30 @@ def synthesize(
             texts_of[source.id] = [p.text for p in contents[source.id].passages]
         return texts_of[source.id]
 
-    # The lower-case vocabulary of everything this Run read: tells a common word from a name
-    # at the start of a statement (domain/provenance).
-    common = common_words(p.text for c in contents.values() for p in c.passages)
-    # T18 CS2: the company each uploaded document speaks for, when the document establishes it.
+    # Identity context (ADR-0006 §2): the company each uploaded document speaks for, when the
+    # document's own text establishes it. Web Sources never have one.
     entity_of = {c.observation.id: document_entity(c.source.title, [p.text for p in c.passages])
                  for c in contents.values()
                  if c.observation is not None and c.source.kind == "pdf"}
+    for obs_id, source in source_by_obs.items():
+        if obs_id not in entity_of and source.kind == "pdf":
+            entity_of[obs_id] = entity_of.get(contents[source.id].observation.id)
     brief_vector = deps.embedder.embed([brief])[0]
     items: list[EvidenceItem] = []
     scores: dict[str, float] = {}
     for c in merged.values():
-        item = _validate(deps, owner_id, run_id, c, source_by_obs, fetched_on, facts_at,
-                         facts_by_group, common, entity_of)
-        if item is None:
+        verified = _validate(deps, owner_id, run_id, c, source_by_obs, fetched_on, facts_at,
+                             facts_by_group, entity_of)
+        if verified is None:
             continue
+        item, texts = verified
         supporting_sources = list(dict.fromkeys(source_by_obs[r.observation_id] for r in item.supporting))
+        support_text = {s.id: [texts[_key(r)] for r in item.supporting
+                               if source_by_obs[r.observation_id].id == s.id]
+                        for s in supporting_sources}
         independent = any(
             sources_independent(a.locator, source_texts(a), b.locator, source_texts(b))
+            and not syndicated(support_text[a.id], support_text[b.id])
             for i, a in enumerate(supporting_sources) for b in supporting_sources[i + 1:])
         best = max((s.credibility_score or 0.0) for s in supporting_sources)
         scores[item.id] = best
@@ -280,6 +277,7 @@ def synthesize(
 
     ranked = sorted(items, key=key)
     names = {a.id: a.name for a in plan.aspects}
+    required = {r.id for r in ledger.requirements if r.priority == "required"}
 
     def build(chosen: list[EvidenceItem]) -> EvidenceBundle:
         sections = []
@@ -291,14 +289,50 @@ def synthesize(
                     confidence=section_label([i.confidence for i in group])))
         return EvidenceBundle(sections=sections)
 
+    def essential(item: EvidenceItem, kept: list[EvidenceItem]) -> list[str]:
+        """The required requirements `item` is the last kept support of."""
+        return [r for r in links(item, ledger) if r in required and not any(
+            r in links(other, ledger) for other in kept if other is not item)]
+
     kept, cut = compress_to_budget(
-        ranked, lambda chosen: bundle_tokens(build(chosen)) <= deps.evidence_budget_tokens)
+        ranked, lambda chosen: bundle_tokens(build(chosen)) <= deps.evidence_budget_tokens,
+        lambda item, chosen: bool(essential(item, chosen)))
     for item in cut:
         deps.log(owner_id, run_id, "evidence_cut", reason="over evidence budget",
                  evidence_id=item.id, subtask_id=item.subtask_id, confidence=item.confidence,
-                 rank=ranked.index(item) + 1)
+                 rank=ranked.index(item) + 1, requirement_ids=links(item, ledger),
+                 last_support_of=essential(item, [*kept, item]))
     _log_recovery_outcome(deps, owner_id, run_id, research, items, kept)
     return build(kept)
+
+
+def _candidates(deps: Deps, owner_id: str, run_id: str, plan: SubTaskPlan,
+                extraction: ExtractionResult, sources_of: dict[str, list[str]],
+                scope_of: dict[str, PassageScope]) -> list[_Candidate]:
+    """Step 1: one candidate per extracted fact a Sub-task read. A fact whose Passage no
+    succeeded Sub-task read (or whose provenance is gone) is logged, never guessed at."""
+    tasks = sorted(plan.sub_tasks, key=lambda t: (t.priority, t.id))
+    out = []
+    for f in extraction.facts:
+        if f.passage is None or f.source_id is None:
+            continue
+        readers = [t for t in tasks if f.source_id in sources_of.get(t.id, [])
+                   and (scope_of[t.id].get(f.source_id) is None
+                        or f.passage in scope_of[t.id][f.source_id])]
+        if not readers:
+            deps.log(owner_id, run_id, "evidence_dropped", reason=DROP_NO_CITATION,
+                     fact_id=f.id, statement=f.statement[:120])
+            continue
+        task = next((t for t in readers if t.id == f.subtask_id), readers[0])
+        identity = merge_identity(statement=f.statement, entity=f.entity, predicate=f.predicate,
+                                  value=f.value, scope=f.scope, period=f.period,
+                                  observations=[f.passage.observation_id])
+        out.append(_Candidate(
+            id=derive_evidence_id(run_id, identity), statement=f.statement, subtask=task,
+            refs=[f.passage], entities=list(f.entities), entity=f.entity,
+            predicate=f.predicate, value=f.value, scope=f.scope, period=f.period,
+            requirement_ids=list(f.requirement_ids)))
+    return out
 
 
 def before_window(item: EvidenceItem, horizon_months: int, today: date) -> bool:
@@ -316,7 +350,7 @@ def _log_recovery_outcome(deps: Deps, owner_id: str, run_id: str, research: Rese
                           validated: list[EvidenceItem], retained: list[EvidenceItem]) -> None:
     """T18 CS2: for each recovered documents Sub-task, what recovery alone contributed: its
     chunks no Document Reader selected, the items citing one that passed provenance, figures
-    and entailment, and those kept in the bundle. Retrieval alone never counts."""
+    and support, and those kept in the bundle. Retrieval alone never counts."""
     selected = {(p.observation_id, p.index) for r in research.results
                 if r.status == "succeeded" and r.scope_origin == "doc_reader"
                 for ref in r.source_refs for p in ref.passages}
@@ -334,56 +368,14 @@ def _log_recovery_outcome(deps: Deps, owner_id: str, run_id: str, research: Rese
                  validated_items=citing(validated), retained_items=citing(retained))
 
 
-def _draft(deps: Deps, owner_id: str, run_id: str, task: SubTask, batch: list[Window]) -> list[_Candidate]:
-    refs = {n: PassageRef(observation_id=w.passage.observation_id, index=w.passage.index)
-            for n, w in enumerate(batch, start=1)}
-    numbered = render_batch(batch)
-    user = f"Sub-task: {task.query}\n\n{numbered}"
-    deps.spend(owner_id, run_id, DRAFT_SYSTEM, user)
-    native = deps.native_json(deps.light_model, _Drafts) if deps.native_json else None
-    try:
-        reply = ask_structured(deps.light_model, DRAFT_SYSTEM, user, _Drafts, native)
-    except BadModelReply as e:
-        deps.log(owner_id, run_id, "draft_batch_failed", subtask_id=task.id, detail=str(e))
-        return []
-    except StructuredOutputRejected as e:  # the schema itself refused: visible, never retried
-        deps.log(owner_id, run_id, "draft_batch_failed", subtask_id=task.id,
-                 detail=f"provider rejected structured output: {e}")
-        return []
-    out: list[_Candidate] = []
-    for d in reply.items:
-        statement = d.statement.strip()
-        cited = list(dict.fromkeys(refs[n] for n in d.passages if n in refs))
-        if not statement or not cited:
-            deps.log(owner_id, run_id, "evidence_dropped", reason=DROP_NO_CITATION,
-                     statement=statement[:120])
-            continue
-        # A period the cited text does not state is model output only: it must not decide Merge.
-        # Checked against exactly the windows the model was shown and cited.
-        period, rejected = stated_period(d.as_of_period), None
-        if period != UNKNOWN and not any(
-                period_stated_in(period, batch[n - 1].text) for n in d.passages if n in refs):
-            period, rejected = UNKNOWN, period
-        identity = merge_identity(statement=statement, entity=d.entity, predicate=d.predicate,
-                                  value=d.value, scope=d.scope, period=period,
-                                  observations=[r.observation_id for r in cited])
-        evidence_id = derive_evidence_id(run_id, identity)
-        if rejected:
-            deps.log(owner_id, run_id, "draft_period_rejected", evidence_id=evidence_id,
-                     subtask_id=task.id, period=rejected)
-        out.append(_Candidate(
-            id=evidence_id, statement=statement, subtask=task,
-            refs=cited, entities=[e.strip() for e in d.entities if e.strip()],
-            entity=d.entity.strip(), predicate=d.predicate.strip(), value=d.value.strip(),
-            scope=d.scope.strip(), period=period))
-    return out
-
-
 def literal_problem(
     *, statement: str, entities: list[str], entity: str, passage_text: str,
     common: frozenset[str] | None = None, document_entity: str | None = None,
 ) -> str | None:
-    """Every number and every name the statement asserts must appear in the Passage
+    """Retired from production by ADR-0006. The T5-T18 lexical gate, kept unchanged as the
+    deterministic baseline the ADR-0005 benchmark and the historical T18 replays measure.
+
+    Every number and every name the statement asserts must appear in the Passage
     (`domain/provenance`, T18 CS1B: a model-written entity label counts only through the names
     the statement itself uses). Returns the reason it does not, or None. Lexical only: it says
     nothing about whether the Passage supports the statement. `common` is the lower-case
@@ -408,50 +400,39 @@ def _validate(
     deps: Deps, owner_id: str, run_id: str, c: _Candidate, source_by_obs: dict[str, Source],
     fetched_on: dict[str, date], facts_at: dict[tuple[str, int], list[ExtractedFact]],
     facts_by_group: dict[tuple[str, str, str], list[ExtractedFact]],
-    common: frozenset[str] | None = None, entity_of: dict[str, str | None] | None = None,
-) -> EvidenceItem | None:
+    entity_of: dict[str, str | None] | None = None,
+) -> tuple[EvidenceItem, dict[tuple[str, int], str]] | None:
+    """Step 3. The verified item and the text of every Passage judged, or None (dropped)."""
+    entity_of = entity_of or {}
+
     def drop(reason: str, **extra) -> None:
         deps.log(owner_id, run_id, "evidence_dropped", reason=reason, evidence_id=c.id,
                  subtask_id=c.subtask.id, statement=c.statement[:120], **extra)
 
-    # Deterministic checks first. Provenance gates every candidate. The literal-value check
-    # decides which candidates may support the item; a Passage that fails it may still
-    # contradict it, so it still goes to the entailment call.
+    # Deterministic invariants first: provenance gates every cited Passage, and only a Passage
+    # stating every figure may support the item. A Passage that fails the figure check may still
+    # contradict it, so it is still judged.
     candidates: list[Passage] = []
     can_support: set[tuple[str, int]] = set()
-    credited: dict[tuple[str, int], list[str]] = {}  # names the document's identity supplied
-    rejected: list[str] = []
     refs: list[dict] = []  # each cited Passage with why it cannot support: replayable offline
-
-    def reject(ref: PassageRef, why: str) -> None:
-        rejected.append(why)
-        refs.append({**ref.model_dump(), "reason": why})
 
     for ref in c.refs:
         if ref.observation_id not in source_by_obs:
-            reject(ref, "not from this Run's Sources")
+            refs.append({**ref.model_dump(), "reason": "not from this Run's Sources"})
             continue
         try:
             passage = deps.store.get_passages(owner_id, ref.observation_id, [ref.index])[0]
         except NotFoundError:
-            reject(ref, "no such Passage")
+            refs.append({**ref.model_dump(), "reason": "no such Passage"})
             continue
         candidates.append(passage)
-        problem = literal_problem(statement=c.statement, entities=c.entities,
-                                  entity=c.entity, passage_text=passage.text, common=common,
-                                  document_entity=(entity_of or {}).get(ref.observation_id))
-        if problem:
-            reject(ref, problem)
+        missing = unsupported_numbers(c.statement, passage.text)
+        if missing:
+            refs.append({**ref.model_dump(), "reason": f"value not in Passage: {sorted(missing)}"})
         else:
             can_support.add(_key(ref))
-            names = credited_names(statement=c.statement, entities=c.entities, entity=c.entity,
-                                   passage_text=passage.text, common=common,
-                                   document_entity=(entity_of or {}).get(ref.observation_id))
-            if names:
-                credited[_key(ref)] = names
     if not can_support:
-        drop(DROP_LITERAL, rejected=rejected,
-             refs=refs)
+        drop(DROP_LITERAL, rejected=[r["reason"] for r in refs], refs=refs)
         return None
     text_of = {(p.observation_id, p.index): p.text for p in candidates}
 
@@ -466,9 +447,9 @@ def _validate(
         deps.log(owner_id, run_id, "period_rejected", evidence_id=c.id, period=period)
         period = UNKNOWN
 
-    # Passages that disagree may sit in another drafting batch. The Extraction facts say where:
+    # Passages that disagree may come from another Source. The Extraction facts say where:
     # same entity, predicate and scope, a different value, and not a clearly different period.
-    # They go to the entailment call like any other candidate, but can never support the item.
+    # They are judged like any other candidate, but can never support the item.
     if c.entity and c.predicate and value:
         for f in facts_by_group.get(group_key(c.entity, c.predicate, c.scope), []):
             k = _key(f.passage)
@@ -485,50 +466,33 @@ def _validate(
             candidates.append(challenger)
             text_of[k] = challenger.text
 
-    # One bounded entailment call per item, chunked when the candidates exceed the cap. A
-    # Passage over the cap is read in windows; its verdicts are combined per Passage.
-    # Source-identity exception (T18 Stage C, uploaded documents only): a Passage of an uploaded
-    # document whose company the deterministic check above credited (the Passage names no one
-    # else) is judged on the statement without those company names, in its own call, so the
-    # judge decides the fact itself, not who the document speaks for. Nothing else is removed:
-    # every other name, number, period and qualifier must still be stated by the Passage. Web
-    # and Historical items never take this path, and ENTAIL_SYSTEM is unchanged.
-    judged_as = without_credited_names(c.statement, [n for v in credited.values() for n in v])
-    groups = [(c.statement, [p for p in candidates if not judged_as or _key(p) not in credited])]
-    if judged_as:
-        groups.append((judged_as, [p for p in candidates if _key(p) in credited]))
+    # The support judgment (ADR-0006 §1), chunked at the per-call cap. A Passage judged in
+    # several windows supports the item if any window does; any window contradicting it counts.
+    judgments = judge_units(deps, owner_id, run_id, c.statement,
+                            passage_units(c.statement, candidates, deps.passage_token_cap,
+                                          entity_of),
+                            evidence_id=c.id, subtask_id=c.subtask.id)
     verdicts: dict[tuple[str, int], set[str]] = {}
     present_state: set[tuple[str, int]] = set()
-    for statement, batch in ((s, b) for s, group in groups if group
-                             for b in batch_passages(group, deps.passage_token_cap)):
-        numbered = render_batch(batch)
-        user = f"Statement: {statement}\n\n{numbered}"
-        deps.spend(owner_id, run_id, ENTAIL_SYSTEM, user)
-        try:
-            reply = ask_json(deps.light_model, ENTAIL_SYSTEM, user, EntailmentVerdicts)
-        except BadModelReply as e:
-            deps.log(owner_id, run_id, "entailment_failed", evidence_id=c.id, detail=str(e))
-            continue
-        for v in reply.verdicts:
-            if not 1 <= v.passage <= len(batch):
-                continue
-            k = (batch[v.passage - 1].passage.observation_id, batch[v.passage - 1].passage.index)
-            verdicts.setdefault(k, set()).add(v.verdict)
-            if v.verdict == "SUPPORTED" and v.asserts_present_state:
-                present_state.add(k)
+    for j in judgments:
+        verdicts.setdefault(_key(j.ref), set()).add(j.verdict)
+        if j.present_state:
+            present_state.add(_key(j.ref))
     supported = [PassageRef(observation_id=o, index=i) for (o, i), vs in verdicts.items()
                  if "SUPPORTED" in vs and (o, i) in can_support]
     contradicted = [PassageRef(observation_id=o, index=i) for (o, i), vs in verdicts.items()
                     if "CONTRADICTED" in vs and not ("SUPPORTED" in vs and (o, i) in can_support)]
-    # Per-Passage diagnostics: references and verdicts only, never Passage text or replies.
-    deps.log(owner_id, run_id, "evidence_entailment", evidence_id=c.id, subtask_id=c.subtask.id,
+    errors = sum(1 for vs in verdicts.values() if vs == {"VERIFICATION_ERROR"})
+    # Per-Passage outcome: references and verdicts only, never Passage text or replies.
+    deps.log(owner_id, run_id, "evidence_support", evidence_id=c.id, subtask_id=c.subtask.id,
              passages=[{"observation_id": k[0], "index": k[1], "verdicts": sorted(verdicts.get(k, ())),
-                        "literal_gate": k in can_support,
-                        "document_credit": bool(judged_as) and k in credited}
+                        "figure_gate": k in can_support,
+                        "identity_context": bool(entity_of.get(k[0]))}
                        for k in (_key(p) for p in candidates)],
              outcome="supported" if supported else DROP_UNSUPPORTED)
     if not supported:
-        drop(DROP_UNSUPPORTED, verdicts={"contradicted": len(contradicted)})
+        drop(DROP_UNSUPPORTED, verdicts={"contradicted": len(contradicted)},
+             verification_errors=errors)
         return None
     if period != UNKNOWN and not any(period_stated_in(period, text_of[_key(r)]) for r in supported):
         deps.log(owner_id, run_id, "period_rejected", evidence_id=c.id, period=period)
@@ -588,4 +552,5 @@ def _validate(
         predicate=c.predicate, scope=c.scope, value=value, as_of_period=period,
         derived_from=derived, temporally_ambiguous=ambiguous, conflicting=conflicting,
         contradicting=contradicting, conflict_fact_ids=linked,
-    )
+        requirement_ids=list(c.requirement_ids),
+    ), text_of

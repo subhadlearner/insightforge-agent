@@ -1,7 +1,8 @@
-"""T5: Extraction and synthesis, driven directly over a seeded SourceStore.
+"""T5 and ADR-0006: Extraction and synthesis, driven directly over a seeded SourceStore.
 
-Each test builds the Sources it needs, scripts the three Passage-reading model calls (extract,
-draft, entail) and calls the stage. The end-to-end path is covered in test_happy_path."""
+Each test builds the Sources it needs, scripts the Passage-reading model calls (extraction and
+the support judgment; older tests script a drafting handler, which `as_facts` turns into what
+Extraction proposes) and calls the stage. The end-to-end path is covered in test_happy_path."""
 
 import json
 import re
@@ -51,15 +52,40 @@ def mapped(entail):
     its excerpt), so code's figure check still applies but nothing else is assumed."""
     def handler(ps, user):
         text = dict(ps)
+        verdicts = entail(ps, user)
+        if not isinstance(verdicts, list):  # a malformed reply stays malformed
+            return verdicts
         return [{**v, "parts": [{"part": statement_of(user), "excerpts": [text[v["passage"]]]}]}
                 if v.get("verdict") == "SUPPORTED" and v.get("passage") in text else v
-                for v in entail(ps, user)]
+                for v in verdicts]
+    return handler
+
+
+def as_facts(draft):
+    """An extraction handler from a pre-ADR-0006 drafting one: Extraction is now the only pass
+    that proposes facts, so a test's scripted drafts are what it extracts. The drafting handler
+    sees the Source's Passages numbered 1..n, as a drafting call did; each drafted item becomes
+    one fact per Passage it cites (under that Passage's extraction label), and Merge does the
+    corroboration a multi-Passage draft used to claim. A position not shown stays invalid."""
+    def handler(ps, user):
+        labels = [n for n, _ in ps]
+        out = []
+        for d in draft([(i, t) for i, (_, t) in enumerate(ps, start=1)], user):
+            for pos in d.get("passages", []):
+                out.append({"passage_index": labels[pos - 1] if 1 <= pos <= len(labels) else -1,
+                            "statement": d["statement"],
+                            **{k: d[k] for k in ("entities", "entity", "predicate", "value",
+                                                 "scope") if k in d},
+                            **({"period": d["as_of_period"]} if "as_of_period" in d else {})})
+        return out
     return handler
 
 
 def light(extract_=None, draft=None, entail=None, support=None) -> Light:
     """`support` answers the ADR-0006 support judgment; without it, `entail` (verdicts only)
-    answers it through `mapped`."""
+    answers it through `mapped`. Without `extract_`, a `draft` handler answers extraction."""
+    if extract_ is None and draft is not None:
+        extract_ = as_facts(draft)
     def numbered(user):
         return [(int(n), t) for n, t in re.findall(r"^\[(\d+)\] (.+)$", user, re.MULTILINE)]
 
@@ -130,8 +156,13 @@ def world(make_deps):
             return [e.payload for e in evs if type_ is None or e.type == type_]
 
         def synth(self, plan, research, extraction=None):
-            return synthesize(self.deps, OWNER, RUN, BRIEF, plan, research,
-                              extraction or ExtractionResult())
+            """Extraction (the only pass proposing facts since ADR-0006) unless one is given,
+            then Synthesis."""
+            if extraction is None:
+                scope = research.passage_scope()
+                extraction = extract(self.deps, OWNER, RUN, list(scope), scope, plan=plan,
+                                     research=research)
+            return synthesize(self.deps, OWNER, RUN, BRIEF, plan, research, extraction)
 
         def items(self, bundle):
             return [i for s in bundle.sections for i in s.items]
@@ -158,8 +189,10 @@ def test_extraction_reads_one_source_at_a_time_and_stores_facts_as_it_goes(world
     result = extract(world.deps, OWNER, RUN, [a, b])
     calls = model.calls("You extract facts")
     assert len(calls) == 2
-    assert ["Page A" in c and "Page B" not in c for c in calls] == [True, False]
-    assert ["Page B" in c and "Page A" not in c for c in calls] == [False, True]
+    assert ["4.27" in c and "1.80" not in c for c in calls] == [True, False]
+    assert ["1.80" in c and "4.27" not in c for c in calls] == [False, True]
+    # ADR-0006 §2: never the Source title, whose qualifiers no Passage states.
+    assert not any("Page A" in c or "Page B" in c for c in calls)
     stored = world.deps.repos.entities.list_for_run(OWNER, RUN)
     assert [f.id for f in stored] == [f.id for f in result.facts]
     assert {f.source_id for f in stored} == {a, b}
@@ -231,23 +264,31 @@ def test_a_number_not_in_the_passage_is_dropped_and_logged(world):
     assert "9.99" in str(dropped["rejected"])
 
 
-def test_a_named_entity_not_in_the_passage_is_dropped(world):
+def test_a_wrong_name_is_judged_not_refused_by_a_lexical_rule(world):
+    """ADR-0006: no name rule refuses a candidate before the judge; the judge sees the statement
+    as written and decides (here, correctly, that the Passage does not support it)."""
     plan, research = one_source(world)
-    world.deps.light_model = light(
+    model = light(
         draft=lambda ps, u: [{"statement": "Tesla sold 4.27 million vehicles in 2025.",
                               "passages": [1], "entities": ["Tesla"]}],
-        entail=all_supported)
+        entail=lambda ps, u: [{"passage": n, "verdict": "SUPPORTED" if statement_of(u).rstrip(".")
+                               in t else "INSUFFICIENT_EVIDENCE"} for n, t in ps])
+    world.deps.light_model = model
     assert world.items(world.synth(plan, research)) == []
-    assert "Tesla" in str(world.events("evidence_dropped")[0]["rejected"])
+    (judged,) = model.calls("You check whether")
+    assert judged.startswith("Statement: Tesla sold 4.27 million vehicles in 2025.")
+    (dropped,) = world.events("evidence_dropped")
+    assert dropped["reason"] == "no supported Passage"
 
 
-def test_a_draft_citing_a_passage_it_was_not_shown_is_dropped(world):
+def test_a_fact_citing_a_passage_it_was_not_shown_is_dropped(world):
     plan, research = one_source(world)
     world.deps.light_model = light(
         draft=lambda ps, u: [{"statement": "BYD sold 4.27 million vehicles in 2025.", "passages": [99]}],
         entail=all_supported)
     assert world.items(world.synth(plan, research)) == []
-    assert world.events("evidence_dropped")[-1]["reason"] == "draft cites no Passage"
+    (dropped,) = world.events("extraction_fact_dropped")
+    assert dropped["passage_index"] == -1
 
 
 def test_an_item_with_no_supported_passage_is_dropped_and_logged(world):
@@ -259,20 +300,22 @@ def test_an_item_with_no_supported_passage_is_dropped_and_logged(world):
     assert dropped["reason"] == "no supported Passage" and dropped["evidence_id"].startswith("ev_")
 
 
-def test_entailment_is_one_call_per_item_and_a_bad_reply_supports_nothing(world):
+def test_the_support_judgment_is_one_call_per_item_and_a_bad_reply_supports_nothing(world):
     world.page("https://a.test/x", "BYD sold 4.27 million vehicles in 2025.\n\nBYD sold 3.02 million vehicles in 2024.")
     plan, research = world.plan(("s1", "a1", 1)), world.research(s1=["https://a.test/x"])
     model = light(draft=draft_all(), entail=all_supported)
     world.deps.light_model = model
     assert len(world.items(world.synth(plan, research))) == 2
-    assert len(model.calls("You judge whether")) == 2
+    assert len(model.calls("You check whether")) == 2
     bad = light(draft=draft_all(), entail=lambda ps, u: "not a list")
     world.deps.light_model = bad
     assert world.items(world.synth(plan, research)) == []
+    dropped = [d for d in world.events("evidence_dropped") if d["reason"] == "no supported Passage"]
+    assert len(dropped) == 2 and all(d["verification_errors"] == 1 for d in dropped)
 
 
 def test_candidates_over_the_cap_are_chunked_and_each_chunk_is_a_call(world):
-    """One item with many candidate Passages: the entailment call is split at the cap."""
+    """One item with many candidate Passages: the support call is split at the cap."""
     body = "\n\n".join("BYD sold 4.27 million vehicles in 2025. " + "filler " * 30 for _ in range(4))
     world.page("https://a.test/x", body)
     plan, research = world.plan(("s1", "a1", 1)), world.research(s1=["https://a.test/x"])
@@ -284,7 +327,10 @@ def test_candidates_over_the_cap_are_chunked_and_each_chunk_is_a_call(world):
     world.deps.light_model = model
     (item,) = world.items(world.synth(plan, research))
     assert len(item.supporting) == 4
-    for call in model.calls("You judge whether") + model.calls("You draft evidence"):
+    assert len(model.calls("You check whether")) > 1
+    for call in model.calls("You check whether"):
+        assert estimate_tokens(call) <= 120
+    for call in model.calls("You extract facts"):
         assert estimate_tokens(call.split("\n\n", 1)[1]) <= 120
 
 
@@ -371,7 +417,11 @@ def test_primary_passage_is_the_most_credible_then_most_relevant_then_lowest_id(
 
 # =============================== Synthesis: contradictions ==================================
 
-def contradiction_world(world, scope_b="global", period_b="2025"):
+def contradiction_world(world, scope_b="global", period_b="2025", period_a="2025",
+                        present=False):
+    """Two Sources disagreeing on BYD's 2025 sales. Extraction (scripted here as its result)
+    proposes both facts; the judge supports a statement only where the Passage states 4.27
+    million and contradicts it elsewhere."""
     world.page("https://a.test/x", "BYD sold 4.27 million vehicles in 2025.", cred=0.9)
     world.page("https://b.example/y", "BYD sold 4.01 million vehicles in 2025.", cred=0.9)
     plan = world.plan(("s1", "a1", 1))
@@ -379,28 +429,25 @@ def contradiction_world(world, scope_b="global", period_b="2025"):
     sa = world.deps.store.read_source(OWNER, world.sources["https://a.test/x"])
     sb = world.deps.store.read_source(OWNER, world.sources["https://b.example/y"])
 
-    def fact(fid, src, scope, period):
+    def fact(fid, src, value, scope, period):
         return ExtractedFact(
             id=fid, source_id=src.source.id,
             passage=PassageRef(observation_id=src.observation.id, index=0),
             statement=src.passages[0].text, entity="BYD", predicate="units_sold", scope=scope,
-            value="x", period=period)
+            value=value, period=period)
 
-    extraction = ExtractionResult(facts=[fact("fa", sa, "global", "2025"),
-                                         fact("fb", sb, scope_b, period_b)])
-    verdicts = lambda ps, u: [  # noqa: E731
-        {"passage": n, "verdict": "SUPPORTED" if "4.27" in t else "CONTRADICTED"} for n, t in ps]
-    world.deps.light_model = light(
-        draft=lambda ps, u: [{"statement": "BYD sold 4.27 million vehicles in 2025.",
-                              "passages": [n for n, _ in ps], "entity": "BYD",
-                              "predicate": "units_sold", "value": "4.27 million",
-                              "scope": "global", "as_of_period": "2025"}],
-        entail=verdicts)
+    extraction = ExtractionResult(facts=[fact("fa", sa, "4.27 million", "global", period_a),
+                                         fact("fb", sb, "4.01 million", scope_b, period_b)])
+    world.deps.light_model = light(entail=lambda ps, u: [
+        {"passage": n, "verdict": "SUPPORTED" if "4.27" in t else "CONTRADICTED",
+         "asserts_present_state": present} for n, t in ps])
     return plan, research, extraction
 
 
 def test_a_genuine_contradiction_marks_the_item_conflicting_and_low(world):
     plan, research, extraction = contradiction_world(world)
+    # The 4.01 fact is contradicted by its own Passage's judge here and dropped; the 4.27 item
+    # keeps the other Source as its contradicting Passage.
     (item,) = world.items(world.synth(plan, research, extraction))
     assert item.conflicting and item.confidence == "LOW"
     assert len(item.supporting) == 1 and len(item.contradicting) == 1
@@ -413,7 +460,10 @@ def test_a_different_scope_or_period_is_a_distinct_fact_not_a_contradiction(worl
     plan, research, extraction = contradiction_world(world, scope_b=scope, period_b=period)
     (item,) = world.items(world.synth(plan, research, extraction))
     assert not item.conflicting and item.contradicting == []
-    assert item.confidence in ("MEDIUM", "LOW") and world.events("contradiction_ignored")
+    assert item.confidence in ("MEDIUM", "LOW")
+    # A distinct fact is never even a challenger: the item is judged on its own Passage only.
+    (mine,) = [e for e in world.events("evidence_support") if e["evidence_id"] == item.id]
+    assert [p["index"] for p in mine["passages"]] == [0] and len(mine["passages"]) == 1
 
 
 # =============================== Synthesis: As-of period ====================================
@@ -540,11 +590,12 @@ def test_synthesis_payloads_respect_the_per_call_cap_separately_from_the_bundle_
         entail=all_supported)
     world.deps.light_model = model
     bundle = world.synth(plan, research)
-    drafts, entails = model.calls("You draft evidence"), model.calls("You judge whether")
-    assert len(drafts) > 3 and entails  # the small cap forced splitting
-    for call in drafts + entails:
-        passage_text = call.split("\n\n", 1)[1]
-        assert estimate_tokens(passage_text) <= cap  # per-call cap on the rendered Passage portion
+    extracts, supports = model.calls("You extract facts"), model.calls("You check whether")
+    assert len(extracts) > 3 and supports  # the small cap forced splitting
+    for call in extracts:  # the rendered Passage portion, after the Sub-task header
+        assert estimate_tokens(call.split("\n\n", 1)[1]) <= cap
+    for call in supports:  # the whole request: statement, identity context and units
+        assert estimate_tokens(call) <= cap
     assert 0 < bundle_tokens(bundle) <= budget  # bundle budget: a separate limit
 
 
@@ -557,19 +608,11 @@ def test_a_run_over_its_token_cap_fails_with_the_reason(world):
 
 
 def test_a_derived_as_of_period_is_used_for_the_contradiction_check(world):
-    plan, research, extraction = contradiction_world(world)
-    # The item states no period; both Sources are undated present-state assertions, so the
-    # period is derived from the Observation date, and the contradicting fact (dated 2026)
-    # overlaps it.
-    extraction.facts[1].period = "2026"
-    world.deps.light_model = light(
-        draft=lambda ps, u: [{"statement": "BYD sold 4.27 million vehicles in 2025.",
-                              "passages": [n for n, _ in ps], "entity": "BYD",
-                              "predicate": "units_sold", "value": "4.27 million",
-                              "scope": "global"}],
-        entail=lambda ps, u: [
-            {"passage": n, "verdict": "SUPPORTED" if "4.27" in t else "CONTRADICTED",
-             "asserts_present_state": True} for n, t in ps])
+    # Extraction stated no period for the 4.27 fact; both Sources are undated present-state
+    # assertions, so its period is derived from the Observation date, and the contradicting
+    # fact (dated 2026) overlaps it.
+    plan, research, extraction = contradiction_world(world, period_a="UNKNOWN",
+                                                     period_b="2026", present=True)
     (item,) = world.items(world.synth(plan, research, extraction))
     assert item.derived_from == "observation_date" and item.conflicting
 
@@ -595,34 +638,37 @@ class Native:
         return Bound()
 
 
-def test_only_drafting_uses_the_native_structured_path(world):
+def test_only_extraction_uses_the_native_structured_path(world):
     plan, research = one_source(world)
     world.deps.light_model = light(draft=draft_all(), entail=all_supported)
     world.deps.native_json = native = Native()
     assert len(world.items(world.synth(plan, research))) == 1
-    assert native.schemas == ["_Drafts"]  # entailment and extraction keep plain JSON
+    assert native.schemas == ["_Facts"]  # the support judgment keeps plain JSON
 
 
-def test_a_provider_rejection_fails_that_batch_visibly_and_is_never_retried(world):
+def test_a_provider_rejection_fails_that_batch_visibly_and_is_reported_unread(world):
     plan, research = one_source(world)
     model = light(draft=draft_all(), entail=all_supported)
     world.deps.light_model, world.deps.native_json = model, Native(reject=True)
     assert world.items(world.synth(plan, research)) == []
-    (failed,) = world.events("draft_batch_failed")
-    assert failed["detail"].startswith("provider rejected structured output: ")
-    assert model.calls("You draft evidence") == []  # no fallback to plain JSON
+    statuses = [e["status"] for e in world.events("work_unit")]
+    assert statuses == ["rejected", "exhausted"]  # one Passage: nothing to split
+    (done,) = world.events("extraction_source_done")
+    (lost,) = done["failed_units"]
+    assert lost["reason"] == "rejected" and len(lost["passages"]) == 1
+    assert model.calls("You extract facts") == []  # no fallback to plain JSON
 
 
-def test_a_passage_cap_splits_a_drafting_batch_in_order_and_loses_nothing(world):
+def test_a_passage_cap_splits_an_extraction_batch_in_order_and_loses_nothing(world):
     body = "\n\n".join(f"BYD sold {n}.5 million vehicles in 2025." for n in range(1, 6))
     world.page("https://a.test/x", body)
     plan, research = world.plan(("s1", "a1", 1)), world.research(s1=["https://a.test/x"])
     model = light(draft=draft_all(), entail=all_supported)
     world.deps.light_model, world.deps.draft_passage_cap = model, 2
     items = world.items(world.synth(plan, research))
-    drafts = model.calls("You draft evidence")
-    assert [len(re.findall(r"^\[\d+\]", d, re.MULTILINE)) for d in drafts] == [2, 2, 1]
-    assert "1.5 million" in drafts[0] and "5.5 million" in drafts[2]
+    calls = model.calls("You extract facts")
+    assert [len(re.findall(r"^\[\d+\]", d, re.MULTILINE)) for d in calls] == [2, 2, 1]
+    assert "1.5 million" in calls[0] and "5.5 million" in calls[2]
     assert len(items) == 5
 
 
@@ -633,7 +679,7 @@ def test_without_a_passage_cap_batching_is_unchanged(world):
     model = light(draft=draft_all(), entail=all_supported)
     world.deps.light_model = model
     world.synth(plan, research)
-    assert len(model.calls("You draft evidence")) == 1
+    assert len(model.calls("You extract facts")) == 1
 
 
 # =============================== T18 CS1B: provenance name classes ==========================
@@ -651,17 +697,19 @@ def test_a_descriptive_entity_label_no_longer_drops_a_supported_statement(world)
     assert world.events("evidence_dropped") == []
 
 
-def test_a_sentence_initial_wrong_company_is_dropped_with_empty_entity_fields(world):
+def test_a_sentence_initial_wrong_company_is_left_to_the_judge(world):
+    """The T18 CS1B case: no name rule, so the judge is asked about the statement as written
+    and, judging correctly, refuses it."""
     plan, research = one_source(world)  # "BYD sold 4.27 million vehicles in 2025."
-    world.deps.light_model = light(
+    model = light(
         draft=lambda ps, u: [{"statement": "Tesla sold 4.27 million vehicles in 2025.",
                               "passages": [1]}],
-        entail=all_supported)
+        entail=lambda ps, u: [{"passage": n, "verdict": "INSUFFICIENT_EVIDENCE"} for n, _ in ps])
+    world.deps.light_model = model
     assert world.items(world.synth(plan, research)) == []
+    assert model.calls("You check whether")[0].startswith("Statement: Tesla sold")
     (dropped,) = world.events("evidence_dropped")
-    assert dropped["subtask_id"] == "s1"
-    (ref,) = dropped["refs"]
-    assert ref["index"] == 0 and ref["reason"] == "name not in Passage: ['Tesla']"
+    assert dropped["subtask_id"] == "s1" and dropped["reason"] == "no supported Passage"
 
 
 # =============================== T18 CS2: an uploaded document's own company ================
@@ -686,36 +734,62 @@ def northwind(world):
     return world.plan(("s1", "a1", 1)), world.research(s1=["nw"])
 
 
+def identity_judge(ps, user):
+    """A judge following the contract: the document's company by identity where the Passage
+    names no one else, never for a Passage that gives the fact to another company."""
+    statement = statement_of(user)
+    out = []
+    for n, t in ps:
+        if t.startswith("Medtronic"):
+            out.append({"passage": n, "verdict": "INSUFFICIENT_EVIDENCE"})
+            continue
+        rest = statement.removeprefix("Northwind Health discloses that ").rstrip(".")
+        out.append({"passage": n, "verdict": "SUPPORTED", "parts": [
+            {"part": "Northwind Health", "identity": True},
+            {"part": f"discloses that {rest}", "excerpts": [rest]}]})
+    return out
+
+
 def test_the_documents_own_company_may_be_named_for_its_own_chunks_only(world):
     plan, research = northwind(world)
     statement = "Northwind Health discloses that a single supplier provides the titanium."
-    world.deps.light_model = light(
+    model = light(
         draft=lambda ps, u: [{"statement": statement, "passages": [n]} for n, t in ps
                              if "single supplier" in t],
-        entail=all_supported)
+        support=identity_judge)
+    world.deps.light_model = model
     (item,) = world.items(world.synth(plan, research))
     assert [r.index for r in item.supporting] == [1]  # its own risk chunk, not Medtronic's
-    (dropped_ref,) = [r for d in world.events("evidence_dropped") for r in d.get("refs", [])] or [
-        None]
-    assert dropped_ref is None  # the item survived on chunk 1; chunk 2 only failed alone
+    assert all("is from an uploaded document of Northwind Health" in c
+               for c in model.calls("You check whether"))
 
 
-def test_a_chunk_about_another_company_is_never_attributed_to_the_documents_company(world):
+def test_a_chunk_about_another_company_is_judged_and_refused(world):
+    """The judge sees the Medtronic chunk with the document's identity context and, following
+    the contract, does not give Medtronic's fact to Northwind. (No code rule stops a permissive
+    judge here: the gold set's NW-N07 records that floor.)"""
     plan, research = northwind(world)
-    world.deps.light_model = light(
+    model = light(
         draft=lambda ps, u: [{"statement": "Northwind Health discloses that a single supplier "
                                            "provides the titanium.",
                               "passages": [n for n, t in ps if t.startswith("Medtronic")]}],
-        entail=all_supported)
+        support=identity_judge)
+    world.deps.light_model = model
     assert world.items(world.synth(plan, research)) == []
     (dropped,) = world.events("evidence_dropped")
-    assert "name not in Passage" in dropped["rejected"][0]
+    assert dropped["reason"] == "no supported Passage"
 
 
-def test_a_web_passage_never_gets_the_document_credit(world):
+def test_a_web_passage_never_gets_identity_context(world):
     plan, research = one_source(world, body="A single supplier provides the titanium.")
-    world.deps.light_model = light(
+    model = light(
         draft=lambda ps, u: [{"statement": "Northwind Health discloses that a single supplier "
                                            "provides the titanium.", "passages": [1]}],
-        entail=all_supported)
-    assert world.items(world.synth(plan, research)) == []
+        support=identity_judge)
+    world.deps.light_model = model
+    assert world.items(world.synth(plan, research)) == []  # identity refused by code
+    assert "Identity context" not in model.calls("You check whether")[0]
+    (judged,) = world.events("support_judged")
+    assert "no identity context was given" in judged["judgments"][0]["problems"][0]
+
+

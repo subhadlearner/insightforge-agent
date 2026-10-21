@@ -1,10 +1,12 @@
-"""T18 Stage C: the Fact-Checker uses the same source-identity rule as Synthesis.
+"""T18 Stage C: the Fact-Checker uses the same source-identity rule as Synthesis (ADR-0006).
 
-Before the fix, a current Claim "Northwind Health research and development spending was 71
+Before T18 Stage C, a current Claim "Northwind Health research and development spending was 71
 million dollars in fiscal 2025." citing the uploaded Northwind report's Passage "Research and
 development spending was 71 million dollars in fiscal 2025." was UNVERIFIED by a strict judge
-only because the Passage does not name the company the document establishes. The judge below
-is strict: SUPPORTED only where the Passage states the judged statement itself."""
+only because the Passage does not name the company the document establishes. Now the Claim is
+judged as written, with identity context naming the document's company; the judge below follows
+the contract (the company from identity, every other part from the Passage's own words, never
+identity for a Passage giving the fact to someone else)."""
 
 import json
 import re
@@ -36,11 +38,21 @@ RND = "Northwind Health research and development spending was 71 million dollars
 def strict() -> ScriptedChat:
     def reply(messages):
         user = str(messages[-1].content)
-        statement = user.split("\n", 1)[0].removeprefix("Statement: ").rstrip(".").casefold()
-        spans = re.findall(r"^\[(\d+)\] (.+)$", user, re.MULTILINE)
-        return AIMessage(content=json.dumps({"verdicts": [
-            {"passage": int(n), "verdict": "SUPPORTED" if statement in t.casefold()
-             else "INSUFFICIENT_EVIDENCE"} for n, t in spans]}))
+        statement = user.split("\n", 1)[0].removeprefix("Statement: ").rstrip(".")
+        out = []
+        for n, t in re.findall(r"^\[(\d+)\] (.+)$", user, re.MULTILINE):
+            identity = (f"Passage [{n}] is from an uploaded document of Northwind Health" in user
+                        and not t.startswith("Medtronic"))
+            rest = statement
+            for name in ("The Northwind Health ", "Northwind Health "):
+                if identity and rest.startswith(name):
+                    rest = rest.removeprefix(name)
+            found = rest.casefold() in t.casefold()
+            parts = [{"part": "Northwind Health", "identity": True}] if rest != statement else []
+            out.append({"passage": int(n),
+                        "verdict": "SUPPORTED" if found else "INSUFFICIENT_EVIDENCE",
+                        **({"parts": parts + [{"part": rest, "excerpts": [rest]}]} if found else {})})
+        return AIMessage(content=json.dumps({"verdicts": out}))
     return ScriptedChat(reply=reply)
 
 
@@ -73,68 +85,68 @@ def check(make_deps, claim, chunks=CHUNKS, cited=1, kind="pdf", model=None, hist
     else:
         result = fact_check(deps, "alice", "run_1", draft_of([claim]), bundle)
     (verdict,) = result.verdicts
-    judged = [str(m[-1].content).split("\n", 1)[0] for m in model.seen]
+    judged = [str(m[-1].content) for m in model.seen]
     events = [e.payload for e in deps.repos.events.read_after("alice", "run_1")
-              if e.type == "fact_check_entailment"]
+              if e.type == "fact_check_support"]
     return verdict, judged, events
+
+
+IDENTITY = "is from an uploaded document of Northwind Health"
 
 
 def test_a_document_claim_naming_the_documents_company_is_verified_on_its_fact(make_deps):
     v, judged, events = check(make_deps, RND)
     assert v.verdict == "verified" and v.check == "document_passages"
-    assert judged == ["Statement: Research and development spending was 71 million dollars in "
-                      "fiscal 2025."]
-    assert events[0]["document_credit"] is True
+    (request,) = judged
+    assert request.startswith(f"Statement: {RND}") and IDENTITY in request  # as written
+    assert events[0]["cited_judged"] is True
 
 
 def test_the_programmes_pattern_is_verified_the_same_way(make_deps):
     claim = ("The Northwind Health pipeline holds 6 programmes in clinical trials at the end "
              "of fiscal 2025.")
     v, judged, _ = check(make_deps, claim, cited=2)
-    assert v.verdict == "verified"
-    assert judged == ["Statement: The pipeline holds 6 programmes in clinical trials at the end "
-                      "of fiscal 2025."]
+    assert v.verdict == "verified" and judged[0].startswith(f"Statement: {claim}")
 
 
 def test_an_added_qualifier_is_still_judged_and_rejected(make_deps):
     wider = ("Northwind Health cardiology research and development spending was 71 million "
              "dollars in fiscal 2025.")
     v, judged, _ = check(make_deps, wider)
-    assert v.verdict == "unverified"
-    assert judged == ["Statement: Cardiology research and development spending was 71 million "
-                      "dollars in fiscal 2025."]
+    assert v.verdict == "unverified" and judged[0].startswith(f"Statement: {wider}")
 
 
-def test_credit_alone_never_verifies(make_deps):
+def test_identity_alone_never_verifies(make_deps):
     never = ScriptedChat(reply=lambda m: AIMessage(content=json.dumps({"verdicts": [
         {"passage": 1, "verdict": "INSUFFICIENT_EVIDENCE"}]})))
     v, _, _ = check(make_deps, RND, model=never)
     assert v.verdict == "unverified"
 
 
-def test_a_passage_about_another_company_gets_no_credit(make_deps):
+def test_a_passage_about_another_company_is_not_given_to_the_document(make_deps):
     chunks = list(CHUNKS)
     chunks[1] = "Medtronic research and development spending was 71 million dollars in fiscal 2025."
-    v, judged, events = check(make_deps, RND, chunks=chunks)
+    v, judged, _ = check(make_deps, RND, chunks=chunks)
     assert v.verdict == "unverified"
-    assert judged and all(j == f"Statement: {RND}" for j in judged)  # judged as written
-    assert all("document_credit" not in e for e in events)
+    assert judged and all(j.startswith(f"Statement: {RND}") for j in judged)  # judged as written
 
 
-def test_web_claims_are_judged_as_written(make_deps):
-    v, judged, events = check(make_deps, RND, kind="web")
+def test_web_claims_get_no_identity_context(make_deps):
+    v, judged, _ = check(make_deps, RND, kind="web")
     assert v.verdict == "unverified"
-    assert judged and all(j == f"Statement: {RND}" for j in judged)
-    assert all("document_credit" not in e for e in events)
+    assert judged and all(j.startswith(f"Statement: {RND}") and "Identity context" not in j
+                          for j in judged)
 
 
-def test_historical_claims_are_judged_as_written(make_deps):
+def test_historical_claims_of_an_uploaded_document_get_its_identity_too(make_deps):
+    """Identity is a property of the cited document, not of the Claim's kind: T18 CS2 kept
+    Historical Claims out only because its credit removed words from the Claim, and nothing is
+    removed now."""
     v, judged, _ = check(make_deps, RND, historical=True)
-    assert v.check == "historical_document_passages" and v.verdict == "unverified"
-    assert judged and all(j == f"Statement: {RND}" for j in judged)
+    assert v.check == "historical_document_passages" and v.verdict == "verified"
+    assert judged and all(IDENTITY in j for j in judged)
 
 
 def test_a_claim_whose_passage_names_the_company_is_judged_as_written(make_deps):
-    v, judged, events = check(make_deps, CHUNKS[0], cited=0)
-    assert v.verdict == "verified" and judged == [f"Statement: {CHUNKS[0]}"]
-    assert "document_credit" not in events[0]
+    v, judged, _ = check(make_deps, CHUNKS[0], cited=0)
+    assert v.verdict == "verified" and judged[0].startswith(f"Statement: {CHUNKS[0]}")

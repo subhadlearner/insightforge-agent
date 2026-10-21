@@ -1,9 +1,13 @@
-"""T18 CS1A: the cited-Passage counterpart is a fallback used only when F2 finds no eligible
-candidate. It never evicts an F2 candidate, never bypasses the figure gate or the entailment
-call, and when it cannot be used the verdict is exactly F2's.
+"""The cited Passage in the Fact-Checker (T18 CS1A, made the rule by ADR-0006 §7).
+
+The cited Passage is always judged: on a web page through its exact re-fetched counterpart,
+screened with no similarity floor, ahead of F2's own candidates, which it never evicts. It never
+bypasses the figure gate or the support judgment. When the page does not hold it (changed,
+ambiguous, stored elsewhere, or not looked up), the Passage as it was cited is judged for the
+record (`cited_support`) and can never verify the Claim.
 
 The embedder is a table (exact cosines) and the light model is scripted, recording every
-entailment payload, so "identical to F2" is checked on the verdict and on what was sent."""
+support payload."""
 
 import json
 import math
@@ -39,11 +43,17 @@ class Table:
 
 
 def judge(verdict="SUPPORTED"):
+    """Each shown span gets `verdict` (or the next of a list); a SUPPORTED one carries the
+    permissive support map (statement as one part, the shown text as its excerpt)."""
     def reply(messages):
-        spans = re.findall(r"^\[(\d+)\] ", str(messages[-1].content), re.MULTILINE)
+        user = str(messages[-1].content)
+        statement = user.split("\n", 1)[0].removeprefix("Statement: ")
+        spans = re.findall(r"^\[(\d+)\] (.+)$", user, re.MULTILINE)
         v = verdict if isinstance(verdict, list) else [verdict] * len(spans)
         return AIMessage(content=json.dumps({"verdicts": [
-            {"passage": int(n), "verdict": v[i]} for i, n in enumerate(spans)]}))
+            {"passage": int(n), "verdict": v[i],
+             **({"parts": [{"part": statement, "excerpts": [t]}]} if v[i] == "SUPPORTED" else {})}
+            for i, (n, t) in enumerate(spans)]}))
     return ScriptedChat(reply=reply)
 
 
@@ -89,56 +99,56 @@ def test_the_counterpart_is_the_one_refetched_passage_with_the_same_normalised_t
         == (None, "ambiguous")
 
 
-# ---- used only when F2 has nothing -----------------------------------------------------------
+# ---- the cited Passage is always judged ----------------------------------------------------
 
-def test_zero_eligible_candidates_and_an_unchanged_cited_passage_reach_the_entailment_call(
-        make_deps):
+def test_with_no_eligible_f2_candidate_the_cited_passage_is_still_judged(make_deps):
     v, sent, (event,) = run(make_deps, f"Intro text.\n\n{CITED}")
     assert v.verdict == "verified" and v.matched.index == 1
     assert len(sent) == 1 and CITED in sent[0]
     assert v.similarity == pytest.approx(0.10)  # the counterpart's own cosine, reported as is
-    assert (event["match"], event["entered_top_k"], event["verified_by_counterpart"]) == ("unique", True, True)
-    assert event["original"]["index"] == 0 and event["counterpart"]["index"] == 1
+    assert (event["match"], event["original"]["index"], event["counterpart"]["index"]) == (
+        "unique", 0, 1)
+    assert v.cited_support == "SUPPORTED"
 
 
 @pytest.mark.parametrize("answer", ["INSUFFICIENT_EVIDENCE", "CONTRADICTED",
                                     ["SUPPORTED", "CONTRADICTED"]])
-def test_the_counterpart_still_needs_an_unambiguous_supported_judgment(make_deps, answer):
+def test_the_cited_passage_still_needs_an_unambiguous_supported_judgment(make_deps, answer):
     # A one-sentence counterpart gives one span; the mixed case judges it twice in one reply.
     model = judge(answer) if not isinstance(answer, list) else ScriptedChat(
         reply=lambda m: AIMessage(content=json.dumps({"verdicts": [
-            {"passage": 1, "verdict": "SUPPORTED"}, {"passage": 1, "verdict": "CONTRADICTED"}]})))
+            {"passage": 1, "verdict": "SUPPORTED", "parts": [{"part": CLAIM, "excerpts": [CITED]}]},
+            {"passage": 1, "verdict": "CONTRADICTED"}]})))
     v, sent, (event,) = run(make_deps, CITED, model=model)
     assert v.verdict == "unverified" and len(sent) == 1
-    assert "no candidate span was judged SUPPORTED" in v.reason
-    assert (event["entered_top_k"], event["verified_by_counterpart"]) == (True, False)
+    assert "no candidate was judged SUPPORTED" in v.reason
+    assert event["match"] == "unique"
 
 
-def test_a_malformed_entailment_reply_leaves_it_unverified(make_deps):
+def test_a_malformed_reply_leaves_it_unverified(make_deps):
     model = ScriptedChat(reply=lambda m: AIMessage(content="not json"))
     v, _, (event,) = run(make_deps, CITED, model=model)
-    assert v.verdict == "unverified" and "entailment check failed" in v.reason
-    assert event["entered_top_k"] is True and event["verified_by_counterpart"] is False
+    assert v.verdict == "unverified" and "VERIFICATION_ERROR" in v.reason
 
 
-@pytest.mark.parametrize("page, match", [
-    ("Germany added 16 GW of new solar PV capacity in 2025, its highest ever.", "absent"),
-    (f"Other.\n\n{CITED}\n\n{CITED}", "ambiguous"),
+@pytest.mark.parametrize("page, match, why", [
+    ("Germany added 16 GW of new solar PV capacity in 2025, its highest ever.", "absent",
+     "no longer holds the cited Passage (page drift)"),
+    (f"Other.\n\n{CITED}\n\n{CITED}", "ambiguous", "more than once, so it could not be matched"),
 ], ids=["page changed", "ambiguous"])
-def test_an_unusable_counterpart_leaves_the_f2_verdict_exactly_as_it_was(make_deps, page, match):
-    on, sent, (event,) = run(make_deps, page)
-    off, sent_off, _ = run(make_deps, page, flag=False)
-    assert same_verdict(on, off) and on.verdict == "unverified"
-    assert sent == sent_off == []
-    assert (event["match"], event["entered_top_k"]) == (match, False)
+def test_when_the_page_does_not_hold_it_the_cited_passage_is_judged_for_the_record_only(
+        make_deps, page, match, why):
+    v, sent, (event,) = run(make_deps, page)
+    assert event["match"] == match and len(sent) == 1 and CITED in sent[0]
+    assert v.verdict == "unverified" and v.cited_support == "SUPPORTED"
+    assert why in v.reason  # citation truth kept apart from the page's current state
 
 
-def test_a_counterpart_with_no_span_stating_the_figures_makes_no_call(make_deps):
+def test_a_cited_passage_that_does_not_state_the_figures_makes_no_call(make_deps):
     claim_off = CLAIM.replace("15 GW", "51 GW")
-    on, sent, (event,) = run(make_deps, CITED, claim=claim_off)
-    off, _, _ = run(make_deps, CITED, claim=claim_off, flag=False)
-    assert same_verdict(on, off) and sent == []
-    assert (event["match"], event["entered_top_k"]) == ("unique", False)
+    v, sent, (event,) = run(make_deps, CITED, claim=claim_off)
+    assert sent == [] and v.verdict == "unverified" and "51" in v.reason
+    assert event["match"] == "unique" and v.cited_support == "INSUFFICIENT_EVIDENCE"
 
 
 def test_a_refetch_stored_under_another_source_is_never_a_counterpart(make_deps):
@@ -152,37 +162,34 @@ def test_a_refetch_stored_under_another_source_is_never_a_counterpart(make_deps)
         def ingest_web(self, **kw):
             return self._store.ingest_web(**{**kw, "url": kw["url"] + "?moved"})
 
-    on, sent, (event,) = run(make_deps, CITED, store=Elsewhere)
-    off, _, _ = run(make_deps, CITED, flag=False, store=Elsewhere)
-    assert same_verdict(on, off) and sent == []
-    assert (event["match"], event["entered_top_k"]) == ("source_mismatch", False)
+    v, sent, (event,) = run(make_deps, CITED, store=Elsewhere)
+    assert event["match"] == "source_mismatch" and v.verdict == "unverified"
+    assert len(sent) == 1 and "stored under another Source" in v.reason  # judged as cited only
 
 
-# ---- never when F2 has candidates ------------------------------------------------------------
-
-def test_eligible_f2_candidates_are_judged_exactly_as_before_and_none_is_evicted(make_deps):
+def test_eligible_f2_candidates_are_all_judged_and_none_is_evicted(make_deps):
     a = "Germany added 15 GW of solar capacity in 2025, says the industry body."
     b = "In 2025 Germany installed 15 GW of solar PV capacity, the industry body said."
     c = "Germany's 15 GW of new solar capacity in 2025 was a record, said the industry body."
     page = "\n\n".join([a, b, c, CITED])
     scores = {a: 0.95, b: 0.93, c: 0.90}
-    on, sent, events = run(make_deps, page, scores=scores, model=judge("INSUFFICIENT_EVIDENCE"))
-    off, sent_off, _ = run(make_deps, page, scores=scores, flag=False,
-                           model=judge("INSUFFICIENT_EVIDENCE"))
-    assert sent == sent_off and len(sent) == 1 and CITED not in sent[0]  # three F2 places kept
-    assert same_verdict(on, off) and on.verdict == "unverified"
-    assert events == []  # the counterpart is not even looked up
+    v, sent, (event,) = run(make_deps, page, scores=scores, model=judge("INSUFFICIENT_EVIDENCE"))
+    shown = re.findall(r"^\[\d+\] (.+)$", sent[0], re.MULTILINE)
+    assert len(sent) == 1 and shown == [CITED, a, b, c]  # the cited Passage, then F2's three
+    assert event["match"] == "unique" and v.verdict == "unverified"
 
 
-def test_documents_keep_their_own_check(make_deps):
-    on, sent, events = run(make_deps, "unused", kind="pdf")
-    assert on.check == "document_passages" and on.verdict == "unverified"
-    assert sent == [] and events == []
+def test_a_document_claim_judges_its_stored_cited_chunk(make_deps):
+    v, sent, events = run(make_deps, "unused", kind="pdf", model=judge("INSUFFICIENT_EVIDENCE"))
+    assert v.check == "document_passages" and v.verdict == "unverified"
+    assert len(sent) == 1 and CITED in sent[0] and events == []  # no re-fetch, no lookup
+    assert v.cited_support == "INSUFFICIENT_EVIDENCE"
 
 
-def test_with_the_setting_off_nothing_is_looked_up(make_deps):
+def test_with_the_setting_off_nothing_is_looked_up_and_the_cited_text_cannot_verify(make_deps):
     v, sent, events = run(make_deps, CITED, flag=False)
-    assert v.verdict == "unverified" and sent == [] and events == []
+    assert events == [] and v.verdict == "unverified"
+    assert len(sent) == 1 and v.cited_support == "SUPPORTED"  # judged as cited, for the record
 
 
 # ---- inherited (T8) Historical Claims follow the same fallback -------------------------------
@@ -238,4 +245,4 @@ def test_a_cited_passage_that_is_gone_leaves_the_f2_verdict(make_deps):
     on, sent, (event,) = run(make_deps, CITED, store=Forgetful)
     off, _, _ = run(make_deps, CITED, flag=False, store=Forgetful)
     assert same_verdict(on, off) and sent == []
-    assert (event["match"], event["entered_top_k"]) == ("cited_missing", False)
+    assert (event["match"], on.cited_support) == ("cited_missing", None)

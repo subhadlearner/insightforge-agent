@@ -7,7 +7,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from insightforge_agent.agents.web import Page, PaywalledError, SearchHit, FetchError
-from tests.scripted import ScriptedChat, ai, call
+from tests.scripted import SUPPORT_PREFIX, ScriptedChat, ai, call, support_verdicts
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "search"
 
@@ -81,7 +81,7 @@ def researcher() -> ScriptedChat:
 
 
 def light() -> ScriptedChat:
-    """Summaries, extraction, drafting and entailment, told apart by the system prompt."""
+    """Summaries, extraction and the support judgment, told apart by the system prompt."""
     def reply(messages) -> AIMessage:
         system = str(next(m.content for m in messages if isinstance(m, SystemMessage)))
         user = str(messages[-1].content)
@@ -91,16 +91,8 @@ def light() -> ScriptedChat:
                 for i, text in re.findall(r"\[(\d+)\] (.+)", user)
             ]
             return AIMessage(content=json.dumps({"facts": facts}))
-        if system.startswith("You draft evidence"):
-            items = [
-                {"statement": text.strip(), "passages": [int(i)], "entities": []}
-                for i, text in re.findall(r"\[(\d+)\] (.+)", user)
-            ]
-            return AIMessage(content=json.dumps({"items": items}))
-        if system.startswith("You judge whether"):
-            verdicts = [{"passage": int(i), "verdict": "SUPPORTED"}
-                        for i in re.findall(r"^\[(\d+)\] ", user, re.MULTILINE)]
-            return AIMessage(content=json.dumps({"verdicts": verdicts}))
+        if system.startswith(SUPPORT_PREFIX):
+            return AIMessage(content=json.dumps({"verdicts": support_verdicts(user)}))
         return AIMessage(content="A page about electric vehicles.")
     return ScriptedChat(reply=reply)
 

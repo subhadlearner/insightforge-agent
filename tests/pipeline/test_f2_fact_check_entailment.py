@@ -1,4 +1,5 @@
-"""F2: span matching, the deterministic gates and the one entailment call per sampled Claim.
+"""F2 and ADR-0006: span matching, the deterministic gates and the one support call per
+sampled Claim. The cited Passage is always judged; similarity only adds and orders candidates.
 
 The light model is scripted (no paid call) and records what it was shown; the embedder is the
 deterministic `HashingEmbedder`, so the gates are exact. Real-embedder retrieval is covered by
@@ -15,8 +16,9 @@ from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.passages import candidate_spans
 from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.embeddings import HashingEmbedder, cosine
-from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM
 from insightforge_agent.pipeline.fact_check import TOP_K, fact_check, screen
+from insightforge_agent.pipeline.support import Unit, request_tokens
+from insightforge_agent.domain.contracts import PassageRef
 from tests.pipeline.test_t6_writer_fact_check import SALES, URL, Fetcher, draft_of, evidence
 from tests.scripted import ScriptedChat
 
@@ -30,11 +32,17 @@ def numbered(messages) -> list[tuple[int, str]]:
 
 
 def judge(*verdicts: str) -> ScriptedChat:
-    """Answers every call with `verdicts` in order, one per numbered span (the last repeats)."""
+    """Answers every call with `verdicts` in order, one per numbered span (the last repeats);
+    a SUPPORTED one carries the permissive support map (statement as one part, the shown text
+    as its excerpt), so code's checks still apply."""
     def reply(messages) -> AIMessage:
         spans = numbered(messages)
-        out = [{"passage": n, "verdict": verdicts[min(i, len(verdicts) - 1)]}
-               for i, (n, _) in enumerate(spans)]
+        statement = str(messages[-1].content).split("\n", 1)[0].removeprefix("Statement: ")
+        out = []
+        for i, (n, text) in enumerate(spans):
+            v = verdicts[min(i, len(verdicts) - 1)]
+            out.append({"passage": n, "verdict": v, **(
+                {"parts": [{"part": statement, "excerpts": [text]}]} if v == "SUPPORTED" else {})})
         return AIMessage(content=json.dumps({"verdicts": out}))
     return ScriptedChat(reply=reply)
 
@@ -57,25 +65,29 @@ def events(deps, type_):
 
 # --- no model call when the deterministic gates leave no span ---------------------------------
 
-def test_no_entailment_call_when_no_span_clears_the_threshold(make_deps):
-    """F2 alone (the T18 counterpart fallback off): the floor stops the call."""
+def test_below_the_floor_no_span_is_a_candidate_and_the_cited_text_cannot_verify(make_deps):
+    """With the counterpart lookup off, the floor leaves F2 no candidate; the cited Passage as
+    cited is judged for the record only, so even a SUPPORTED reply leaves the Claim unverified."""
     model = judge("SUPPORTED")
     v, deps, _ = check(make_deps, model, claim="Tesla opened a factory in Berlin.",
                        fact_check_counterpart=False)
     assert v.verdict == "unverified" and v.similarity < 0.85
-    assert v.reason == "no Passage is similar enough to the Claim"
-    assert model.seen == [] and events(deps, "fact_check_entailment") == []
+    assert v.reason.endswith("no Passage is similar enough to the Claim")
+    (judged,) = events(deps, "fact_check_support")
+    assert judged["candidates"] == 0 and judged["cited_support"] == "SUPPORTED"
 
 
-def test_with_the_counterpart_fallback_the_unchanged_cited_passage_goes_to_the_judge(make_deps):
-    """T18 CS1A, by design: below the floor, the Claim's own unchanged cited Passage is judged,
-    and the judge, not the floor, rejects an unsupported Claim."""
+def test_the_unchanged_cited_passage_goes_to_the_judge_below_the_floor(make_deps):
+    """ADR-0006 §7 (T18 CS1A made the rule): below the floor, the Claim's own unchanged cited
+    Passage is judged, and the judge, not the floor, rejects an unsupported Claim."""
     model = judge("INSUFFICIENT_EVIDENCE")
     v, deps, _ = check(make_deps, model, claim="Tesla opened a factory in Berlin.")
     assert v.verdict == "unverified" and len(model.seen) == 1
-    assert "no candidate span was judged SUPPORTED" in v.reason
+    assert "no candidate was judged SUPPORTED" in v.reason
     (attempt,) = events(deps, "fact_check_counterpart")
-    assert (attempt["entered_top_k"], attempt["verified_by_counterpart"]) == (True, False)
+    assert attempt["match"] == "unique"
+    (judged,) = events(deps, "fact_check_support")
+    assert judged["cited_judged"] and judged["cited_support"] == "INSUFFICIENT_EVIDENCE"
 
 
 def test_no_entailment_call_when_the_numeric_guard_rejects_every_candidate(make_deps):
@@ -226,8 +238,9 @@ def test_a_window_covering_two_chosen_spans_takes_one_place(make_deps):
     assert [span.text for _, span in s.candidates] == [page.text]
 
 
-def request_tokens(messages) -> int:
-    return sum(estimate_tokens(str(m.content)) for m in messages)
+def user_tokens(messages) -> int:
+    """What the per-call cap measures: the user message (the system prompt is fixed)."""
+    return estimate_tokens(str(messages[-1].content))
 
 
 def capped(make_deps, model, cap: int):
@@ -239,11 +252,11 @@ def capped(make_deps, model, cap: int):
 
 
 def test_weaker_candidates_are_dropped_until_the_request_fits_the_cap(make_deps):
-    one = estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(f"Statement: {SALES}\n\n[1] {SALES}")
+    one = request_tokens(SALES, [Unit(PassageRef(observation_id="o", index=0), SALES)])
     model = judge("SUPPORTED")
     v, _ = capped(make_deps, model, cap=one)
     assert v.verdict == "verified" and len(numbered(model.seen[0])) == 1
-    assert request_tokens(model.seen[0]) <= one
+    assert user_tokens(model.seen[0]) <= one
 
 
 def test_no_call_and_unverified_when_even_the_best_candidate_exceeds_the_cap(make_deps):
@@ -259,7 +272,7 @@ def test_every_request_at_the_default_cap_fits_it(make_deps):
     model = judge("SUPPORTED")
     v, deps, _ = check(make_deps, model, page="\n\n".join([PARAGRAPH] * 4))
     assert v.verdict == "verified" and len(numbered(model.seen[0])) == TOP_K
-    assert request_tokens(model.seen[0]) <= deps.passage_token_cap
+    assert user_tokens(model.seen[0]) <= deps.passage_token_cap
 
 
 def test_an_assertion_error_from_the_model_fails_closed_like_any_exception(make_deps):
@@ -327,8 +340,9 @@ def test_any_supported_span_verifies_and_the_match_is_its_parent_passage(make_de
     assert v.matched.index == 1 and refetched[1].text == SALES  # the second candidate's Passage
     assert v.matched.observation_id != v.original.observation_id  # the re-fetch, not the cited one
     assert result.draft == draft_of([SALES])
-    (logged,) = events(deps, "fact_check_entailment")
-    assert logged["candidates"] == 3 and logged["verdicts"]["2"] == ["SUPPORTED"]
+    (logged,) = events(deps, "fact_check_support")
+    assert logged["candidates"] == 3 and logged["verdicts"][1] == "SUPPORTED"
+    assert logged["cited_support"] == "CONTRADICTED"  # the cited Passage's own judgment
 
 
 def test_the_match_of_a_sentence_is_the_whole_paragraph_passage(make_deps):
@@ -357,10 +371,11 @@ def test_no_supported_span_leaves_the_claim_unverified_and_marked(make_deps, ver
 ])
 def test_a_malformed_reply_leaves_the_claim_unverified_and_is_logged(make_deps, content):
     v, deps, result = check(make_deps, replying(content))
-    assert v.verdict == "unverified" and "entailment check failed (BadModelReply)" in v.reason
+    assert v.verdict == "unverified" and "VERIFICATION_ERROR" in v.reason
     assert result.summary["unverified"] == 1 and result.summary["unchecked"] == 0
-    (failed,) = events(deps, "fact_check_entailment_failed")
-    assert failed["error"].startswith("BadModelReply") and failed["claim"] == 0
+    (failed,) = events(deps, "support_judged")
+    assert failed["error"].startswith("SupportReply: ") and failed["claim"] == 0
+    assert [j["verdict"] for j in failed["judgments"]] == ["VERIFICATION_ERROR"]
 
 
 def test_a_model_exception_leaves_the_claim_unverified_not_unchecked(make_deps):
@@ -441,9 +456,9 @@ def test_context_never_lets_a_request_pass_the_hard_cap(make_deps):
                      range(60)] + [SALES])
     (span,) = [s for s in candidate_spans([Passage(observation_id="o", index=0, text=page)], 1)
                if s.text == SALES]
-    with_context = (estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(
-        f"Statement: {SALES}\n\n[1] {in_context(span, CONTEXT_TOKENS)}"))
-    alone = estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(f"Statement: {SALES}\n\n[1] {SALES}")
+    ref = PassageRef(observation_id="o", index=0)
+    with_context = request_tokens(SALES, [Unit(ref, in_context(span, CONTEXT_TOKENS))])
+    alone = request_tokens(SALES, [Unit(ref, SALES)])
     assert alone < with_context
     model = judge("SUPPORTED")
     deps = make_deps(fetcher=Fetcher({URL: page}), light_model=model,

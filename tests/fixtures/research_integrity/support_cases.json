@@ -134,6 +134,16 @@
       "old_literal_gate": null
     },
     {
+      "id": "NW-N07", "class": "negative", "kind": "competitor sentence inside the company's own report",
+      "trace": "constructed; tests/pipeline/test_extraction_synthesis.py NORTHWIND_CHUNKS[2] (the T18 CS2 case)",
+      "statement": "Northwind Health reported that a single supplier provides the titanium used in its implants.",
+      "entities": ["Northwind Health"], "entity": "Northwind Health",
+      "passage": "Medtronic reported that a single supplier provides the titanium used in its implants.",
+      "document_entity": "Northwind Health", "expected": "INSUFFICIENT_EVIDENCE", "subject": "Northwind Health",
+      "floor": {"full": "model", "identity": "model"},
+      "old_literal_gate": "name not in Passage: ['Northwind Health']"
+    },
+    {
       "id": "WEB-N01", "class": "negative", "kind": "competitor's figure in the same Passage",
       "trace": "constructed",
       "statement": "Northwind Health revenue grew 5 percent in fiscal 2025.",

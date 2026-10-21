@@ -121,7 +121,7 @@ def test_items_that_are_dropped_get_no_confidence_event(world):
 def split_world(world, text_b, value_a="4.27 million", value_b="4,270,000", period_b="2025"):
     world.page("https://a.example.com/x", STATEMENT, cred=0.6)
     world.page("https://b.other.org/y", text_b, cred=0.6)
-    world.deps.passage_token_cap = 18  # each page is drafted on its own
+    # Each page is extracted on its own (Extraction reads one Source at a time).
     plan = world.plan(("s1", "a1", 1))
     research = world.research(s1=["https://a.example.com/x", "https://b.other.org/y"])
     spec = {STATEMENT: (value_a, "2025"), text_b: (value_b, period_b)}
@@ -152,15 +152,18 @@ def test_equivalent_number_formats_in_separate_batches_corroborate_each_other(wo
 
 
 def test_a_passage_is_never_counted_for_a_statement_it_does_not_state(world):
-    """B's structured value claims the same key as A's ("4,270,000"), but its Passage says
-    billion. The key would merge them; the per-Passage literal check keeps B's Passage out."""
+    """B's model-claimed value ("4,270,000") would share A's key, but B's Passage says billion.
+    Extraction refuses a value its Passage does not state, so B is never merged into A: A keeps
+    only its own Passage, and B's own fact survives as its own item (before ADR-0006 it was
+    merged into A and lost)."""
     plan, research = split_world(
         world, "BYD sold 4.27 billion vehicles in 2025.", value_b="4,270,000")
-    (item,) = world.items(world.synth(plan, research))
-    assert item.statement == STATEMENT and len(item.supporting) == 1
-    (ref,) = item.supporting
+    items = {i.statement: i for i in world.items(world.synth(plan, research))}
+    assert set(items) == {STATEMENT, "BYD sold 4.27 billion vehicles in 2025."}
+    (ref,) = items[STATEMENT].supporting
     assert "4.27 million" in world.deps.store.get_passages(OWNER, ref.observation_id, [ref.index])[0].text
-    assert item.confidence == "LOW"
+    assert items[STATEMENT].confidence == "LOW"
+    assert [e["value"] for e in world.events("extraction_value_rejected")] == ["4,270,000"]
 
 
 @pytest.mark.parametrize("text_b,value_b,period_b", [

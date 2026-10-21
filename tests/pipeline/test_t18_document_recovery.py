@@ -22,7 +22,7 @@ from tests.pipeline.test_t7_documents import (
     researchers,
     run_with_document,
 )
-from tests.scripted import ScriptedChat, ai, call
+from tests.scripted import SUPPORT_PREFIX, ScriptedChat, ai, call, support_verdicts
 
 T18_REPLY = ("FAILED: doc_search returned only metadata (source file, page, and relevance score) "
              "for 8 chunks, with no text content. I can't confirm that any of them cover the "
@@ -223,26 +223,22 @@ def northwind_world(doc_deps):
         return ai(call("doc_search", {"query": NW_QUERIES[sid]}, f"{sid}-0"))
 
     def light_reply(messages):
-        """Drafts as T18's light model did: segment rows labelled with the company, and risk
-        sentences restated with the company as subject."""
+        """Proposes facts as T18's light model drafted them (each sentence, the supplier risk
+        restated with the company as subject), and answers the support judgment permissively."""
         system, user = str(messages[0].content), str(messages[-1].content)
         import re as _re
         numbered = _re.findall(r"^\[(\d+)\] (.+)$", user, _re.MULTILINE)
-        if system.startswith("You draft evidence"):
-            items = []
+        if system.startswith("You extract facts"):
+            facts = []
             for n, text in numbered:
                 for sentence in _re.split(r"(?<=\.) (?=[A-Z])", text):
                     statement = (f"Northwind Health discloses that {sentence[0].lower()}"
-                                 f"{sentence[1:]}" if "Principal" in user and "supplier" in text
-                                 else sentence)
-                    items.append({"statement": statement, "passages": [int(n)],
+                                 f"{sentence[1:]}" if "supplier" in sentence else sentence)
+                    facts.append({"passage_index": int(n), "statement": statement,
                                   "entity": "Northwind Health", "entities": ["Northwind Health"]})
-            return AIMessage(content=json.dumps({"items": items}))
-        if system.startswith("You judge whether"):
-            return AIMessage(content=json.dumps({"verdicts": [
-                {"passage": int(n), "verdict": "SUPPORTED"} for n, _ in numbered]}))
-        if system.startswith("You extract facts"):
-            return AIMessage(content=json.dumps({"facts": []}))
+            return AIMessage(content=json.dumps({"facts": facts}))
+        if system.startswith(SUPPORT_PREFIX):
+            return AIMessage(content=json.dumps({"verdicts": support_verdicts(user)}))
         return AIMessage(content="A summary.")
 
     return doc_deps(planner_model=planner_, researcher_model=ScriptedChat(reply=reader_reply),
