@@ -4,6 +4,10 @@ An autonomous research platform: a user submits a research question (a **Brief**
 a cited intelligence **Report**. Standing Briefs can be re-researched on a schedule, and
 material changes are surfaced as **Alerts**.
 
+**Demo video (6 min 19 s):** [watch or download the MP4](https://github.com/subhadlearner/insightforge-agent/releases/download/demo-2026-10-21/InsightForge-Demo-2026-10-21.mp4), from the [demo release](https://github.com/subhadlearner/insightforge-agent/releases/tag/demo-2026-10-21).
+It follows one live Run through the web UI, from Brief to cited Report, export and Alerts
+([what the Run did and did not establish](#live-end-to-end-runs-after-adr-0006)).
+
 > **The persona picker is identity selection for the demo. It is not authentication and must
 > not be treated as a security boundary.** Anyone who can reach the API can select any persona
 > in `users.yml`. The session cookie is signed (HMAC with `SESSION_SECRET`) and HttpOnly only so
@@ -690,7 +694,7 @@ show where Report quality still falls short. They do not replace or overturn the
 | Gate A (support judgment only, not a Run) | owner-authorised harness, $0.50 cap | the B-1 gold Claims | **FAILED**, $0.0675: 8 of 9 wrong rejections were code vetoes (since retired); the model made 1 wrong acceptance and 1 wrong rejection. Not re-run | verification record §13 |
 | `run_c11947913dc5` | budget-capped harness ($1.00 cap, 20 searches), on `b31ffc2` | BYD vs Tesla BEVs: 2025 sales, pricing, battery technology | COMPLETE in 43 min, **$0.317**, 711 model calls, 7 searches. The Report marked all 6 requirements as not established and 25 Claims were restated verbatim. Both causes were fixed and pinned by tests | verification record §14 |
 | `run_846d12a50177` | same harness, on `9ddf640` | same Brief | COMPLETE in 52 min, **$0.385**, 852 model calls, 6 searches. All 6 requirements reported; 33 Claims, every citation resolves from a fresh connection; Fact-Checker sample 7/7 verified. It published a UK figure as Tesla's 2025 sales, and the BYD vs Tesla comparison was refused. Both were corrected afterwards (omission rule, footnoted-quote fix) and pinned by tests. The UI Run below ran the corrected code on a different Brief; this Brief has not been re-run | verification record §15 |
-| `run_e7499e34e1e6` | **the web UI**, recorded on video; checkout at `09db8dd` per the git reflog (the code of `main` at `32b0fc4`: the two later commits changed only a test and generated types), Docker Qdrant | Qdrant vs Weaviate for a self-hosted RAG app (hybrid search, metadata filtering, Docker operations, a recommendation for a solo developer) | COMPLETE in 1 h 37 min (Synthesis took 69 min). 6/6 Sub-tasks succeeded, 27 Sources, 57 Claims in 4 sections, Fact-Checker sample **12/12 verified**. Requirements ledger: 6 of 11 reported, 1 partial, 4 incomplete. **The recommendation was not established**: 5 extraction batches (56 and 309 Passages in two Sub-tasks) stayed unread after bounded retries (output truncated), and the Report says so in Gaps & limitations. Every section is LOW Confidence and every Source is undated. Cost not measured (no harness on UI Runs) | below |
+| `run_e7499e34e1e6` | **the web UI**, recorded on video; checkout at `09db8dd` per the git reflog (the code of `main` at `32b0fc4`: the two later commits changed only a test and generated types), Docker Qdrant | Qdrant vs Weaviate for a self-hosted RAG app (hybrid search, metadata filtering, Docker operations, a recommendation for a solo developer) | COMPLETE in 1 h 37 min (Synthesis took 69 min). 6/6 Sub-tasks succeeded, 27 Sources stored (15 cited in the Report), 57 Claims in 4 sections, Fact-Checker sample **12/12 verified**. Requirements ledger: 6 of 11 reported, 1 partial, 4 incomplete. **The recommendation was not established**: 5 extraction batches (56 and 309 Passages in two Sub-tasks) stayed unread after bounded retries (output truncated), and the Report says so in Gaps & limitations. Three of the four sections are LOW Confidence and one is MEDIUM; most cited Sources are undated (two have dates). Cost not measured (no harness on UI Runs) | below |
 
 **The UI demonstration** (2026-10-21) drove `run_e7499e34e1e6` through the whole
 [UI walkthrough](#ui-walkthrough): persona selection, Brief and estimate, live progress, the
@@ -705,9 +709,10 @@ Markdown and PDF export (`rep_3f4e32cbd7af0109`). Read from the API log:
   (1.12.4). Document search was not part of this Brief, so that path was not exercised against
   the Docker server.
 
-The video (`InsightForge-Demo-2026-10-21.mp4`), the raw recording, the exported Report (Markdown
-and PDF) and the API and web logs are kept outside the repository, like the harness records,
-because they are large and include local logs. Publishing the demo is T19 (#20).
+The edited video ([`InsightForge-Demo-2026-10-21.mp4`](https://github.com/subhadlearner/insightforge-agent/releases/download/demo-2026-10-21/InsightForge-Demo-2026-10-21.mp4), 6 min 19 s, captioned, with
+time-lapse speeds shown on screen) is a release asset, not a repository file. The raw recording,
+the exported Report (Markdown and PDF) and the API and web logs stay outside the repository.
+The demo post itself is T19 (#20).
 
 What these Runs do **not** show: repeatability (one Run per Brief), whether the corrections
 made after `run_846d12a50177` fix that Brief's Report, a re-run of the formal T18 gates, or the
