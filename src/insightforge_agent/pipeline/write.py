@@ -19,11 +19,16 @@ instead of failing the Run: an uncovered section gets one Claim stating its best
 unsupported summary sentences are removed, and the rest is fitted to the limit from whole
 sentences or whole Claims, never part of one, else replaced by a sentence that states no
 finding (`fit_summary`). A published summary is never empty and never over the limit.
-Claim-rule violations still fail the Run, with one conservative fallback (T18 Stage C): when no
-draft's Claims pass, a current Claim that cites an existing Evidence item but adds a number or
-name gets that item's exact statement as its text (`replace_ungrounded_claims`, logged as
-`writer_claims_replaced`); an unknown Evidence id, a blank Claim or a Historical Claim's problem
-is never repaired, and anything still wrong fails the Run.
+Claim-rule violations still fail the Run, with one fallback (T18 Stage C, revised after the
+live Run run_c11947913dc5): when no draft's Claims pass, a draft whose only Claim problems are
+current Claims stating a number or name their cited items do not is kept, and those Claims go
+to the semantic check below like any reworded Claim (`ungrounded_claims`, logged as
+`writer_claims_ungrounded`). The number and name rules are word matching: in that Run they
+refused "One item reports ...", "EV" for "electric vehicle" and a source's publication date,
+and the former fallback then replaced 25 Claims with their items' statements, two of them onto
+one item each. They stay as feedback for the Writer's retries, never as the decision. An
+unknown Evidence id, a blank Claim or a Historical Claim's problem is never repaired, and
+anything still wrong fails the Run.
 
 Requirements and analysis (ADR-0006). The Writer is also shown a compact index of the Run's
 research requirements (what the Brief asks, which items answer each, which were not
@@ -41,8 +46,9 @@ rules above are lexical: "revenue increased 20%" passes them for an item that sa
   second judgment: Synthesis judged that statement against the same Passage;
 - any other current or Historical Claim is judged by the support contract against its item's
   primary Passage, the one its citation shows; one that is not SUPPORTED is restated as the
-  item's verified statement (or removed when another Claim already states it), logged as
-  `writer_claims_checked`;
+  item's verified statement, or removed when a published Claim already states that statement
+  or cites that item as its only evidence (the item is then already in the Report: a second
+  Claim restating it is a duplicate), logged as `writer_claims_checked`;
 - an analytical Claim is judged against the primary Passages of all its items together
   (`judge_joint`); one that is not SUPPORTED is removed and logged.
 Then every Executive Summary sentence that is not one of the published Claims verbatim is
@@ -180,7 +186,10 @@ def _heading_key(heading: str) -> str:
 
 
 def violations(draft: ReportDraft, bundle: EvidenceBundle,
-               historical: HistoricalContext | None = None) -> list[str]:
+               historical: HistoricalContext | None = None, *, grounding: bool = True) -> list[str]:
+    """The Claim rules' problems. `grounding`: include the number and name rules for current
+    Claims (False: those Claims are left to the semantic check; Historical Claims always keep
+    them)."""
     items = {i.id: i for s in bundle.sections for i in s.items}
     background = (historical or HistoricalContext()).by_id()
     problems = []
@@ -233,6 +242,8 @@ def violations(draft: ReportDraft, bundle: EvidenceBundle,
             if len(premises) > MAX_PREMISES:
                 problems.append(f"claim {c.text!r} has {len(premises)} premises; at most "
                                 f"{MAX_PREMISES}")
+                continue
+            if not grounding:
                 continue
             cited = [item] + [items[p] for p in premises]
             problems += _grounding(c.text, " ".join(i.statement for i in cited),
@@ -507,32 +518,28 @@ def fit_summary(sentences: list[str], draft: ReportDraft) -> tuple[str, str | No
     return NO_SUMMARY, "placeholder"
 
 
-def replace_ungrounded_claims(draft: ReportDraft, bundle: EvidenceBundle,
-                              historical: HistoricalContext) -> tuple[ReportDraft, list[dict]] | None:
-    """The conservative Claim fallback (T18 Stage C), once retries are spent: each current Claim
-    that cites an existing Evidence item but states a number or name that item does not gets
-    that item's exact statement as its text; its citation and section stay. Returns the draft
-    and the replacements, or None when anything else is wrong (an unknown or invented Evidence
-    id, a blank Claim, a Historical Claim's problem): those are never guessed at, and the Run
-    fails as before."""
-    items = {i.id: i for s in bundle.sections for i in s.items}
-    replaced: list[dict] = []
-    sections = []
-    for si, section in enumerate(draft.sections):
-        claims = []
-        for ci, c in enumerate(section.claims):
-            item = items.get(c.evidence_id)
-            if (not c.historical and item is not None and c.text.strip()
-                    and _grounding(c.text, item.statement, item.entity, f"evidence {item.id}")):
-                replaced.append({"section": si, "claim": ci, "evidence_id": item.id,
-                                 "original_text": c.text[:300]})
-                c = c.model_copy(update={"text": item.statement, "premises": []})
-            claims.append(c)
-        sections.append(section.model_copy(update={"claims": claims}))
-    draft = draft.model_copy(update={"sections": sections})
-    if not replaced or violations(draft, bundle, historical):
+def ungrounded_claims(draft: ReportDraft, bundle: EvidenceBundle,
+                      historical: HistoricalContext) -> list[dict] | None:
+    """The Claim fallback (module docstring), once retries are spent: the current Claims whose
+    only problem is the number and name rules, which the semantic check then judges; or None
+    when anything else is wrong (an unknown or invented Evidence id, a blank Claim, a Historical
+    Claim's problem): those are never guessed at, and the Run fails as before."""
+    if violations(draft, bundle, historical, grounding=False):
         return None
-    return draft, replaced
+    items = {i.id: i for s in bundle.sections for i in s.items}
+    out = []
+    for si, section in enumerate(draft.sections):
+        for ci, c in enumerate(section.claims):
+            if c.historical:
+                continue
+            cited = [items[e] for e in c.evidence_ids()]
+            problems = _grounding(c.text, " ".join(i.statement for i in cited),
+                                  " ".join(i.entity for i in cited),
+                                  "evidence " + ", ".join(i.id for i in cited))
+            if problems:
+                out.append({"section": si, "claim": ci, "evidence_id": c.evidence_id,
+                            "problems": problems[:2], "original_text": c.text[:300]})
+    return out
 
 
 def _fill_requirements(draft: ReportDraft, bundle: EvidenceBundle,
@@ -556,7 +563,7 @@ def _fill_requirements(draft: ReportDraft, bundle: EvidenceBundle,
 
 
 def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
-            historical: HistoricalContext, brief: str, claims_replaced: int = 0,
+            historical: HistoricalContext, brief: str, ungrounded: int = 0,
             statuses: list[RequirementStatus] | None = None) -> ReportDraft:
     """A draft whose Claims pass, made publishable in code once retries are spent. The
     published summary is non-empty, at most `SUMMARY_MAX_WORDS`, and holds only whole
@@ -572,13 +579,14 @@ def _repair(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: 
              filled_requirements=answered,
              removed_summary_sentences=sorted(dropped), summary_rebuilt=not supported,
              summary_shortened=shortened, summary_words=summary_words(summary),
-             claims_replaced=claims_replaced)
-    flags = ([f"claims_replaced_verbatim:{claims_replaced}"] if claims_replaced else []) + (
+             claims_ungrounded=ungrounded)
+    flags = ([f"claims_left_to_semantic_check:{ungrounded}"] if ungrounded else []) + (
         [f"sections_filled_verbatim:{len(filled)}"] if filled else []) + (
         [f"requirements_filled_verbatim:{','.join(answered)}"] if answered else []) + (
         ["summary_rebuilt_from_claims"] if shortened in ("claims", "placeholder") else [])
     draft = draft.model_copy(update={"quality": [*draft.quality, *flags]})
-    if (violations(draft, bundle, historical) or coverage_problems(draft, bundle, statuses)
+    if (violations(draft, bundle, historical, grounding=False)
+            or coverage_problems(draft, bundle, statuses)
             or not summary.strip() or summary_words(summary) > SUMMARY_MAX_WORDS):
         raise RunFailed("the Writer's draft could not be repaired")
     return draft
@@ -630,17 +638,17 @@ def write_report(
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
         constraint = "\n\nYour previous draft broke these rules. Fix them:\n" + "\n".join(
             f"- {p}" for p in last)
-    replaced: list[dict] = []
+    ungrounded: list[dict] = []
     if usable is None and parsed is not None:
-        fallback = replace_ungrounded_claims(parsed, bundle, historical)
+        fallback = ungrounded_claims(parsed, bundle, historical)
         if fallback is not None:
-            usable, replaced = fallback
-            # A replaced Claim restates its item verbatim: grounded, but neither independently
-            # verified by this step nor the Writer's synthesis.
-            deps.log(owner_id, run_id, "writer_claims_replaced", replaced=replaced)
+            # Each such Claim is judged against its cited Passage in `_checked_claims`; one
+            # that is not SUPPORTED is restated or removed there.
+            usable, ungrounded = parsed, fallback
+            deps.log(owner_id, run_id, "writer_claims_ungrounded", claims=ungrounded)
     if usable is not None:
-        draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief, len(replaced),
-                        statuses)
+        draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief,
+                        len(ungrounded), statuses)
         _flag_absence(deps, owner_id, run_id, draft.summary)
         draft = _checked(deps, owner_id, run_id, draft.model_copy(update={"gaps": gaps}),
                          bundle, historical, brief, statuses)
@@ -697,9 +705,8 @@ def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
 
     items = {i.id: i for s in bundle.sections for i in s.items}
     background = historical.by_id()
-    stated = {_norm(c.text) for s in draft.sections for c in s.claims}
     judged, rejected, analytical = 0, [], []
-    sections = []
+    decided = []  # per section: (Claim, its verified statement if it is to be restated)
     for si, section in enumerate(draft.sections):
         claims = []
         for ci, c in enumerate(section.claims):
@@ -715,7 +722,7 @@ def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
                 except Exception as e:  # noqa: BLE001 - fail closed
                     verdict, problems = "VERIFICATION_ERROR", [f"{type(e).__name__}"]
                 if verdict == "SUPPORTED":
-                    claims.append(c)
+                    claims.append((c, None))
                 else:
                     analytical.append({"section": si, "claim": ci,
                                        "evidence_ids": c.evidence_ids(), "verdict": verdict,
@@ -731,22 +738,41 @@ def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
                 item = items[c.evidence_id]
                 text, statement, ref, verbatim = c.text, item.statement, item.primary, item.statement
             if _same(text, statement):
-                claims.append(c)
+                claims.append((c, None))
                 continue
             judged += 1
             verdict, problems = _supported(deps, owner_id, run_id, text, ref, section=si,
                                            claim=ci, evidence_id=c.evidence_id)
             if verdict == "SUPPORTED":
+                claims.append((c, None))
+                continue
+            rejected.append({"section": si, "claim": ci, "evidence_id": c.evidence_id,
+                             "verdict": verdict, "problems": problems,
+                             "original_text": c.text[:300]})
+            claims.append((c, verbatim))
+        decided.append((section, claims))
+    # A rejected Claim is restated only if its item is not already in the Report: no published
+    # Claim states that statement or cites that item as its only evidence.
+    stated = {_norm(c.text) for _, cs in decided for c, v in cs if v is None}
+    represented = {c.evidence_id for _, cs in decided for c, v in cs
+                   if v is None and not c.premises}
+    records = iter(rejected)
+    sections = []
+    for section, cs in decided:
+        claims = []
+        for c, verbatim in cs:
+            if verbatim is None:
                 claims.append(c)
                 continue
+            record = next(records)
             key = _norm(verbatim)
-            action = "removed" if key in stated else "restated"
-            rejected.append({"section": si, "claim": ci, "evidence_id": c.evidence_id,
-                             "verdict": verdict, "problems": problems, "action": action,
-                             "original_text": c.text[:300]})
-            if action == "restated":
-                stated.add(key)
-                claims.append(c.model_copy(update={"text": verbatim}))
+            if key in stated or c.evidence_id in represented:
+                record["action"] = "removed"
+                continue
+            record["action"] = "restated"
+            stated.add(key)
+            represented.add(c.evidence_id)
+            claims.append(c.model_copy(update={"text": verbatim, "premises": []}))
         sections.append(section.model_copy(update={"claims": claims}))
     deps.log(owner_id, run_id, "writer_claims_checked", judged=judged, rejected=rejected)
     if analytical:

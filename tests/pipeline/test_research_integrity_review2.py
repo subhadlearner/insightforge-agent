@@ -21,7 +21,7 @@ from insightforge_agent.domain.requirements import (
     gap_lines,
 )
 from tests.pipeline.test_extraction_synthesis import world  # noqa: F401
-from tests.scripted import COVERAGE_PREFIX, ScriptedChat, coverage_verdict
+from tests.scripted import COVERAGE_PREFIX, ScriptedChat, coverage_verdict, verify_verdicts
 
 PLAN = SubTaskPlan(aspects=[Aspect(id="a1", name="Cloud revenue")], sub_tasks=[
     SubTask(id="s1", aspect_id="a1", query="cloud revenue 2025", source_type="web",
@@ -110,11 +110,26 @@ def test_an_aspect_name_question_is_answered_without_repeating_its_words(make_de
     assert answers.answers == {"R1": ["ev_byd"]} and answers.failed == []
 
 
-def test_parts_must_be_words_of_the_question(make_deps):
-    def invented(user):
-        return {"parts": ["Oracle Cloud"], "answers": [{"statement": 1, "parts": [], "excerpt": ""}]}
-    status, answers = status_of(make_deps(light_model=answering(invented)), [AWS])
-    assert answers.failed == ["R1"] and status.status == "verification_incomplete"
+def test_a_part_the_question_does_not_ask_is_dropped_by_the_coverage_check(make_deps):
+    """answers-4 (run_c11947913dc5): parts are the model's words, so whether a part is asked is
+    the coverage check's judgment, not a words-of-the-question rule. An invented part goes, with
+    the answer claimed for it; what it left out comes back as parts no statement states."""
+    def chat(messages):
+        system = str(next(m.content for m in messages if isinstance(m, SystemMessage)))
+        if system.startswith(COVERAGE_PREFIX):
+            return AIMessage(content=json.dumps({"asks": [
+                {"quote": "AWS", "covered_by": [1]}, {"quote": "Azure", "covered_by": []},
+                {"quote": "Google Cloud", "covered_by": []}]}))
+        if system.startswith("You verify claimed answers"):
+            return AIMessage(content=json.dumps(verify_verdicts(str(messages[-1].content))))
+        return AIMessage(content=json.dumps({"parts": ["AWS's cloud revenue", "Oracle Cloud"],
+                                             "answers": [{"statement": 1, "parts": [1, 2],
+                                                          "excerpt": "AWS reported cloud revenue"}]}))
+    model = ScriptedChat(reply=chat, checks=False)
+    status, answers = status_of(make_deps(light_model=model), [AWS])
+    assert answers.failed == [] and answers.parts["R1"] == ["AWS's cloud revenue", "Azure",
+                                                            "Google Cloud"]
+    assert status.status == "partial" and status.missing_parts == ["Azure", "Google Cloud"]
 
 
 # ==== P1: a missing, duplicate or conflicting decision is a failed check ==================
@@ -122,7 +137,6 @@ def test_parts_must_be_words_of_the_question(make_deps):
 def test_missing_duplicate_or_conflicting_decisions_are_verification_failures(make_deps):
     entry = {"statement": 1, "parts": [1], "excerpt": "AWS reported cloud revenue"}
     for name, answers in (
-            ("missing", []),
             ("duplicate", [entry, entry]),
             ("conflicting", [entry, {"statement": 1, "parts": [], "excerpt": ""}]),
             ("unknown statement", [entry, {"statement": 7, "parts": [], "excerpt": ""}]),
@@ -134,6 +148,15 @@ def test_missing_duplicate_or_conflicting_decisions_are_verification_failures(ma
         status, result = status_of(make_deps(light_model=model), [AWS])
         assert result.failed == ["R1"], name
         assert status.status == "verification_incomplete", name
+
+
+def test_a_statement_left_out_states_no_part(make_deps):
+    """answers-4 (run_c11947913dc5): the proposer lists only the statements that state a part;
+    a statement it leaves out is its judgment that the statement states none, never a failure."""
+    def lists_none(user):
+        return {"parts": ["AWS", "Azure", "Google Cloud"], "answers": []}
+    status, result = status_of(make_deps(light_model=answering(lists_none)), [AWS])
+    assert result.failed == [] and status.status == "no_evidence"
 
 
 def test_an_explicit_no_is_a_negative_judgment_not_a_failure(make_deps):

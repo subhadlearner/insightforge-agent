@@ -2,8 +2,13 @@
 
 The regulatory Run (run_206596674f75) failed because each of its three drafts had one current
 Claim adding a name its cited item did not state ("BIS"/"Chinese", "Washington",
-"China-specific"), with an over-long summary besides. A current Claim that cites an existing
-item now gets that item's exact statement as its text; nothing else is ever guessed at."""
+"China-specific"), with an over-long summary besides. Stage C replaced such a Claim with its
+item's exact statement. Since the live Run run_c11947913dc5 (25 Claims replaced, two pairs onto
+one item each), such a Claim instead goes to the semantic check (`_checked_claims`): kept in
+the Writer's words if its cited Passage supports it, else restated or removed there (tests in
+test_research_integrity_e2e1.py). Here no Passage is stored, so every check fails closed and
+the Claim is restated: the Stage C outcome, now reached by a judgment. Nothing else is ever
+guessed at."""
 
 import pytest
 
@@ -42,19 +47,23 @@ def drafts(sales=SALES, cells=CELLS, summary=None):
     (drafts(cells=CAVEAT), "ev_3"),
     (drafts(sales=ENTITY, summary=LONG), "ev_1"),
 ], ids=["unsupported-entity", "unsupported-caveat", "with-over-long-summary"])
-def test_an_ungrounded_claim_is_replaced_by_its_items_statement(make_deps, bad, field):
+def test_an_ungrounded_claim_goes_to_the_semantic_check_once_retries_are_spent(
+        make_deps, bad, field):
     model = writer(bad, bad, bad)
     deps = make_deps(writer_model=model)
     draft = write(deps)
-    assert len(model.seen) == 3  # the retries ran first; no extra model call
+    assert len(model.seen) == 3  # the retries ran first; no extra Writer call
     assert [(c.evidence_id, c.text) for s in draft.sections for c in s.claims] == [
         ("ev_1", SALES), ("ev_2", PRICE), ("ev_3", CELLS)]
     assert [s.heading for s in draft.sections] == ["Sales", "Pricing", "Batteries"]
-    (replaced,) = logged(deps, "writer_claims_replaced")
-    assert [(r["evidence_id"], r["original_text"]) for r in replaced["replaced"]] == [
+    (flagged,) = logged(deps, "writer_claims_ungrounded")
+    assert [(r["evidence_id"], r["original_text"]) for r in flagged["claims"]] == [
         (field, ENTITY if field == "ev_1" else CAVEAT)]
     (repaired,) = logged(deps, "writer_repaired")
-    assert repaired["claims_replaced"] == 1
+    assert repaired["claims_ungrounded"] == 1
+    (checked,) = logged(deps, "writer_claims_checked")
+    assert [(r["evidence_id"], r["verdict"], r["action"]) for r in checked["rejected"]] == [
+        (field, "VERIFICATION_ERROR", "restated")]
     assert len(draft.summary.split()) <= SUMMARY_MAX_WORDS
 
 
@@ -63,16 +72,16 @@ def test_the_latest_draft_is_the_one_repaired(make_deps):
     model = writer(drafts(sales=ENTITY), drafts(cells=CAVEAT), drafts(cells=CAVEAT, summary=LONG))
     deps = make_deps(writer_model=model)
     write(deps)
-    (replaced,) = logged(deps, "writer_claims_replaced")
-    assert [r["evidence_id"] for r in replaced["replaced"]] == ["ev_3"]
+    (flagged,) = logged(deps, "writer_claims_ungrounded")
+    assert [r["evidence_id"] for r in flagged["claims"]] == ["ev_3"]
 
 
-def test_a_draft_whose_claims_pass_is_still_preferred_and_nothing_is_replaced(make_deps):
+def test_a_draft_whose_claims_pass_is_still_preferred(make_deps):
     model = writer(reply(ALL_PLACED, summary=LONG), drafts(sales=ENTITY), drafts(sales=ENTITY))
     deps = make_deps(writer_model=model)
     write(deps)
-    assert logged(deps, "writer_claims_replaced") == []
-    assert logged(deps, "writer_repaired")[0]["claims_replaced"] == 0
+    assert logged(deps, "writer_claims_ungrounded") == []
+    assert logged(deps, "writer_repaired")[0]["claims_ungrounded"] == 0
 
 
 @pytest.mark.parametrize("sections", [
@@ -91,7 +100,7 @@ def test_anything_but_an_ungrounded_claim_with_a_valid_citation_still_fails(make
     deps = make_deps(writer_model=writer(bad, bad, bad))
     with pytest.raises(RunFailed):
         write(deps)
-    assert logged(deps, "writer_claims_replaced") == []
+    assert logged(deps, "writer_claims_ungrounded") == []
 
 
 def test_historical_claims_are_never_fabricated_or_rewritten(make_deps):
