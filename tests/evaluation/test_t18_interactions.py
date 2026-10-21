@@ -83,8 +83,8 @@ def events(repos, owner, run_id, type_=None):
 
 
 def test_every_brief_completes_and_the_report_records_each_t18_behaviour(on, off):
-    for report, expected in ((on[0], ("on", 2, "support-1+cited")),
-                             (off[0], ("off", None, "support-1"))):
+    for report, expected in ((on[0], ("on", 2, "support-2+cited")),
+                             (off[0], ("off", None, "support-2"))):
         assert {s["status"] for s in samples(report).values()} == {"complete"}
         c = report["providers"][0]["conditions"]
         assert (c["draft_structured_output"], c["draft_passage_cap"], c["fact_check_method"],

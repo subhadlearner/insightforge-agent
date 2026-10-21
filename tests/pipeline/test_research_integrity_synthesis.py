@@ -138,8 +138,8 @@ def test_an_unusable_reply_is_a_recorded_verification_error_never_support(world)
     (judged,) = world.events("support_judged")
     assert judged["judgments"][0]["verdict"] == "VERIFICATION_ERROR"
     (dropped,) = world.events("evidence_dropped")
-    assert dropped["reason"] == "no supported Passage"
-    assert dropped["verification_errors"] == 1
+    assert dropped["reason"] == "verification incomplete: the support check failed"  # not "no supported Passage"
+    assert dropped["verification_errors"] == 1 and dropped["unjudged"] == 1
 
 
 def test_support_diagnostics_hold_references_offsets_and_reasons_only(world):

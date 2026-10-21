@@ -92,7 +92,8 @@ def test_an_unparseable_support_reply_is_logged_and_the_item_is_dropped(world):
     assert world.items(world.synth(plan, research)) == []
     (judged,) = world.events("support_judged")
     assert judged["error"] and judged["judgments"][0]["verdict"] == "VERIFICATION_ERROR"
-    assert world.events("evidence_dropped")[0]["reason"] == "no supported Passage"
+    # Never judged is not "not supported" (PR #77 review): its own drop reason.
+    assert world.events("evidence_dropped")[0]["reason"] == "verification incomplete: the support check failed"
 
 
 def test_a_scripted_support_verdict_cannot_rescue_a_failed_literal_check(world):

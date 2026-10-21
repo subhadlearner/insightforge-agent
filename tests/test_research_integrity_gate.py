@@ -33,8 +33,9 @@ def test_a_verification_error_or_a_missing_repetition_is_inconclusive_never_a_pa
     assert decide(cases(), rows(n=("CONTRADICTED",)))["status"] == "INCONCLUSIVE"
 
 
-def test_the_gold_set_repeats_only_negatives_the_code_cannot_stop_alone():
+def test_the_gold_set_repeats_every_negative_and_no_positive():
     built = {c.id: c for c in gold_cases(repeats=3)}
+    assert all(c.repeats == 3 for c in built.values() if c.expected == "NOT_SUPPORTED")
     assert built["NW-P01"].repeats == 1 and built["NW-P01"].entity == "Northwind Health"
     assert built["Q-N02"].repeats == 3 and built["Q-N02"].expected == "NOT_SUPPORTED"
     assert built["NW-N07"].repeats == 3  # competitor sentence in the company's own report

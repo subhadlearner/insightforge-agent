@@ -20,19 +20,24 @@ Verification (F2, owner-approved; docs/audits/2026-10-11-f2-fact-checker.md; ADR
    each shown in the context of its own Passage (`in_context`, up to `CONTEXT_TOKENS`; never
    another Passage or the Source title), with identity context for an uploaded document whose
    own text establishes its company. The weakest candidates are dropped until the request fits
-   the per-call cap; if even the first does not fit, no call is made. The Claim is verified only
-   if a candidate is SUPPORTED after the support map's checks. No candidate, or a failed or
-   unusable reply, leaves it unverified (fail closed: never unchecked, which the pass rate
+   the per-call cap; if even the first does not fit, no call is made. No candidate, or a failed
+   or unusable reply, leaves it unverified (fail closed: never unchecked, which the pass rate
    leaves out).
+6. Citation: the Claim is verified only if the Passage it cites supports it (PR #77 review): a
+   span of the cited Passage itself (or of its counterpart on the re-fetched page) is SUPPORTED
+   after the support map's checks. Support found only elsewhere in the same Source does not
+   make the displayed citation valid: the Claim is unverified, the reason says so and `matched`
+   records where support was found. The citation is never replaced here.
 
 Citation truth versus page drift: when a web page no longer holds the cited Passage, the
-Passage as it was cited is judged in the same call but cannot verify the Claim; its verdict is
-kept as `cited_support`, and a Claim its citation supported but the page no longer does is
-reported as page drift.
+Passage as it was cited is judged in the same call and kept as `cited_support`. Only when it
+supported the Claim and the re-fetched page still supports it elsewhere is the Claim verified
+(the citation was faithful; the page's text moved). A Claim its citation supported but the page
+no longer does is reported as page drift.
 
 An analytical Claim with premises (ADR-0006 §6) is judged once against all its premises
 together (`premises_joint`): each premise's primary Passage as stored, or its counterpart on
-the re-fetched page, else that page's best span for the premise's own statement.
+the re-fetched page; never another span in its place.
 
 A Historical Claim (T8) goes through the same steps against its original Sources: its
 Historical item carries the earlier Report's primary Passage, and the verdict's check kind is
@@ -305,7 +310,7 @@ def _verdict(
     its exact counterpart on the re-fetched page), then up to `TOP_K` spans screened as F2 does.
     Similarity only adds and orders candidates; it never stops the cited Passage being judged.
     A span that does not state every figure of the Claim is never sent. A web Claim is verified
-    only by the re-fetched page; when the page does not hold the cited Passage, the Passage as
+    by the cited Passage (step 6); when the page does not hold the cited Passage, the Passage as
     it was cited is judged too (last, and dropped first to fit the cap) and recorded as
     `cited_support`, so page drift is told apart from a Claim its citation never supported."""
     base = dict(section=section, claim=index, evidence_id=evidence_id, original=original)
@@ -363,22 +368,50 @@ def _verdict(
                             matched=s.matched, reason=judged)
     current_n = sum(1 for c in fitted if c not in as_cited)
     now, then = judged[:current_n], judged[current_n:]
+    # The cited Passage as it stands: the stored chunk, or its counterpart on the page. Any of
+    # its spans counts; a span of another Passage never does (step 6).
+    here = _ref_of(current) if current is not None else None
+    of_cited = [n for n, j in enumerate(now) if j.ref == here]
     cited_support = (then[0].verdict if then else
-                     now[0].verdict if own and fitted[0] is own[0] else None)
+                     _best([now[n].verdict for n in of_cited]) if of_cited else None)
     deps.log(owner_id, run_id, "fact_check_support", section=section, claim=index,
-             candidates=current_n, cited_judged=bool(own) or bool(then),
+             candidates=current_n, cited_judged=bool(of_cited) or bool(then),
              verdicts=[j.verdict for j in now], cited_support=cited_support)
-    hit = next((n for n, j in enumerate(now) if j.verdict == "SUPPORTED"), None)
-    if hit is None:
-        reason = _not_supported(now) if now else (s.reason or "no candidate on the page")
-        if then and cited_support == "SUPPORTED":
-            reason = (f"the cited Passage supported the Claim when it was cited, but "
-                      f"{_NO_LONGER.get(match, _NO_LONGER['absent'])}; {reason}")
-        return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
-                            matched=s.matched, reason=reason, cited_support=cited_support)
-    return ClaimVerdict(**base, verdict="verified", check=check,
-                        similarity=fitted[hit].similarity, matched=now[hit].ref,
-                        cited_support=cited_support)
+    hit = next((n for n in of_cited if now[n].verdict == "SUPPORTED"), None)
+    if hit is None and then and cited_support == "SUPPORTED":
+        hit = next((n for n, j in enumerate(now) if j.verdict == "SUPPORTED"), None)
+    if hit is not None:
+        return ClaimVerdict(**base, verdict="verified", check=check,
+                            similarity=fitted[hit].similarity, matched=now[hit].ref,
+                            cited_support=cited_support)
+    elsewhere = next((n for n, j in enumerate(now) if j.verdict == "SUPPORTED"), None)
+    if elsewhere is not None:  # the Source says it, but not where the Report cites it
+        deps.log(owner_id, run_id, "fact_check_citation_mismatch", section=section,
+                 claim=index, original=original.model_dump(),
+                 supported_at=now[elsewhere].ref.model_dump(), cited_support=cited_support)
+        judged_as = cited_support or "not judged"
+        return ClaimVerdict(
+            **base, verdict="unverified", check=check,
+            similarity=fitted[elsewhere].similarity, matched=now[elsewhere].ref,
+            cited_support=cited_support,
+            reason=(f"the Claim is supported at Passage {now[elsewhere].ref.index} of the same "
+                    f"Source, not by the cited Passage ({judged_as}); the citation is not "
+                    "changed"))
+    reason = _not_supported(now) if now else (s.reason or "no candidate on the page")
+    if then and cited_support == "SUPPORTED":
+        reason = (f"the cited Passage supported the Claim when it was cited, but "
+                  f"{_NO_LONGER.get(match, _NO_LONGER['absent'])}; {reason}")
+    return ClaimVerdict(**base, verdict="unverified", check=check, similarity=s.similarity,
+                        matched=s.matched, reason=reason, cited_support=cited_support)
+
+
+def _best(verdicts: list[str]) -> str:
+    """One verdict for the cited Passage judged in several spans: SUPPORTED if any span is,
+    else CONTRADICTED if any is, else the first."""
+    for v in ("SUPPORTED", "CONTRADICTED"):
+        if v in verdicts:
+            return v
+    return verdicts[0]
 
 
 def _counterpart(deps: Deps, owner_id: str, run_id: str, section: int, index: int,
@@ -407,7 +440,8 @@ def _joint_verdict(
 ) -> ClaimVerdict:
     """A sampled analytical Claim (ADR-0006 §6), judged against all its premises together: for
     each premise, its primary Passage as stored (an uploaded document) or its counterpart on the
-    re-fetched page, else that page's best span for the premise's own statement."""
+    re-fetched page. A premise whose cited Passage the page no longer holds leaves the Claim
+    unverified (step 6: no other span stands in for a citation)."""
     base = dict(section=section, claim=index, evidence_id=items[0].id,
                 original=items[0].primary, check="premises_joint")
     units: list[Unit] = []
@@ -431,13 +465,12 @@ def _joint_verdict(
         if page is None:
             return ClaimVerdict(**base, verdict="unchecked",
                                 reason=f"the Source of premise {item.id} could not be re-fetched")
-        found, _ = _counterpart(deps, owner_id, run_id, section, index, cited, source, page)
-        if found is not None:
-            units += passage_units(text, [found], deps.passage_token_cap, {})
-            continue
-        best = [c.unit for c in _shown(
-            screen(deps, item.statement, page, vectors).candidates, None)[:1]]
-        units += best
+        found, match = _counterpart(deps, owner_id, run_id, section, index, cited, source, page)
+        if found is None:  # never another span in its place: the premise's citation is judged
+            return ClaimVerdict(**base, verdict="unverified",
+                                reason=f"the cited Passage of premise {item.id}: "
+                                       f"{_NO_LONGER.get(match, _NO_LONGER['absent'])}")
+        units += passage_units(text, [found], deps.passage_token_cap, {})
     try:
         joint = judge_joint(deps, owner_id, run_id, text, units, section=section, claim=index)
     except Exception as e:  # noqa: BLE001 - fail closed

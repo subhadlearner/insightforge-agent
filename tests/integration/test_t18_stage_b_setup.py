@@ -85,21 +85,17 @@ def test_with_same_passage_context_the_judge_sees_the_antecedents_and_nothing_mo
     then judges them correctly is for an authorised B-1 run, not this test."""
     from insightforge_agent.domain.tokens import estimate_tokens
     from insightforge_agent.embeddings import FastEmbedEmbedder
-    from insightforge_agent.pipeline.entailment import ENTAIL_SYSTEM
-    from insightforge_agent.pipeline.fact_check import (
-        counterpart,
-        entailment_request,
-        judged_candidates,
-        screen,
-    )
+    from insightforge_agent.pipeline.fact_check import _shown, counterpart, screen
+    from insightforge_agent.pipeline.support import render_request
     from tests.t18_stage_b_support import passages, verdicts
 
     deps = make_deps(embedder=FastEmbedEmbedder("BAAI/bge-small-en-v1.5"))
     stored = verdicts(t18)
 
     def shown(claim, candidates):
-        request = entailment_request(claim, judged_candidates(candidates))
-        assert estimate_tokens(ENTAIL_SYSTEM) + estimate_tokens(request) <= 3000
+        # ADR-0006: the support request the Fact-Checker sends, sized on its user message.
+        request = render_request(claim, [c.unit for c in _shown(candidates, None)])
+        assert estimate_tokens(request) <= 3000
         return request.split("\n\n", 1)[1]  # the Passage part only, not the statement
 
     def verified(key):

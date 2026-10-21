@@ -8,6 +8,8 @@ when a model wrongly answers SUPPORTED.
 - full: the whole statement as one part, the whole Passage as its excerpt.
 - lazy: like full, but leaving the case's unstated qualifier out of the parts.
 - identity: the case's subject taken from identity context, the rest from the whole Passage.
+- sentence: like full, but quoting only the Passage's best-matching sentence, so an operator
+  elsewhere in the Passage (an unrelated "does not") cannot pass for a floor.
 
 Offline only: these tests say nothing about how often a real model answers correctly."""
 
@@ -24,6 +26,7 @@ from insightforge_agent.domain.support import (
     identity_problem,
     uncovered_terms,
 )
+from insightforge_agent.domain.passages import sentences_of
 from insightforge_agent.pipeline.synthesize import literal_problem
 
 CASES = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "research_integrity"
@@ -41,6 +44,10 @@ def persona(case: dict, name: str) -> list[SupportPart]:
     statement, passage = case["statement"].rstrip("."), case["passage"]
     if name == "full":
         return [SupportPart(statement, (passage,))]
+    if name == "sentence":
+        terms = set(content_terms(statement))
+        best = max(sentences_of(passage), key=lambda s: len(terms & set(content_terms(s))))
+        return [SupportPart(statement, (best,))]
     if name == "lazy":
         return [SupportPart(statement.replace(case["qualifier"], " "), (passage,))]
     subject = case["subject"]

@@ -202,7 +202,10 @@ def test_absence_assertions_about_sources_are_detected(sentence, flagged):
     assert bool(absence_sentences(sentence)) is flagged
 
 
-def test_a_flagged_summary_sentence_is_logged_and_never_removed(make_deps):
+def test_a_flagged_summary_sentence_is_logged_and_the_flag_removes_nothing(make_deps):
+    """The T18 CS4 absence flag is a measurement of the Writer's summary: it never removes a
+    sentence. Since the PR #77 review the support check does, when the published Claims do not
+    support it (here no Claim says anything about R&D, and its "no" is quoted by none)."""
     summary = ("BYD cut prices by 34%. The evidence contains no research and development "
                "pipeline detail.")
 
@@ -213,11 +216,13 @@ def test_a_flagged_summary_sentence_is_logged_and_never_removed(make_deps):
 
     deps = make_deps(writer_model=ScriptedChat(reply=reply))
     draft = write_report(deps, "alice", "run_1", "Brief", bundle(item()), [])
-    assert draft.summary == summary
-    (flag,) = [e.payload for e in deps.repos.events.read_after("alice", "run_1")
-               if e.type == "summary_absence_flagged"]
+    events = deps.repos.events.read_after("alice", "run_1")
+    (flag,) = [e.payload for e in events if e.type == "summary_absence_flagged"]
     assert flag["sentences"] == ["The evidence contains no research and development pipeline "
                                  "detail."]
+    (checked,) = [e.payload for e in events if e.type == "summary_checked"]
+    assert checked["removed"] == flag["sentences"]  # removed by the support check, not the flag
+    assert draft.summary == "BYD cut prices by 34%."
 
 
 # ---- gap lines written by code ----------------------------------------------------------------

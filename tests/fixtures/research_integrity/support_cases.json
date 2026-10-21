@@ -1,6 +1,6 @@
 {
-  "_note": "Research-integrity gold set (ADR-0006), version support-gold-1, adjudicated 2026-10-21 from the text shown here alone (the cited unit), never a title, heading or neighbouring Passage. 'expected' is the verdict a correct judge must give. 'honest_map' is a correct support map for SUPPORTED cases. 'qualifier' names the words a lazy judge leaves out; 'subject' the name a judge might wrongly take from identity context. 'floor' records which permissive-judge personas the code itself blocks ('code') and which only a correct model can stop ('model'); it is a measurement of the deterministic floor, not a pass threshold. 'old_literal_gate' is what the retired T18 lexical gate (literal_problem) said, recorded to show the false negative it caused. Northwind text is the fictional sample PDF (samples/documents/make_sample_documents.py). Web text is quoted from docs/audits/2026-10-21-t18-b1-historical-claim-audit.md. 'constructed' cases are written for this set. Nothing here alters the T18 B-1 records or stage_b1_cases.json.",
-  "version": "support-gold-1",
+  "_note": "Research-integrity gold set (ADR-0006), version support-gold-2, adjudicated 2026-10-21 from the text shown here alone (the cited unit), never a title, heading or neighbouring Passage. 'expected' is the verdict a correct judge must give. 'honest_map' is a correct support map for SUPPORTED cases. 'qualifier' names the words a lazy judge leaves out; 'subject' the name a judge might wrongly take from identity context. 'floor' records which permissive-judge personas the code itself blocks ('code') and which only a correct model can stop ('model'); it is a measurement of the deterministic floor, not a pass threshold. support-gold-2 (2026-10-21, PR #77 review) re-measured every floor after check 5 (logical operators) and added the 'sentence' persona (the passage's best-matching sentence as the only excerpt), so a refusal caused only by quoting the whole passage (an unrelated 'does not' or 'planned' elsewhere in it) is not mistaken for a floor; no 'expected' label changed. 'old_literal_gate' is what the retired T18 lexical gate (literal_problem) said, recorded to show the false negative it caused. Northwind text is the fictional sample PDF (samples/documents/make_sample_documents.py). Web text is quoted from docs/audits/2026-10-21-t18-b1-historical-claim-audit.md. 'constructed' cases are written for this set. Nothing here alters the T18 B-1 records or stage_b1_cases.json.",
+  "version": "support-gold-2",
   "cases": [
     {
       "id": "NW-P01", "class": "positive", "kind": "company attribution from a verified PDF; compound entity label",
@@ -79,7 +79,7 @@
       "entities": ["Northwind Health"], "entity": "Northwind Health",
       "passage": "The pipeline holds 6 programmes in clinical trials at the end of fiscal 2025.",
       "document_entity": "Northwind Health", "expected": "CONTRADICTED", "subject": "Northwind Health",
-      "floor": {"full": "code", "identity": "code"},
+      "floor": {"full": "code", "identity": "code", "sentence": "code"},
       "old_literal_gate": "value not in Passage: ['8']"
     },
     {
@@ -89,7 +89,7 @@
       "entities": ["Medtronic"], "entity": "Medtronic",
       "passage": "The pipeline holds 6 programmes in clinical trials at the end of fiscal 2025.",
       "document_entity": "Northwind Health", "expected": "INSUFFICIENT_EVIDENCE", "subject": "Medtronic",
-      "floor": {"full": "model", "identity": "code"},
+      "floor": {"full": "model", "identity": "code", "sentence": "model"},
       "old_literal_gate": "name not in Passage: ['Medtronic']"
     },
     {
@@ -99,7 +99,7 @@
       "entities": ["Northwind Health"], "entity": "Northwind Health",
       "passage": "The pipeline holds 6 programmes in clinical trials at the end of fiscal 2025.",
       "document_entity": "Northwind Health", "expected": "CONTRADICTED", "subject": "Northwind Health",
-      "floor": {"full": "code", "identity": "code"},
+      "floor": {"full": "code", "identity": "code", "sentence": "code"},
       "old_literal_gate": "value not in Passage: ['2024']"
     },
     {
@@ -109,7 +109,7 @@
       "entities": ["Northwind", "NW-200"], "entity": "Northwind",
       "passage": "Northwind expects regulatory approval for NW-200 in the first half of 2026.",
       "document_entity": "Northwind Health", "expected": "INSUFFICIENT_EVIDENCE",
-      "floor": {"full": "model"},
+      "floor": {"full": "code", "sentence": "code"},
       "old_literal_gate": null
     },
     {
@@ -120,7 +120,7 @@
       "passage": "Research and development spending was 71 million dollars in fiscal 2025.",
       "document_entity": "Northwind Health", "expected": "INSUFFICIENT_EVIDENCE",
       "qualifier": "cardiology", "subject": "Northwind Health",
-      "floor": {"full": "model", "lazy": "code", "identity": "model"},
+      "floor": {"full": "model", "lazy": "code", "identity": "model", "sentence": "model"},
       "old_literal_gate": null
     },
     {
@@ -130,7 +130,7 @@
       "entities": ["Northwind Health"], "entity": "Northwind Health",
       "passage": "Revenue grew 14 percent compared with fiscal 2024, led by the cardiology segment.",
       "document_entity": "Northwind Health", "expected": "CONTRADICTED",
-      "floor": {"full": "model"},
+      "floor": {"full": "code", "sentence": "code"},
       "old_literal_gate": null
     },
     {
@@ -140,7 +140,7 @@
       "entities": ["Northwind Health"], "entity": "Northwind Health",
       "passage": "Medtronic reported that a single supplier provides the titanium used in its implants.",
       "document_entity": "Northwind Health", "expected": "INSUFFICIENT_EVIDENCE", "subject": "Northwind Health",
-      "floor": {"full": "model", "identity": "model"},
+      "floor": {"full": "model", "identity": "model", "sentence": "model"},
       "old_literal_gate": "name not in Passage: ['Northwind Health']"
     },
     {
@@ -150,7 +150,7 @@
       "entities": ["Northwind Health"], "entity": "Northwind Health",
       "passage": "Medtronic revenue grew 5 percent in fiscal 2025, while Northwind Health revenue grew 14 percent.",
       "document_entity": null, "expected": "CONTRADICTED", "subject": "Northwind Health",
-      "floor": {"full": "model", "identity": "code"},
+      "floor": {"full": "model", "identity": "code", "sentence": "model"},
       "old_literal_gate": null
     },
     {
@@ -160,7 +160,7 @@
       "entities": ["AWS"], "entity": "AWS",
       "passage": "AWS reported $37.59 billion in Q1 2026, up 28% year over year, beating analyst estimates by $950 million. AWS accounts for about 21% of Amazon’s total revenue.",
       "document_entity": null, "expected": "CONTRADICTED",
-      "floor": {"full": "code"},
+      "floor": {"full": "code", "sentence": "code"},
       "old_literal_gate": "value not in Passage: ['37.59']"
     },
     {
@@ -170,7 +170,7 @@
       "entities": ["Synergy", "Microsoft"], "entity": "Microsoft",
       "passage": "Synergy estimates Microsoft held 20% in Q2 2026, unchanged from Q2 2025 and down from 23% in Q2 2024. Microsoft does not report standalone Azure revenue, so shares are estimates. It reported 43% growth in Azure and other cloud services for the quarter ended June 30, 2026.",
       "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE", "qualifier": "of cloud infrastructure services",
-      "floor": {"full": "model", "lazy": "code"},
+      "floor": {"full": "model", "lazy": "code", "sentence": "model"},
       "old_literal_gate": null
     },
     {
@@ -180,7 +180,7 @@
       "entities": ["Alphabet"], "entity": "Alphabet",
       "passage": "Alphabet’s planned $175-185 billion is notable partly because it has already been revised three times upward from an initial $71-73 billion range for 2025. CEO Sundar Pichai acknowledged the scale is significant enough to cause concern internally, but pointed to a cloud backlog that surged 55% sequentially to over $240 billion.",
       "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE", "qualifier": "capex",
-      "floor": {"full": "model", "lazy": "code"},
+      "floor": {"full": "code", "lazy": "code", "sentence": "code"},
       "old_literal_gate": null
     },
     {
@@ -190,7 +190,7 @@
       "entities": ["BYD"], "entity": "BYD",
       "passage": "BYD: Targeting 400 Wh/kg with 5C charging, initial production 2027",
       "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE", "qualifier": "for its solid-state battery",
-      "floor": {"full": "model", "lazy": "code"},
+      "floor": {"full": "model", "lazy": "code", "sentence": "model"},
       "old_literal_gate": null
     },
     {
@@ -200,7 +200,7 @@
       "entities": ["AWS", "Amazon"], "entity": "AWS",
       "passage": "AWS reported $37.59 billion in Q1 2026, up 28% year over year, beating analyst estimates by $950 million. AWS accounts for about 21% of Amazon’s total revenue.",
       "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE", "qualifier": "operating income",
-      "floor": {"full": "model", "lazy": "code"},
+      "floor": {"full": "model", "lazy": "code", "sentence": "model"},
       "old_literal_gate": null
     },
     {
@@ -210,7 +210,7 @@
       "entities": ["Synergy Research Group", "China"], "entity": "Synergy Research Group",
       "passage": "Synergy Research Group measured the wider market growing 43% year over year in Q2 2026, the fastest in eight years, which its chief analyst John Dinsdale attributed to AI demand having \"lit a fire under the cloud market.\"",
       "document_entity": null, "expected": "INSUFFICIENT_EVIDENCE", "qualifier": "China",
-      "floor": {"full": "model", "lazy": "code"},
+      "floor": {"full": "model", "lazy": "code", "sentence": "model"},
       "old_literal_gate": "name not in Passage: ['China']"
     }
   ]

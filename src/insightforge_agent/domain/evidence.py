@@ -16,6 +16,9 @@ from insightforge_agent.domain.periods import period_end
 DROP_NO_CITATION = "draft cites no Passage"
 DROP_LITERAL = "no Passage passes the provenance and literal-value checks"
 DROP_UNSUPPORTED = "no supported Passage"
+# PR #77 review: no Passage was judged SUPPORTED and at least one that could support the item
+# was never judged (every reply for it unusable): not the same as insufficient Evidence.
+DROP_UNVERIFIED = "verification incomplete: the support check failed"
 
 
 @dataclass(frozen=True)

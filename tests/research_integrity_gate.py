@@ -47,10 +47,11 @@ def gold_cases(repeats: int) -> list[Case]:
     out = []
     for c in load("research_integrity/support_cases.json")["cases"]:
         positive = c["expected"] == "SUPPORTED"
-        model_floor = "model" in (c.get("floor") or {}).values()
+        # Every negative is repeated: a floor that code holds only by a coincidental operator
+        # elsewhere in the Passage (support-gold-2, Q-N02) must not lighten the live check.
         out.append(Case("gold", c["id"], c["statement"], c["passage"],
                         "SUPPORTED" if positive else "NOT_SUPPORTED", c["document_entity"],
-                        repeats if (not positive and model_floor) else 1,
+                        repeats if not positive else 1,
                         meta={"kind": c["kind"], "class": c["class"]}))
     return out
 

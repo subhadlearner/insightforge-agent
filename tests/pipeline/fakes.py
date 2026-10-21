@@ -7,7 +7,17 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from insightforge_agent.agents.web import Page, PaywalledError, SearchHit, FetchError
-from tests.scripted import SUPPORT_PREFIX, ScriptedChat, ai, call, support_verdicts
+from tests.scripted import (
+    ANSWERS_PREFIX,
+    JOINT_PREFIX,
+    SUPPORT_PREFIX,
+    ScriptedChat,
+    ai,
+    answer_verdicts,
+    call,
+    joint_verdict,
+    support_verdicts,
+)
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "search"
 
@@ -91,8 +101,12 @@ def light() -> ScriptedChat:
                 for i, text in re.findall(r"\[(\d+)\] (.+)", user)
             ]
             return AIMessage(content=json.dumps({"facts": facts}))
+        if system.startswith(JOINT_PREFIX):
+            return AIMessage(content=json.dumps(joint_verdict(user)))
         if system.startswith(SUPPORT_PREFIX):
             return AIMessage(content=json.dumps({"verdicts": support_verdicts(user)}))
+        if system.startswith(ANSWERS_PREFIX):
+            return AIMessage(content=json.dumps(answer_verdicts(user)))
         return AIMessage(content="A page about electric vehicles.")
     return ScriptedChat(reply=reply)
 

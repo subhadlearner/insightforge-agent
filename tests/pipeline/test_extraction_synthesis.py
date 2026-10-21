@@ -24,7 +24,7 @@ from insightforge_agent.domain.tokens import estimate_tokens
 from insightforge_agent.pipeline.errors import RunFailed
 from insightforge_agent.pipeline.extract import extract
 from insightforge_agent.pipeline.synthesize import bundle_tokens, synthesize
-from tests.scripted import ScriptedChat
+from tests.scripted import ANSWERS_PREFIX, JOINT_PREFIX, ScriptedChat, answer_verdicts, joint_verdict
 
 NOW = datetime(2026, 10, 9, 12, tzinfo=UTC)
 OWNER, RUN = "alice", "run1"
@@ -97,8 +97,12 @@ def light(extract_=None, draft=None, entail=None, support=None) -> Light:
             handler, key = draft, "items"
         elif system.startswith("You judge whether"):
             handler, key = entail, "verdicts"
+        elif system.startswith(JOINT_PREFIX):
+            return AIMessage(content=json.dumps(joint_verdict(user)))
         elif system.startswith("You check whether"):
             handler, key = support or (mapped(entail) if entail else None), "verdicts"
+        elif system.startswith(ANSWERS_PREFIX):
+            return AIMessage(content=json.dumps(answer_verdicts(user)))
         else:
             return AIMessage(content="A summary.")
         items = handler(numbered(user), user) if handler else []
@@ -310,7 +314,8 @@ def test_the_support_judgment_is_one_call_per_item_and_a_bad_reply_supports_noth
     bad = light(draft=draft_all(), entail=lambda ps, u: "not a list")
     world.deps.light_model = bad
     assert world.items(world.synth(plan, research)) == []
-    dropped = [d for d in world.events("evidence_dropped") if d["reason"] == "no supported Passage"]
+    dropped = [d for d in world.events("evidence_dropped")
+               if d["reason"] == "verification incomplete: the support check failed"]  # never judged
     assert len(dropped) == 2 and all(d["verification_errors"] == 1 for d in dropped)
 
 

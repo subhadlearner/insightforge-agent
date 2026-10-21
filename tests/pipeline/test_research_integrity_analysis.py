@@ -5,6 +5,7 @@ Scripted models only: these tests prove the contract's code paths, not the quali
 Writer's synthesis (which needs a live run and human review)."""
 
 import json
+import re
 
 import pytest
 from langchain_core.messages import AIMessage, SystemMessage
@@ -31,14 +32,22 @@ JOINT = "You check whether numbered passages, taken together"
 
 def joint_judge(verdict="SUPPORTED") -> ScriptedChat:
     """Answers the joint support judgment; a SUPPORTED one maps each part of the comparison to
-    the passage that states it."""
+    the passage that states it, and any other statement (a summary sentence, judged against the
+    published Claims) to every unit it was shown."""
     def reply(messages):
         system = str(next(m.content for m in messages if isinstance(m, SystemMessage)))
         assert system.startswith(JOINT), system[:60]
-        parts = [{"part": "BYD sold 4.27 million vehicles in 2025",
-                  "excerpts": [{"passage": 1, "text": BYD.rstrip(".")}]},
-                 {"part": "more than Tesla's 1.64 million",
-                  "excerpts": [{"passage": 2, "text": TESLA.rstrip(".")}]}]
+        user = str(messages[-1].content)
+        statement = user.split("\n", 1)[0].removeprefix("Statement: ")
+        if statement == COMPARISON:
+            parts = [{"part": "BYD sold 4.27 million vehicles in 2025",
+                      "excerpts": [{"passage": 1, "text": BYD.rstrip(".")}]},
+                     {"part": "more than Tesla's 1.64 million",
+                      "excerpts": [{"passage": 2, "text": TESLA.rstrip(".")}]}]
+        else:
+            parts = [{"part": statement, "excerpts": [
+                {"passage": int(n), "text": t}
+                for n, t in re.findall(r"^\[(\d+)\] (.+)$", user, re.MULTILINE)]}]
         return AIMessage(content=json.dumps(
             {"verdict": verdict, "parts": parts if verdict == "SUPPORTED" else []}))
     return ScriptedChat(reply=reply)
@@ -103,8 +112,9 @@ def test_a_supported_analytical_claim_is_published_with_its_premises(make_deps):
     draft = write_report(deps, "alice", "run_1", "EV sales", bundle, [])
     (claim,) = [c for s in draft.sections for c in s.claims]
     assert claim.premises == ["ev_1"] and draft.quality == []
-    (judged,) = events(deps, "support_joint_judged")
+    judged, summary = events(deps, "support_joint_judged")  # the Claim, then the summary
     assert judged["units"] == 2 and judged["judgment"]["verdict"] == "SUPPORTED"
+    assert summary["summary_sentence"] == 0 and summary["judgment"]["verdict"] == "SUPPORTED"
     request = str(deps.light_model.seen[0][-1].content)
     assert BYD in request and TESLA in request  # both premises, their own Passages only
 

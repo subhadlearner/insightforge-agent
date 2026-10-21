@@ -96,16 +96,18 @@ from insightforge_agent.pipeline.memory import (
     resolve_historical,
     summaries_for_planner,
 )
-from insightforge_agent.pipeline.requirements import derive_requirements
+from insightforge_agent.pipeline.requirements import confirm_answers, derive_requirements
 from insightforge_agent.pipeline.synthesize import synthesize
 from insightforge_agent.pipeline.write import research_gaps, write_report
 from insightforge_agent.domain.requirements import (
     RequirementLedger,
     RequirementStatus,
+    after_fact_check,
     aspect_ledger,
     assess,
     gap_lines,
     mark_reported,
+    unverifiable,
 )
 
 IMPLEMENTED_SOURCE_TYPES = ["web", "documents", "memory"]
@@ -685,10 +687,16 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
         extraction = ExtractionResult.model_validate(state["extraction"])
         historical = historical_of(state)
         # ADR-0006 §5: each requirement's status from the kept items, before writing; what is
-        # not established becomes a gap line, so Gaps & limitations matches the ledger.
-        statuses = assess(ledger_of(state), plan, research, extraction,
-                          [i for s in bundle.sections for i in s.items],
-                          {h.aspect_id for h in historical.items})
+        # not established becomes a gap line, so Gaps & limitations matches the ledger. An item
+        # answers a requirement only if the answer check confirms it, and a candidate whose
+        # support check failed is "could not be checked", never "no evidence" (PR #77 review).
+        kept = [i for s in bundle.sections for i in s.items]
+        ledger = ledger_of(state)
+        statuses = assess(ledger, plan, research, extraction, kept,
+                          {h.aspect_id for h in historical.items},
+                          answers=confirm_answers(deps, owner, run_id, ledger, kept),
+                          unverifiable=unverifiable(
+                              [e["payload"] for e in log if e["type"] == "evidence_dropped"]))
         gaps = list(state.get("limitations", [])) + research_gaps(
             plan=plan, research=research, bundle=bundle, events=log, documents=documents,
             extraction=extraction) + gap_lines(statuses)
@@ -702,10 +710,26 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
 
     def fact_checking(state: State) -> State:
         enter(state, RunState.FACT_CHECKING)
+        owner, run_id = state["owner_id"], state["run_id"]
         verified = fact_check(
-            deps, state["owner_id"], state["run_id"], ReportDraft.model_validate(state["draft"]),
+            deps, owner, run_id, ReportDraft.model_validate(state["draft"]),
             EvidenceBundle.model_validate(state["bundle"]), historical_of(state))
-        return {"verified": verified.model_dump()}
+        # PR #77 review: the ledger and gaps reflect the Fact-Checker. A requirement whose every
+        # answering Claim failed it is no longer just "reported", and says so in the gaps.
+        before = [RequirementStatus.model_validate(r) for r in state.get("ledger_status") or []]
+        statuses = after_fact_check(before, verified.verdicts)
+        failed = [r for r in statuses if r.status == "reported_unverified"]
+        if failed:
+            draft = verified.draft
+            verified = verified.model_copy(update={"draft": draft.model_copy(update={
+                "gaps": [*draft.gaps, *gap_lines(failed)],
+                "quality": [*draft.quality,
+                            f"requirements_unverified:{','.join(r.id for r in failed)}"]})})
+        deps.log(owner, run_id, "requirements_fact_checked",
+                 statuses=[{"id": r.id, "status": r.status, "fact_check": r.fact_check}
+                           for r in statuses])
+        return {"verified": verified.model_dump(),
+                "ledger_status": [r.model_dump() for r in statuses]}
 
     def historical_of(state: State) -> HistoricalContext:
         return HistoricalContext.model_validate(state.get("historical") or {})

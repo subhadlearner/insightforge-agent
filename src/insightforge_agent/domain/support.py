@@ -18,11 +18,24 @@ uploaded document the text belongs to. Code then checks what code can check, and
 4. An identity part is allowed only where identity context was given, carries no figure, and
    names the document's own entity or a run of its words (`identity_problem`). It never names
    another company, so a fact about Medtronic can never become Northwind's this way.
+5. Logical operators are held to the quotes (`operator_problems`), because they decide whether
+   a statement is true and a support map can otherwise leave them out of every excerpt.
+   Negation and hedging (expected, planned, may, will...) must agree between each part and its
+   excerpts in both directions: a part that has one needs one in its excerpts; an excerpt that
+   governs what the part asserts (the operator just before the quote, as in a cut-off "did not"
+   or "is expected to", or within three words before a word of the part) needs one in the part.
+   An operator elsewhere in a long quote ("expansion plans", "analyst estimates") governs
+   nothing the part says and is ignored. Exclusivity ("only"), universality ("all") and, for a
+   single cited unit, comparison ("more than", "highest") in a part must be stated by its
+   excerpts. In a joint judgment the comparison is the analysis itself, so it is not required
+   of the quotes.
 
-Whether a part's excerpt *means* the part (a paraphrase, an equivalent unit, "expects approval"
-versus "received approval") stays the model's judgment: code does not decide meaning. These
-checks are integrity backstops; they make a permissive judgment visible and fail it closed
-where they can, and they never turn a model's rejection into support."""
+Whether a part's excerpt *means* the part (a paraphrase, an equivalent unit, a genuine quote
+attached to a part it does not state) stays the model's judgment: code does not decide meaning.
+These checks are integrity backstops; they make a permissive judgment visible and fail it closed
+where they can, and they never turn a model's rejection into support. Operator classes are word
+lists: an operator worded outside them ("outpaced", "failed to") is the model's to judge, and a
+faithful paraphrase that drops one ("did not grow" for "was flat") is refused, by design."""
 
 import re
 import unicodedata
@@ -35,14 +48,34 @@ SupportVerdict = Literal["SUPPORTED", "CONTRADICTED", "INSUFFICIENT_EVIDENCE",
                          "VERIFICATION_ERROR"]
 
 # Function words: a statement's other words are its content, and each must be in some part.
+# Logical operators (not, no, only, all, any, more, than, will, may...) are content: a part map
+# that leaves one out has not shown support for it.
 _FUNCTION_WORDS = frozenset("""
-a an the and or but nor of to in on at by for from with within without into onto over under as
-than then that this these those it its it's their they them there here is are was were be been
-being has have had do does did will would shall should may might can could also both either
-each per via about around between among during while which who whom whose what when where why
-how so such only just very more most less least not no all any some other another same own
-s
+a an the and or but of to in on at by for from with within into onto over under as then that
+this these those it its it's their they them there here is are was were be been being has have
+had do does did also both either each per via about around between among during while which who
+whom whose what when where why how so such just very some other another same own s
 """.split())
+
+# Operator classes (check 5). Negation and hedging must agree both ways between a part and its
+# excerpts; the others must be stated by the excerpts when the part states them.
+_NEGATION = re.compile(r"\b(?:not|never|none|neither|nor|without|cannot|nothing|no(?!\.\s*\d))\b"
+                       r"|n['’]t\b", re.IGNORECASE)
+_HEDGE = re.compile(
+    r"\b(?:will|would|shall|should|might|could|(?-i:may)|expects?|expected|expecting|"
+    r"expectations?|plans?|planned|planning|intends?|intended|anticipates?|anticipated|"
+    r"forecasts?|forecasted|projected|estimates?|estimated|targets|targeted|targeting|"
+    r"proposes?|proposed|likely|unlikely|potential|potentially|possible|possibly|aims?|aimed|"
+    r"aiming|guidance|outlook|seeks?|sought)\b", re.IGNORECASE)
+_EXCLUSIVE = re.compile(r"\b(?:only|sole|solely|exclusively|alone)\b", re.IGNORECASE)
+_UNIVERSAL = re.compile(r"\b(?:all|every|entire|always|any)\b", re.IGNORECASE)
+_COMPARISON = re.compile(
+    r"\b(?:more|less|fewer|than|most|least|greater|greatest|higher|highest|lower|lowest|"
+    r"larger|largest|smaller|smallest|biggest|record)\b", re.IGNORECASE)
+_BOTH_WAYS = (("negation", _NEGATION), ("hedging", _HEDGE))
+_STATED = (("exclusivity", _EXCLUSIVE), ("universality", _UNIVERSAL))
+_LEAD = 4  # words before a quote checked for a cut-off "not" or "expected to"
+_REACH = 3  # an operator in a quote governs the next words up to this many
 
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 # One figure: digits with separators and a decimal part, so "1,234.5" is one word, not three.
@@ -126,6 +159,60 @@ def identity_problem(part: str, entity: str | None) -> str | None:
     return None
 
 
+def _lead(text: str, span: tuple[int, int]) -> str:
+    """The words of `text` just before `span`, within its sentence: where a "not" or an
+    "expected to" sits when a quote is cut to leave it out."""
+    before = re.split(r"[.!?;:]\s", text[:span[0]])[-1]
+    return " ".join(before.split()[-_LEAD:])
+
+
+def _same_word(a: str, b: str) -> bool:
+    """One word, allowing inflection: equal, or a common prefix of at least 4 letters and 60% of
+    the shorter ("increase" and "increased"). Figures must be equal."""
+    if a == b:
+        return True
+    if a[:1].isdigit() or b[:1].isdigit():
+        return False
+    n = 0
+    while n < min(len(a), len(b)) and a[n] == b[n]:
+        n += 1
+    return n >= 4 and n >= 0.6 * min(len(a), len(b))
+
+
+def _governs(pattern: re.Pattern, quote: str, terms: list[str]) -> bool:
+    """Whether a word of `pattern` in `quote` comes within `_REACH` words before a word of
+    `terms` (the part's own content words)."""
+    words = [_stem(w) for w in _words(quote)]
+    raw = quote.split()
+    for i, w in enumerate(raw):
+        if pattern.search(w):
+            at = len(_words(" ".join(raw[:i + 1])))  # tokens up to and including the operator
+            if any(_same_word(x, t) for x in words[at:at + _REACH] for t in terms):
+                return True
+    return False
+
+
+def operator_problems(part: str, quotes: list[str], leads: list[str],
+                      comparison: bool = True) -> list[str]:
+    """Check 5 for one part: `quotes` are its excerpts as they stand in the cited text, `leads`
+    the words just before each. A class is absent from a part when no word of it occurs there."""
+    problems = []
+    said = " \n ".join(quotes)
+    for name, pattern in _BOTH_WAYS:
+        in_part = bool(pattern.search(part))
+        terms = [t for t in content_terms(part) if not pattern.search(t)]
+        governing = any(pattern.search(x) for x in leads) or any(
+            _governs(pattern, q, terms) for q in quotes)
+        if in_part and not (pattern.search(said) or governing):
+            problems.append(f"no excerpt states the {name} of part {part!r}")
+        elif governing and not in_part:
+            problems.append(f"an excerpt's {name} is missing from part {part!r}")
+    for name, pattern in _STATED + ((("comparison", _COMPARISON),) if comparison else ()):
+        if pattern.search(part) and not pattern.search(said):
+            problems.append(f"no excerpt states the {name} of part {part!r}")
+    return problems
+
+
 @dataclass(frozen=True)
 class SupportPart:
     part: str
@@ -145,7 +232,7 @@ class SupportCheck:
 
 def check_support(statement: str, parts: list[SupportPart], text: str,
                   entity: str | None) -> SupportCheck:
-    """Checks 1-4 of the module docstring on a model's SUPPORTED judgment of `text`."""
+    """Checks 1-5 of the module docstring on a model's SUPPORTED judgment of `text`."""
     spans: list[tuple[int, int]] = []
     fabricated: list[str] = []
     problems: list[str] = []
@@ -163,6 +250,7 @@ def check_support(statement: str, parts: list[SupportPart], text: str,
             continue
         if not p.excerpts:
             problems.append(f"part {p.part!r} has no excerpt")
+        quotes, leads = [], []
         for e in p.excerpts:
             found = find_excerpt(e, text)
             if found is None:
@@ -170,6 +258,10 @@ def check_support(statement: str, parts: list[SupportPart], text: str,
             else:
                 spans.append(found)
                 excerpts.append(e)
+                quotes.append(text[found[0]:found[1]])
+                leads.append(_lead(text, found))
+        if quotes:
+            problems += operator_problems(p.part, quotes, leads)
     if fabricated:
         return SupportCheck("VERIFICATION_ERROR",
                             tuple(f"excerpt not in the cited text: {e[:120]!r}" for e in fabricated),
@@ -196,7 +288,7 @@ class JointPart:
 
 def check_joint(statement: str, parts: list[JointPart], texts: list[str],
                 entities: list[str | None]) -> SupportCheck:
-    """Checks 1-4 for a statement resting on several premises (ADR-0006 §6): every excerpt is in
+    """Checks 1-5 for a statement resting on several premises (ADR-0006 §6): every excerpt is in
     the unit it names, the parts cover the statement, the excerpts together state every figure,
     and identity is used only as `identity_problem` allows for the unit it names."""
     if not parts:
@@ -218,6 +310,7 @@ def check_joint(statement: str, parts: list[JointPart], texts: list[str],
             continue
         if not p.excerpts:
             problems.append(f"part {p.part!r} has no excerpt")
+        quotes, leads = [], []
         for n, e in p.excerpts:
             found = find_excerpt(e, texts[n - 1]) if 1 <= n <= len(texts) else None
             if found is None:
@@ -225,6 +318,10 @@ def check_joint(statement: str, parts: list[JointPart], texts: list[str],
             else:
                 spans.append(found)
                 excerpts.append(e)
+                quotes.append(texts[n - 1][found[0]:found[1]])
+                leads.append(_lead(texts[n - 1], found))
+        if quotes:
+            problems += operator_problems(p.part, quotes, leads, comparison=False)
     if fabricated:
         return SupportCheck("VERIFICATION_ERROR",
                             tuple(f"excerpt not in the cited unit: {e[:120]!r}" for e in fabricated),

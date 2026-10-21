@@ -14,8 +14,10 @@ ADR-0006).
    VERIFICATION_ERROR for each Passage, with identity context only for Passages of an uploaded
    document whose own text establishes its company. Names are the judge's to decide: no lexical
    name rule refuses a candidate (the retired `literal_problem` stays only as the measured T18
-   baseline). An item with no SUPPORTED Passage is dropped and logged with its verification
-   errors. A CONTRADICTED Passage marks the item conflicting only when the Extraction facts at
+   baseline). An item with no SUPPORTED Passage is dropped and logged: as verification
+   incomplete (`DROP_UNVERIFIED`) when a Passage that could support it was never judged (every
+   reply for it unusable), else as unsupported; with its Aspect and requirements, so the ledger
+   tells "could not be checked" from "not found". A CONTRADICTED Passage marks the item conflicting only when the Extraction facts at
    that Passage share its entity, predicate and scope with an overlapping period.
 4. Confidence counts SUPPORTED Passages only, over distinct Sources; two Sources whose
    supporting Passages are the same text (a syndicated story or a re-posted release) are not
@@ -44,6 +46,7 @@ from insightforge_agent.domain.evidence import (
     DROP_LITERAL,
     DROP_NO_CITATION,
     DROP_UNSUPPORTED,
+    DROP_UNVERIFIED,
     compress_to_budget,
     confidence_of,
     credibility_bucket,
@@ -483,16 +486,19 @@ def _validate(
     contradicted = [PassageRef(observation_id=o, index=i) for (o, i), vs in verdicts.items()
                     if "CONTRADICTED" in vs and not ("SUPPORTED" in vs and (o, i) in can_support)]
     errors = sum(1 for vs in verdicts.values() if vs == {"VERIFICATION_ERROR"})
+    unjudged = [k for k in can_support if verdicts.get(k, set()) <= {"VERIFICATION_ERROR"}]
+    outcome = "supported" if supported else DROP_UNVERIFIED if unjudged else DROP_UNSUPPORTED
     # Per-Passage outcome: references and verdicts only, never Passage text or replies.
     deps.log(owner_id, run_id, "evidence_support", evidence_id=c.id, subtask_id=c.subtask.id,
              passages=[{"observation_id": k[0], "index": k[1], "verdicts": sorted(verdicts.get(k, ())),
                         "figure_gate": k in can_support,
                         "identity_context": bool(entity_of.get(k[0]))}
                        for k in (_key(p) for p in candidates)],
-             outcome="supported" if supported else DROP_UNSUPPORTED)
+             outcome=outcome)
     if not supported:
-        drop(DROP_UNSUPPORTED, verdicts={"contradicted": len(contradicted)},
-             verification_errors=errors)
+        drop(outcome, verdicts={"contradicted": len(contradicted)},
+             verification_errors=errors, unjudged=len(unjudged), aspect_id=c.subtask.aspect_id,
+             requirement_ids=list(c.requirement_ids))
         return None
     if period != UNKNOWN and not any(period_stated_in(period, text_of[_key(r)]) for r in supported):
         deps.log(owner_id, run_id, "period_rejected", evidence_id=c.id, period=period)

@@ -30,10 +30,30 @@ research requirements (what the Brief asks, which items answer each, which were 
 established), outside the Evidence budget. Every required, supported requirement must be
 answered by a Claim citing one of its items; a draft that leaves one out is retried, and repair
 fills it with the item's statement. An analytical Claim may rest on further items (`premises`):
-its numbers and names must appear in one of its cited items, it may not cite Historical items,
-and before publication it is judged against the primary Passages of all its items together
-(`judge_joint`); one that is not SUPPORTED is removed and logged. Everything repair does is
-recorded in the draft's `quality` flags: a flagged Report is degraded output, not synthesis."""
+its numbers and names must appear in one of its cited items, and it may not cite Historical
+items.
+
+Semantic checks before publication (`_checked_claims`, `_checked_summary`; PR #77 review). The
+rules above are lexical: "revenue increased 20%" passes them for an item that says it declined
+20%. So every Claim is checked against what it cites before it is published:
+- a Claim whose text is its item's verified statement (the exact-reuse path: case, spacing and
+  a final stop aside; for a Historical Claim, without its report-date annotation) needs no
+  second judgment: Synthesis judged that statement against the same Passage;
+- any other current or Historical Claim is judged by the support contract against its item's
+  primary Passage, the one its citation shows; one that is not SUPPORTED is restated as the
+  item's verified statement (or removed when another Claim already states it), logged as
+  `writer_claims_checked`;
+- an analytical Claim is judged against the primary Passages of all its items together
+  (`judge_joint`); one that is not SUPPORTED is removed and logged.
+Then every Executive Summary sentence that is not one of the published Claims verbatim is
+judged jointly against the published Claims (never the whole bundle); one that is not
+SUPPORTED is removed, so a rejected comparison cannot survive there, and a summary left empty is
+rebuilt from whole Claims (`fit_summary`). A sentence that only says what this research did not
+establish, with no figure, states no finding and is kept unjudged. The T18 absence measurement
+(`summary_absence_flagged`) is taken on the Writer's summary before these checks: the flag
+itself still removes nothing. Any failed check fails closed. Everything repair and
+these checks do is recorded in the draft's `quality` flags: a flagged Report is degraded
+output, not synthesis."""
 
 import re
 
@@ -44,12 +64,18 @@ from insightforge_agent.domain.contracts import (
     EvidenceItem,
     ExtractionResult,
     HistoricalContext,
+    PassageRef,
     ReportDraft,
     ReportSection,
     ResearchResults,
 )
 from insightforge_agent.domain.document_recovery import FAILED_PREFIX
-from insightforge_agent.domain.evidence import DROP_LITERAL, DROP_NO_CITATION, DROP_UNSUPPORTED
+from insightforge_agent.domain.evidence import (
+    DROP_LITERAL,
+    DROP_NO_CITATION,
+    DROP_UNSUPPORTED,
+    DROP_UNVERIFIED,
+)
 from insightforge_agent.domain.memory import (
     report_date_text,
     strip_report_date,
@@ -59,6 +85,7 @@ from insightforge_agent.domain.passages import named_entities_in, numbers_in
 from insightforge_agent.domain.models import Passage
 from insightforge_agent.domain.plan import SubTaskPlan
 from insightforge_agent.domain.requirements import RequirementStatus, coverage_index
+from insightforge_agent.domain.support import content_terms
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.errors import RunFailed
 
@@ -588,9 +615,8 @@ def write_report(
         except BadModelReply as e:
             last = [f"the reply was not valid report JSON: {e.brief}"]
         if not last:
-            draft = _verified_analysis(deps, owner_id, run_id, draft, bundle, historical,
-                                       brief, statuses)
             _flag_absence(deps, owner_id, run_id, draft.summary)
+            draft = _checked(deps, owner_id, run_id, draft, bundle, historical, brief, statuses)
             return draft.model_copy(update={"gaps": gaps})
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
         constraint = "\n\nYour previous draft broke these rules. Fix them:\n" + "\n".join(
@@ -606,52 +632,183 @@ def write_report(
     if usable is not None:
         draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief, len(replaced),
                         statuses)
-        draft = _verified_analysis(deps, owner_id, run_id, draft, bundle, historical, brief,
-                                   statuses)
         _flag_absence(deps, owner_id, run_id, draft.summary)
+        draft = _checked(deps, owner_id, run_id, draft, bundle, historical, brief, statuses)
         return draft.model_copy(update={"gaps": gaps})
     raise RunFailed(f"the Writer broke the citation rules after {deps.writer_retries} retries")
 
 
-def _verified_analysis(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
-                       bundle: EvidenceBundle, historical: HistoricalContext, brief: str,
-                       statuses: list[RequirementStatus]) -> ReportDraft:
-    """ADR-0006 §6: every current Claim with premises, judged against the primary Passages of
-    all its items together before publication. One that is not SUPPORTED is removed (logged as
-    `analytical_claim_rejected`), and the draft is repaired if that left a section or
-    requirement unanswered. A published analytical Claim has therefore been checked against
-    every premise; the sampled Fact-Checker checks some again, independently."""
+def _checked(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft, bundle: EvidenceBundle,
+             historical: HistoricalContext, brief: str,
+             statuses: list[RequirementStatus]) -> ReportDraft:
+    """The semantic checks before publication (module docstring): Claims, then the summary
+    against the Claims that survived."""
+    draft = _checked_claims(deps, owner_id, run_id, draft, bundle, historical, brief, statuses)
+    return _checked_summary(deps, owner_id, run_id, draft, bundle, historical)
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split()).rstrip(".").casefold()
+
+
+def _same(a: str, b: str) -> bool:
+    """The exact-reuse test: equal but for case, spacing and a final stop."""
+    return _norm(a) == _norm(b)
+
+
+def _supported(deps: Deps, owner_id: str, run_id: str, statement: str, ref: PassageRef,
+               **where) -> tuple[str, list[str]]:
+    """The support judgment of `statement` against the Passage `ref` (in windows if long):
+    SUPPORTED if any window is. Any failure fails closed as VERIFICATION_ERROR."""
+    from insightforge_agent.pipeline.support import cited_units, judge_units
+
+    try:
+        judged = judge_units(deps, owner_id, run_id, statement,
+                             cited_units(deps, owner_id, statement, [ref]), **where)
+    except RunFailed:  # the Run's token cap: stop the Run, never skip the check quietly
+        raise
+    except Exception as e:  # noqa: BLE001 - unchecked is never published as checked
+        return "VERIFICATION_ERROR", [f"{type(e).__name__}: {e}"[:200]]
+    verdicts = [j.verdict for j in judged]
+    if "SUPPORTED" in verdicts:
+        return "SUPPORTED", []
+    return (verdicts[0] if verdicts else "VERIFICATION_ERROR",
+            [p for j in judged for p in j.problems][:4])
+
+
+def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
+                    bundle: EvidenceBundle, historical: HistoricalContext, brief: str,
+                    statuses: list[RequirementStatus]) -> ReportDraft:
+    """Every Claim checked against what it cites (module docstring). A reworded Claim that is
+    not SUPPORTED is restated as its item's verified statement, or removed when another Claim
+    already states it; an analytical Claim that is not SUPPORTED is removed. The draft is
+    repaired if that left a section or requirement unanswered."""
     from insightforge_agent.pipeline.support import cited_units, judge_joint
 
     items = {i.id: i for s in bundle.sections for i in s.items}
-    rejected: list[dict] = []
+    background = historical.by_id()
+    stated = {_norm(c.text) for s in draft.sections for c in s.claims}
+    judged, rejected, analytical = 0, [], []
     sections = []
     for si, section in enumerate(draft.sections):
         claims = []
         for ci, c in enumerate(section.claims):
-            if c.historical or not c.premises:
+            if c.premises and not c.historical:
+                cited = [items[e] for e in c.evidence_ids()]
+                try:
+                    units = cited_units(deps, owner_id, c.text, [i.primary for i in cited])
+                    joint = judge_joint(deps, owner_id, run_id, c.text, units, section=si,
+                                        claim=ci)
+                    verdict, problems = joint.verdict, list(joint.problems)
+                except RunFailed:
+                    raise
+                except Exception as e:  # noqa: BLE001 - fail closed
+                    verdict, problems = "VERIFICATION_ERROR", [f"{type(e).__name__}"]
+                if verdict == "SUPPORTED":
+                    claims.append(c)
+                else:
+                    analytical.append({"section": si, "claim": ci,
+                                       "evidence_ids": c.evidence_ids(), "verdict": verdict,
+                                       "problems": problems})
+                continue
+            if c.historical:
+                h = background[c.evidence_id]
+                text, statement, ref = (without_report_date(c.text, h.report_date), h.statement,
+                                        h.primary)
+                verbatim = (f"{h.statement.rstrip().rstrip('.')} "
+                            f"(reported {report_date_text(h.report_date)}).")
+            else:
+                item = items[c.evidence_id]
+                text, statement, ref, verbatim = c.text, item.statement, item.primary, item.statement
+            if _same(text, statement):
                 claims.append(c)
                 continue
-            cited = [items[e] for e in c.evidence_ids()]
-            units = cited_units(deps, owner_id, c.text, [i.primary for i in cited])
-            joint = judge_joint(deps, owner_id, run_id, c.text, units, section=si, claim=ci)
-            if joint.verdict == "SUPPORTED":
+            judged += 1
+            verdict, problems = _supported(deps, owner_id, run_id, text, ref, section=si,
+                                           claim=ci, evidence_id=c.evidence_id)
+            if verdict == "SUPPORTED":
                 claims.append(c)
-            else:
-                rejected.append({"section": si, "claim": ci, "evidence_ids": c.evidence_ids(),
-                                 "verdict": joint.verdict, "problems": list(joint.problems)})
+                continue
+            key = _norm(verbatim)
+            action = "removed" if key in stated else "restated"
+            rejected.append({"section": si, "claim": ci, "evidence_id": c.evidence_id,
+                             "verdict": verdict, "problems": problems, "action": action,
+                             "original_text": c.text[:300]})
+            if action == "restated":
+                stated.add(key)
+                claims.append(c.model_copy(update={"text": verbatim}))
         sections.append(section.model_copy(update={"claims": claims}))
-    if not rejected:
+    deps.log(owner_id, run_id, "writer_claims_checked", judged=judged, rejected=rejected)
+    if analytical:
+        deps.log(owner_id, run_id, "analytical_claim_rejected", rejected=analytical)
+    if not rejected and not analytical:
         return draft
-    deps.log(owner_id, run_id, "analytical_claim_rejected", rejected=rejected)
-    draft = draft.model_copy(update={
-        "sections": [s for s in sections if s.claims],
-        "quality": [*draft.quality, f"analytical_claims_removed:{len(rejected)}"]})
+    restated = sum(r["action"] == "restated" for r in rejected)
+    removed = len(rejected) - restated
+    flags = ([f"claims_restated_verbatim:{restated}"] if restated else []) + (
+        [f"claims_removed:{removed}"] if removed else []) + (
+        [f"analytical_claims_removed:{len(analytical)}"] if analytical else [])
+    draft = draft.model_copy(update={"sections": [s for s in sections if s.claims],
+                                     "quality": [*draft.quality, *flags]})
     if coverage_problems(draft, bundle, statuses) or unsupported_summary_sentences(
             draft.summary, bundle, historical, brief):
         draft = _repair(deps, owner_id, run_id, draft, bundle, historical, brief,
                         statuses=statuses)
     return draft
+
+
+def _claim_units(sentence: str, texts: list[str], cap: int):
+    """The published Claims a summary sentence is judged against: those sharing most of its
+    content words first, as many as fit one call."""
+    from insightforge_agent.pipeline.support import Unit, request_tokens
+
+    terms = set(content_terms(sentence))
+    ranked = sorted(range(len(texts)),
+                    key=lambda n: (-len(terms & set(content_terms(texts[n]))), n))
+    units: list = []
+    for n in ranked:
+        unit = Unit(PassageRef(observation_id="claim", index=n), texts[n])
+        if request_tokens(sentence, units + [unit]) > cap:
+            break
+        units.append(unit)
+    return units
+
+
+def _checked_summary(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
+                     bundle: EvidenceBundle, historical: HistoricalContext) -> ReportDraft:
+    """Each summary sentence that is not a published Claim verbatim, judged against the
+    published Claims together; one that is not SUPPORTED is removed (module docstring)."""
+    from insightforge_agent.pipeline.support import judge_joint
+
+    texts = [c.text for s in draft.sections for c in s.claims]
+    kept, removed, judged, limits = [], [], 0, 0
+    for n, sentence in enumerate(_summary_sentences(draft.summary)):
+        if any(_same(sentence, t) for t in texts):
+            kept.append(sentence)
+            continue
+        if _EVIDENCE_QUALIFIED.search(sentence) and not numbers_in(sentence):
+            kept.append(sentence)  # a stated limit of this research, not a finding
+            limits += 1
+            continue
+        judged += 1
+        units = _claim_units(sentence, texts, deps.passage_token_cap)
+        try:
+            verdict = judge_joint(deps, owner_id, run_id, sentence, units,
+                                  summary_sentence=n).verdict if units else "INSUFFICIENT_EVIDENCE"
+        except RunFailed:
+            raise
+        except Exception:  # noqa: BLE001 - fail closed
+            verdict = "VERIFICATION_ERROR"
+        (kept if verdict == "SUPPORTED" else removed).append(sentence)
+    deps.log(owner_id, run_id, "summary_checked", judged=judged, removed=removed,
+             limitations=limits)
+    if not removed:
+        return draft
+    summary, how = fit_summary(kept, draft)
+    flags = [f"summary_sentences_removed:{len(removed)}"] + (
+        ["summary_rebuilt_from_claims"] if how in ("claims", "placeholder")
+        and "summary_rebuilt_from_claims" not in draft.quality else [])
+    return draft.model_copy(update={"summary": summary, "quality": [*draft.quality, *flags]})
 
 
 # T18 CS4: a summary sentence asserting that a source lacks something. Measured, never removed.
@@ -726,12 +883,15 @@ def research_gaps(*, plan: SubTaskPlan, research: ResearchResults, bundle: Evide
             drops = logged("evidence_dropped", t.id)
             provenance = sum(p["reason"] in _PROVENANCE_DROP for p in drops)
             unsupported = sum(p["reason"] == DROP_UNSUPPORTED for p in drops)
+            unchecked = sum(p["reason"] == DROP_UNVERIFIED for p in drops)
             failed_calls = len(logged("draft_batch_failed", t.id))  # T5-T18 Run logs
             line = f"{head}: this research did not establish it"
             if drops:
                 line += (f"; {len(drops)} drafted item(s) were not kept ({provenance} failed the "
                          f"provenance or figure checks, {unsupported} not supported by the "
-                         "entailment check)")
+                         "entailment check"
+                         + (f", {unchecked} could not be checked because the support check "
+                            "failed" if unchecked else "") + ")")
             if failed_calls:
                 line += f"{',' if drops else ';'} and {failed_calls} drafting call(s) failed"
             lines.append(line + ".")

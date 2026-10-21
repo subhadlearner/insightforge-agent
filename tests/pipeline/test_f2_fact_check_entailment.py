@@ -307,6 +307,12 @@ def test_a_source_cited_by_several_claims_has_its_spans_embedded_once(make_deps)
     deps = make_deps(fetcher=Fetcher({URL: PARAGRAPH}), embedder=counting,
                      light_model=judge("SUPPORTED"))
     _, bundle = evidence(deps, [SALES, other], body=PARAGRAPH)
+    # The page is one paragraph, one Passage: both Claims cite it (index 1 does not exist, and
+    # since the PR #77 review a Claim is verified only by the Passage it cites).
+    section = bundle.sections[0]
+    cited = section.items[0].primary
+    bundle = bundle.model_copy(update={"sections": [section.model_copy(update={"items": [
+        i.model_copy(update={"primary": cited, "supporting": [cited]}) for i in section.items]})]})
     result = fact_check(deps, "alice", "run_1", draft_of([SALES, other]), bundle)
     assert [v.verdict for v in result.verdicts] == ["verified", "verified"]
     spans = [s.text for s in candidate_spans(deps.repos.passages.list(
@@ -332,17 +338,22 @@ def test_document_claims_use_the_same_spans_and_entailment(make_deps):
 
 # --- the verdict follows the judgment, and fails closed ----------------------------------------
 
-def test_any_supported_span_verifies_and_the_match_is_its_parent_passage(make_deps):
+def test_a_supported_span_of_another_passage_never_verifies_the_cited_one(make_deps):
+    """F2 verified a Claim on any SUPPORTED span. Since the PR #77 review the cited Passage must
+    support it: here it is judged CONTRADICTED and another Passage SUPPORTED, so the Claim is
+    unverified and `matched` records where support was found."""
     model = judge("CONTRADICTED", "SUPPORTED", "INSUFFICIENT_EVIDENCE")
     v, deps, result = check(make_deps, model, page="\n\n".join([SALES] * 3))
-    assert v.verdict == "verified"
+    assert v.verdict == "unverified" and "not by the cited Passage" in v.reason
     refetched = deps.repos.passages.list("alice", v.matched.observation_id)
     assert v.matched.index == 1 and refetched[1].text == SALES  # the second candidate's Passage
     assert v.matched.observation_id != v.original.observation_id  # the re-fetch, not the cited one
-    assert result.draft == draft_of([SALES])
+    assert result.draft.sections[0].claims[0].text.endswith(" [UNVERIFIED]")
     (logged,) = events(deps, "fact_check_support")
     assert logged["candidates"] == 3 and logged["verdicts"][1] == "SUPPORTED"
     assert logged["cited_support"] == "CONTRADICTED"  # the cited Passage's own judgment
+    (mismatch,) = events(deps, "fact_check_citation_mismatch")
+    assert mismatch["supported_at"]["index"] == 1
 
 
 def test_the_match_of_a_sentence_is_the_whole_paragraph_passage(make_deps):
