@@ -221,3 +221,31 @@ Also changed:
 **Cost.** Per requirement with linked Evidence, the answer check is now three judgments, not one. The Brief coverage check adds one or two light calls per Run. Shortening costs one light call and two support judgments for each item it tries. Gate A is unchanged: it does not exercise these paths. Gate B's call count rises again, and it still has no hard cap.
 
 **Limits.** Every judgment the corrections rely on is a model's: coverage, the answer verifier and equivalence. Scripted tests prove the code paths, not live accuracy. Bidirectional support lets a shortening remove only redundancy. A wording that drops content is not equivalent, so most over-budget items will still be cut, now with that consequence on the ledger.
+
+## 13. Gate A (first live attempt) and the retired vetoes
+
+**Gate A ran once, with the owner's authorisation and a $0.50 hard cap**, on `191b57e`, using Claude Haiku 5.5 with SDK retries off and the saved T18 database read-only. All 159 of 159 judgments completed. The guard measured **$0.0675** from provider-reported usage and never stopped the run. The record is kept outside the repository (`insightforge-gate-a/<UTC timestamp>/research-integrity-gate.json`, every verdict and the provider log).
+
+**Result: FAIL** under the rule fixed in advance (`tests/research_integrity_gate.py`). No label, threshold or rule was changed afterwards, and the gate was not re-run.
+
+| Outcome | Count | Decided by |
+|---|---|---|
+| B-1 adversarial negatives rejected | 40 of 40 | model |
+| Gold negatives rejected | 13 of 14 cases (Q-N02 accepted in 1 of 3 judgments) | model; check 5 rejected nothing here |
+| Correct positives wrongly rejected | **9** | **code 8**: the hedge/negation lists 5 (b1 2.1; verified 0.3, 2.0, 3.6, 2.4), the comparison list 1 (1.1), "part has no excerpt" 1 (3.1), the identity word rule 1 (gold NW-P01, the Stage C six-programmes fact). **Model 1** (verified 1.3, BYD "more than $10,000 cheaper … according to industry analysts") |
+| Negative statements wrongly accepted | 1 statement, 3 of 6 judgments | model: "Alphabet's initial 2025 capex range of $71-73 billion was revised upward three times" (gold Q-N02, 1 of 3; B-1 verified 2.9, 2 of 3, with check 5 refusing the third by chance) |
+
+**Correction, approved by the owner: the vetoes behind the wrong rejections are removed, not replaced** (`domain/support.py`, `CHECKS_VERSION` `checks-3`, recorded in evaluation conditions):
+- the operator word lists (check 5);
+- the rule that every part needs an excerpt;
+- the rule that an identity part is only the entity.
+
+No keyword list, exception or patch was added. Code keeps the objective checks: quotes exist, the map spans the statement, figures are quoted, and identity carries no figure and quotes the entity named in the identity context, so "Medtronic" still cannot come from a Northwind document's identity. Meaning is the model's.
+
+The gold floors were re-measured (`support-gold-3`, no `expected` label changed). NW-N04 (expected stated as granted), NW-N06 (negation) and Q-N02 are now the model's to stop.
+
+**Model errors recorded, not hidden.** The Alphabet acceptance and the BYD rejection are model reliability problems that the correction does not address. The model itself judged the Alphabet statement SUPPORTED in 4 of its 6 judgments; check 5 refused one of those by chance, so without check 5 it would have been accepted in 4. Q-N02's label stands, as adjudicated; only the owner may re-adjudicate it.
+
+**Next (not run).** A fresh Gate A is a new attempt and needs its own authorisation. It should add held-out cases written before it runs, so the result is not judged only on cases already seen. Prompt and code stay frozen in between.
+
+Offline after the correction: tests pinning the new contract replace the five operator tests in `test_research_integrity_review.py`, and the identity test now asserts quotation.
