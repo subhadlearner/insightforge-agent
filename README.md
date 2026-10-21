@@ -112,6 +112,7 @@ cd src/frontend && npm ci && npx playwright install chromium && npm run test:e2e
 
 ```bash
 cp .env.example .env      # set SESSION_SECRET (32+ chars), LLM_PROVIDER and its key, TAVILY_API_KEY
+                          # SESSION_SECRET: uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
 docker compose up -d qdrant                      # or set QDRANT_URL=:memory: in .env
 uv run insightforge-agent serve --port 8000      # terminal 1
 cd src/frontend && npm run dev                   # terminal 2, then open http://localhost:3000
@@ -246,6 +247,26 @@ or something is embedded, and the integration tests skip.
 ```bash
 cp .env.example .env
 ```
+
+`SESSION_SECRET` (and `SHARE_JWT_SECRET`, if you want Share links signed with a separate key)
+is a random string of your own of at least 32 characters. It is not issued by any service.
+Generate one and paste it into `.env`. Each command below prints 64 random characters:
+
+```bash
+uv run python -c "import secrets; print(secrets.token_urlsafe(48))"   # any OS, uses the project's Python
+openssl rand -hex 32                                                    # macOS, Linux, Git Bash
+```
+
+```powershell
+[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))   # PowerShell 7
+```
+
+```dotenv
+SESSION_SECRET=<paste the printed value>
+```
+
+Changing it later signs out every browser session, and Share links stop working too when they
+use the same key. Keep it out of git like the API keys.
 
 `.env` is git-ignored. Never commit it, and never put keys in `users.yml`. What you need
 depends on what you run:
