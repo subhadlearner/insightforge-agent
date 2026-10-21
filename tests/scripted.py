@@ -11,12 +11,15 @@ from pydantic import Field
 
 class ScriptedChat(BaseChatModel):
     """Replays `script` in order, or answers each call with `reply(messages)`.
-    Records every conversation it is given in `seen`."""
+    Records every conversation it is given in `seen`. With `reply`, the final-review checks
+    (coverage, answer verifier, shortening) get `check_reply`'s permissive default unless
+    `checks` is False, so a test scripts them only when it is about them."""
 
     script: list[AIMessage] = Field(default_factory=list)
     reply: Callable[[list[BaseMessage]], AIMessage] | None = None
     seen: list[list[BaseMessage]] = Field(default_factory=list)
     position: int = 0
+    checks: bool = True
 
     @property
     def _llm_type(self) -> str:
@@ -27,7 +30,11 @@ class ScriptedChat(BaseChatModel):
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
         self.seen.append(list(messages))
-        if self.reply is not None:
+        default = (check_reply(str(messages[0].content), str(messages[-1].content))
+                   if self.reply is not None and self.checks and len(messages) > 1 else None)
+        if default is not None:
+            message = AIMessage(content=default)
+        elif self.reply is not None:
             message = self.reply(list(messages))
         else:
             if self.position >= len(self.script):
@@ -48,6 +55,43 @@ def ai(*calls: dict, text: str = "") -> AIMessage:
 SUPPORT_PREFIX = "You check whether"  # pipeline/support.py: the ADR-0006 support judgment
 JOINT_PREFIX = "You check whether numbered passages, taken together"  # judge_joint
 ANSWERS_PREFIX = "You check which numbered evidence statements answer"  # confirm_answers
+COVERAGE_PREFIX = "You list what a text asks"  # check_coverage (Brief and question)
+VERIFY_PREFIX = "You verify claimed answers"  # confirm_answers' independent verifier
+SHORTEN_PREFIX = "You shorten one evidence statement"  # synthesize._shortened
+
+
+def coverage_verdict(user: str, uncovered: tuple[str, ...] = ()) -> dict:
+    """A scripted coverage check: the whole text as one ask covered by every item, plus each of
+    `uncovered` (words of the text) as an ask no item covers."""
+    import re as _re
+
+    text = user.split("\n\nItems:\n", 1)[0].split(": ", 1)[1]
+    items = [int(n) for n in _re.findall(r"^\[(\d+)\] ", user, _re.MULTILINE)]
+    return {"asks": [{"quote": text, "covered_by": items}]
+            + [{"quote": q, "covered_by": []} for q in uncovered]}
+
+
+def verify_verdicts(user: str, verdict=lambda part, statement: "ANSWERS") -> dict:
+    """A scripted answer verifier: `verdict(part, statement)` per numbered pair."""
+    import re as _re
+
+    pairs = _re.findall(r"^\[(\d+)\] Asked: (.+)\nStatement: (.+)$", user, _re.MULTILINE)
+    return {"verdicts": [{"pair": int(n), "verdict": verdict(p, s)} for n, p, s in pairs]}
+
+
+def check_reply(system: str, user: str) -> str | None:
+    """The default scripted reply to the final-review checks (coverage, answer verifier,
+    shortening), or None for any other call. Shortening returns the statement unchanged, so
+    nothing is shortened unless a test scripts it."""
+    import json as _json
+
+    if system.startswith(COVERAGE_PREFIX):
+        return _json.dumps(coverage_verdict(user))
+    if system.startswith(VERIFY_PREFIX):
+        return _json.dumps(verify_verdicts(user))
+    if system.startswith(SHORTEN_PREFIX):
+        return _json.dumps({"statement": user.removeprefix("Statement: ")})
+    return None
 
 
 def support_verdicts(user: str, verdict=lambda statement, text: "SUPPORTED",

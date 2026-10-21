@@ -46,12 +46,13 @@ rules above are lexical: "revenue increased 20%" passes them for an item that sa
 - an analytical Claim is judged against the primary Passages of all its items together
   (`judge_joint`); one that is not SUPPORTED is removed and logged.
 Then every Executive Summary sentence that is not one of the published Claims verbatim is
-judged jointly against the published Claims (never the whole bundle); one that is not
-SUPPORTED is removed, so a rejected comparison cannot survive there, and a summary left empty is
-rebuilt from whole Claims (`fit_summary`). A sentence that only says what this research did not
-establish, with no figure, states no finding and is kept unjudged. The T18 absence measurement
-(`summary_absence_flagged`) is taken on the Writer's summary before these checks: the flag
-itself still removes nothing. Any failed check fails closed. Everything repair and
+judged jointly against the published Claims and the Report's own gap lines (never the whole
+bundle); one that is not SUPPORTED is removed, so a rejected comparison cannot survive there,
+and a summary left empty is rebuilt from whole Claims (`fit_summary`). A sentence saying what
+this research did not establish is judged like any other, against the gap lines that record it
+(final PR #77 review: no wording exempts a sentence from the check). The T18 absence
+measurement (`summary_absence_flagged`) is taken on the Writer's summary before these checks:
+the flag itself still removes nothing. Any failed check fails closed. Everything repair and
 these checks do is recorded in the draft's `quality` flags: a flagged Report is degraded
 output, not synthesis."""
 
@@ -75,7 +76,6 @@ from insightforge_agent.domain.evidence import (
     DROP_NO_CITATION,
     DROP_UNSUPPORTED,
     DROP_UNVERIFIED,
-    summary_text,
 )
 from insightforge_agent.domain.memory import (
     report_date_text,
@@ -120,7 +120,7 @@ summary sentence drawing on the historical background must show that item's repo
 inline exactly as "(reported YYYY-MM-DD)", as its historical claim does.
 Each evidence item shows its period ("as of ...") or, when none was stated, its source's
 publication date; a publication date is not the period a figure measures. An item marked
-"summarised" shows only its key fact (subject, relation, value): state no more than that.
+"shortened" is shown in a shorter wording that says the same as its full statement.
 When the evidence or the research gaps do not cover something the brief asks for, say that
 this research did not establish it; never state that a source, document or company lacks or
 does not disclose information.
@@ -129,8 +129,9 @@ same period and scope; otherwise state each with its period and say why they are
 comparable. A comparison claim cites every item it compares."""
 # T18 CS4: writer-2 added the temporal, absence and comparison rules (writer-1 before).
 # ADR-0006: writer-3 adds premises, the requirement index and the no-new-numbers rule.
-# Second PR #77 review: writer-4 adds the rule for items summarised to fit the budget.
-WRITER_PROMPT_VERSION = "writer-4"
+# Second PR #77 review: writer-4 added the rule for items summarised to fit the budget;
+# final review: writer-5 replaces it, for items shortened to a verified equivalent wording.
+WRITER_PROMPT_VERSION = "writer-5"
 MAX_PREMISES = 3
 
 SUMMARY_MAX_WORDS = 150
@@ -263,8 +264,8 @@ def render_bundle(bundle: EvidenceBundle) -> str:
     lines = []
     for s in bundle.sections:
         lines.append(f"## {s.heading} (confidence {s.confidence})")
-        lines += [f"- [{i.id}] ({i.confidence}; {_when(i)}; summarised) {summary_text(i)}"
-                  if i.compressed else f"- [{i.id}] ({i.confidence}; {_when(i)}) {i.statement}"
+        lines += [f"- [{i.id}] ({i.confidence}; {_when(i)}; shortened) {i.shortened}"
+                  if i.shortened else f"- [{i.id}] ({i.confidence}; {_when(i)}) {i.statement}"
                   for i in s.items]
     return "\n".join(lines)
 
@@ -623,7 +624,8 @@ def write_report(
             last = [f"the reply was not valid report JSON: {e.brief}"]
         if not last:
             _flag_absence(deps, owner_id, run_id, draft.summary)
-            draft = _checked(deps, owner_id, run_id, draft, bundle, historical, brief, statuses)
+            draft = _checked(deps, owner_id, run_id, draft.model_copy(update={"gaps": gaps}),
+                             bundle, historical, brief, statuses)
             return draft.model_copy(update={"gaps": gaps})
         deps.log(owner_id, run_id, "writer_violations", attempt=attempt + 1, problems=last)
         constraint = "\n\nYour previous draft broke these rules. Fix them:\n" + "\n".join(
@@ -640,7 +642,8 @@ def write_report(
         draft = _repair(deps, owner_id, run_id, usable, bundle, historical, brief, len(replaced),
                         statuses)
         _flag_absence(deps, owner_id, run_id, draft.summary)
-        draft = _checked(deps, owner_id, run_id, draft, bundle, historical, brief, statuses)
+        draft = _checked(deps, owner_id, run_id, draft.model_copy(update={"gaps": gaps}),
+                         bundle, historical, brief, statuses)
         return draft.model_copy(update={"gaps": gaps})
     raise RunFailed(f"the Writer broke the citation rules after {deps.writer_retries} retries")
 
@@ -764,17 +767,19 @@ def _checked_claims(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
     return draft
 
 
-def _claim_units(sentence: str, texts: list[str], cap: int):
-    """The published Claims a summary sentence is judged against: those sharing most of its
-    content words first, as many as fit one call."""
+def _claim_units(sentence: str, texts: list[tuple[str, str]], cap: int):
+    """The published Claims and gap lines (`(kind, text)`) a summary sentence is judged
+    against: those sharing most of its content words first, as many as fit one call. The order
+    only chooses what fits; it decides nothing, and a sentence whose support did not fit fails
+    closed."""
     from insightforge_agent.pipeline.support import Unit, request_tokens
 
     terms = set(content_terms(sentence))
     ranked = sorted(range(len(texts)),
-                    key=lambda n: (-len(terms & set(content_terms(texts[n]))), n))
+                    key=lambda n: (-len(terms & set(content_terms(texts[n][1]))), n))
     units: list = []
     for n in ranked:
-        unit = Unit(PassageRef(observation_id="claim", index=n), texts[n])
+        unit = Unit(PassageRef(observation_id=texts[n][0], index=n), texts[n][1])
         if request_tokens(sentence, units + [unit]) > cap:
             break
         units.append(unit)
@@ -784,18 +789,16 @@ def _claim_units(sentence: str, texts: list[str], cap: int):
 def _checked_summary(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
                      bundle: EvidenceBundle, historical: HistoricalContext) -> ReportDraft:
     """Each summary sentence that is not a published Claim verbatim, judged against the
-    published Claims together; one that is not SUPPORTED is removed (module docstring)."""
+    published Claims and the gap lines together; one that is not SUPPORTED is removed (module
+    docstring)."""
     from insightforge_agent.pipeline.support import judge_joint
 
-    texts = [c.text for s in draft.sections for c in s.claims]
-    kept, removed, judged, limits = [], [], 0, 0
+    claims = [c.text for s in draft.sections for c in s.claims]
+    texts = [("claim", t) for t in claims] + [("gap", g) for g in draft.gaps]
+    kept, removed, judged = [], [], 0
     for n, sentence in enumerate(_summary_sentences(draft.summary)):
-        if any(_same(sentence, t) for t in texts):
+        if any(_same(sentence, t) for t in claims):
             kept.append(sentence)
-            continue
-        if _EVIDENCE_QUALIFIED.search(sentence) and not numbers_in(sentence):
-            kept.append(sentence)  # a stated limit of this research, not a finding
-            limits += 1
             continue
         judged += 1
         units = _claim_units(sentence, texts, deps.passage_token_cap)
@@ -807,8 +810,7 @@ def _checked_summary(deps: Deps, owner_id: str, run_id: str, draft: ReportDraft,
         except Exception:  # noqa: BLE001 - fail closed
             verdict = "VERIFICATION_ERROR"
         (kept if verdict == "SUPPORTED" else removed).append(sentence)
-    deps.log(owner_id, run_id, "summary_checked", judged=judged, removed=removed,
-             limitations=limits)
+    deps.log(owner_id, run_id, "summary_checked", judged=judged, removed=removed)
     if not removed:
         return draft
     summary, how = fit_summary(kept, draft)

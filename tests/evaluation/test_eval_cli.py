@@ -393,7 +393,7 @@ def test_provider_and_judge_identity_are_recorded_from_what_ran(full_run):
             result["conditions"]["draft_passage_cap"]) == ("off", None)
     assert result["conditions"]["fact_check_method"] == "support-2+cited"
     assert result["conditions"]["evidence_pipeline"] == "adr-0006"
-    assert result["conditions"]["writer_prompt_version"] == "writer-4"
+    assert result["conditions"]["writer_prompt_version"] == "writer-5"
     assert [s.llm_provider for s in judges.built] == ["groq"]
     assert report["judge"] == {"provider": "groq", "model": "openai/gpt-oss-120b",
                                "runtime_model": "TunedChat", "role": "writer",

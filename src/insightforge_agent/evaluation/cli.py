@@ -64,8 +64,13 @@ from insightforge_agent.llm import (
 )
 from insightforge_agent.pipeline.deps import Deps
 from insightforge_agent.pipeline.extract import EXTRACT_PROMPT_VERSION
-from insightforge_agent.pipeline.requirements import REQUIREMENTS_PROMPT_VERSION
+from insightforge_agent.pipeline.requirements import (
+    ANSWERS_PROMPT_VERSION,
+    COVERAGE_PROMPT_VERSION,
+    REQUIREMENTS_PROMPT_VERSION,
+)
 from insightforge_agent.pipeline.support import SUPPORT_PROMPT_VERSION
+from insightforge_agent.pipeline.synthesize import SHORTEN_PROMPT_VERSION
 from insightforge_agent.pipeline.write import WRITER_PROMPT_VERSION
 from insightforge_agent.pipeline.wiring import build_deps
 from insightforge_agent.stores.sqlite import SqliteRepos
@@ -161,6 +166,9 @@ def _conditions(settings: Settings, deps: Deps) -> dict:
         "support_prompt_version": SUPPORT_PROMPT_VERSION,
         "extract_prompt_version": EXTRACT_PROMPT_VERSION,
         "requirements_prompt_version": REQUIREMENTS_PROMPT_VERSION,
+        "answers_prompt_version": ANSWERS_PROMPT_VERSION,
+        "coverage_prompt_version": COVERAGE_PROMPT_VERSION,
+        "shorten_prompt_version": SHORTEN_PROMPT_VERSION,
         "work_unit_retry_cap": deps.work_unit_retry_cap,
         # The effective Evidence thresholds: they set Confidence and ranking.
         "credibility_high": deps.thresholds.credibility_high,

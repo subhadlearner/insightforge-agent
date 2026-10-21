@@ -181,9 +181,10 @@ class EvidenceItem(BaseModel):
     conflict_fact_ids: list[str] = Field(default_factory=list)
     relevance: float = 0.0  # cosine similarity between the item and the Brief
     requirement_ids: list[str] = Field(default_factory=list)  # ADR-0006 ledger links
-    # Over the Evidence budget, the Writer is shown only the item's structured fact
-    # (`domain/evidence.summary_text`); its statement and citation are unchanged.
-    compressed: bool = False
+    # Over the Evidence budget, the Writer may be shown this shorter wording instead of the
+    # statement, set only once the support contract judged it equivalent both ways
+    # (`pipeline/synthesize._shortened`); the statement and citation are unchanged.
+    shortened: str = ""
 
 
 class EvidenceSection(BaseModel):

@@ -105,6 +105,7 @@ from insightforge_agent.domain.requirements import (
     after_fact_check,
     aspect_ledger,
     assess,
+    budget_cut,
     decomposition_gaps,
     gap_lines,
     mark_reported,
@@ -697,9 +698,10 @@ def build_graph(deps: Deps, interrupt_after: list[str] | None = None,
                           {h.aspect_id for h in historical.items},
                           answers=confirm_answers(deps, owner, run_id, ledger, kept),
                           unverifiable=unverifiable(
-                              [e["payload"] for e in log if e["type"] == "evidence_dropped"]))
-        # Second PR #77 review: a ledger that may not cover the whole Brief says so, after
-        # the Run's own limitations (a clarification that timed out comes first).
+                              [e["payload"] for e in log if e["type"] == "evidence_dropped"]),
+                          cut=budget_cut([e["payload"] for e in log if e["type"] == "evidence_cut"]))
+        # What the Brief asks that no requirement tracks (or that this could not be checked)
+        # follows the Run's own limitations (a clarification that timed out comes first).
         gaps = list(state.get("limitations", [])) + decomposition_gaps(ledger) + research_gaps(
             plan=plan, research=research, bundle=bundle, events=log, documents=documents,
             extraction=extraction) + gap_lines(statuses)

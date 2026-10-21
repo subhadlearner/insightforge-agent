@@ -12,6 +12,8 @@ Its status is decided in code from the Run's own records, never from similarity:
 - contradictory: its only verified, answering items conflict;
 - incomplete: nothing verified, and a Sub-task researching it failed or a work unit covering
   its Sub-tasks' material could not be read after bounded recovery;
+- budget_omitted: nothing kept, but verified Evidence linked to it was left out to fit the
+  Evidence budget (final PR #77 review: never reported as "no evidence");
 - verification_incomplete: nothing verified, nothing failed to run, but a check that could
   have established it failed: a candidate's support judgment, or the answer check itself
   (PR #77 review: never reported as "no evidence");
@@ -25,11 +27,12 @@ Everything not supported or reported becomes a fixed-wording gap line, so the Re
 "Gaps & limitations" always matches the ledger. A requirement is never "reported" because its
 Aspect has some Claim: a Claim must cite an item linked to that requirement.
 
-Whether the ledger captures everything the Brief asks is checked only lexically
-(`uncovered_brief_terms`): Brief content words no requirement mentions are sent back once and
-then recorded on the ledger, and the Report states that its coverage of the Brief is uncertain
-(`decomposition_gaps`). That is a backstop, not proof that the decomposition is complete or
-that a word names a missing question."""
+Whether the ledger captures everything the Brief asks is a semantic judgment, made by an
+independent coverage check (`pipeline/requirements.check_coverage`), never by word matching
+(final PR #77 review). What the Brief asks that no requirement covers is recorded on the ledger
+(`uncovered_asks`, the Brief's own words) and stated in the Report as not established; a check
+that failed is recorded too, and the Report says its coverage of the Brief is unknown
+(`decomposition_gaps`)."""
 
 from typing import Literal
 
@@ -44,12 +47,11 @@ from insightforge_agent.domain.contracts import (
 )
 from insightforge_agent.domain.evidence import DROP_UNVERIFIED
 from insightforge_agent.domain.plan import SubTaskPlan
-from insightforge_agent.domain.support import content_terms
 
 MAX_REQUIREMENTS = 12
 
 Status = Literal["supported", "partial", "contradictory", "incomplete", "verification_incomplete",
-                 "no_evidence", "background", "reported", "reported_unverified"]
+                 "budget_omitted", "no_evidence", "background", "reported", "reported_unverified"]
 
 
 class Requirement(BaseModel):
@@ -63,8 +65,10 @@ class RequirementLedger(BaseModel):
     version: int = 1
     origin: Literal["brief", "aspects"] = "aspects"  # "aspects": the fallback, one per Aspect
     requirements: list[Requirement] = Field(default_factory=list)
-    # Brief content words no requirement mentions, after one retry (`uncovered_brief_terms`).
-    uncovered_brief_terms: list[str] = Field(default_factory=list)
+    # What the Brief asks that no requirement covers, in the Brief's words, after one retry;
+    # and why the coverage check could not be made, when it failed (`check_coverage`).
+    uncovered_asks: list[str] = Field(default_factory=list)
+    coverage_failed: str = ""
 
     def ids(self) -> set[str]:
         return {r.id for r in self.requirements}
@@ -86,44 +90,17 @@ class RequirementStatus(BaseModel):
 
 class AnswerCheck(BaseModel):
     """Which kept items answer each requirement's question (PR #77 reviews): per requirement,
-    the parts of its question, the parts each linked item states (items stating none left out),
-    the items stating any part, and the requirements whose check failed."""
+    the parts of its question (with any the coverage check found the split left out), the
+    parts each linked item was verified to state (items stating none left out), the items
+    stating any part, how many claimed answers the verifier was unsure of, and the
+    requirements whose check failed."""
 
     answers: dict[str, list[str]] = Field(default_factory=dict)
     failed: list[str] = Field(default_factory=list)
     parts: dict[str, list[str]] = Field(default_factory=dict)
     states: dict[str, dict[str, list[int]]] = Field(default_factory=dict)
+    unsure: dict[str, int] = Field(default_factory=dict)
 
-
-# Words of a Brief that ask rather than name what is asked about.
-_INSTRUCTIONS = frozenset("""
-assess compare estimate name summarise summarize update using use uploaded say describe explain
-analyse analyze identify list research provide give find determine evaluate review outline
-discuss examine keep keeping set against earlier briefing brief report what where how which
-whether new tell show me us you your our my please about need want like know look focus cover
-""".split())
-
-
-def _covers(term: str, words: set[str]) -> bool:
-    """`term` or a word sharing its stem (a common prefix of at least 4 letters and 60% of the
-    shorter word: "pricing" and "price", "grew" is not "growth")."""
-    if term in words:
-        return True
-    for w in words:
-        n = 0
-        while n < min(len(term), len(w)) and term[n] == w[n]:
-            n += 1
-        if n >= 4 and n >= 0.6 * min(len(term), len(w)):
-            return True
-    return False
-
-
-def uncovered_brief_terms(brief: str, ledger: "RequirementLedger") -> list[str]:
-    """Content words of the Brief that no requirement's question mentions, instruction words
-    aside. Lexical only."""
-    words = set(content_terms(" ".join(r.question for r in ledger.requirements)))
-    return [t for t in content_terms(brief)
-            if t not in _INSTRUCTIONS and not _covers(t, words)]
 
 
 def ledger_problems(ledger: RequirementLedger, plan: SubTaskPlan) -> list[str]:
@@ -163,15 +140,16 @@ def links(item: EvidenceItem, ledger: RequirementLedger) -> list[str]:
 
 
 def decomposition_gaps(ledger: RequirementLedger) -> list[str]:
-    """The Report's statement that its requirements may not cover the whole Brief, when Brief
-    words remain in no requirement (`uncovered_brief_terms`). Worded as uncertainty: a word in
-    no requirement is not shown to be a question the Brief asked."""
-    if not ledger.uncovered_brief_terms:
-        return []
-    terms = ", ".join(f'"{t}"' for t in ledger.uncovered_brief_terms[:12])
-    return [f"The research requirements this Run tracked may not cover all of the Brief: no "
-            f"requirement mentions {terms}. Anything the Brief asks about these may not have been "
-            "researched; this was not checked further."]
+    """The Report's lines for what the Brief asks that the ledger does not track: each ask the
+    coverage check found no requirement covers, in the Brief's own words, as not established;
+    or, when that check failed, that the ledger's coverage of the Brief is unknown."""
+    out = [f'The Brief asks for "{ask}", but no research requirement this Run tracked asks for '
+           "it, so this research did not establish it." for ask in ledger.uncovered_asks]
+    if ledger.coverage_failed:
+        out.append("Whether this Run's research requirements cover everything the Brief asks "
+                   "could not be checked (the check failed); something the Brief asks may not "
+                   "have been researched.")
+    return out
 
 
 def unverifiable(drops: list[dict]) -> list[tuple[str, list[str]]]:
@@ -181,14 +159,22 @@ def unverifiable(drops: list[dict]) -> list[tuple[str, list[str]]]:
             if d.get("reason") == DROP_UNVERIFIED]
 
 
+def budget_cut(cuts: list[dict]) -> list[list[str]]:
+    """From `evidence_cut` payloads: the requirement links of each verified item left out to
+    fit the Evidence budget."""
+    return [list(c.get("requirement_ids") or []) for c in cuts]
+
+
 def assess(ledger: RequirementLedger, plan: SubTaskPlan, research: ResearchResults,
            extraction: ExtractionResult, kept: list[EvidenceItem],
            background_aspects: set[str] | None = None, *,
            answers: AnswerCheck | None = None,
-           unverifiable: list[tuple[str, list[str]]] = ()) -> list[RequirementStatus]:
+           unverifiable: list[tuple[str, list[str]]] = (),
+           cut: list[list[str]] = ()) -> list[RequirementStatus]:
     """Each requirement's status before writing, from the kept (verified, in-budget) items
     that, when `answers` is given, were judged to answer it; `unverifiable` lists the
-    candidates whose support check failed (`unverifiable()`)."""
+    candidates whose support check failed (`unverifiable()`), `cut` the verified items left out
+    to fit the Evidence budget (`budget_cut()`)."""
     failed_subtasks = {r.subtask_id for r in research.results if r.status == "failed"}
     lost_sources = {u.source_id for u in extraction.failed_units}
     found_by: dict[str, set[str]] = {}  # aspect id -> Source ids its Sub-tasks found
@@ -222,6 +208,13 @@ def assess(ledger: RequirementLedger, plan: SubTaskPlan, research: ResearchResul
         if unjudged:
             reasons.append(f"{unjudged} candidate fact(s) could not be checked (the support "
                            "check failed)")
+        if answers is not None and answers.unsure.get(req.id):
+            reasons.append(f"the answer check was unsure whether {answers.unsure[req.id]} "
+                           "statement(s) answer it")
+        omitted = sum(1 for reqs in cut if req.id in reqs)
+        if omitted:
+            reasons.append(f"{omitted} verified Evidence item(s) linked to it were left out to "
+                           "fit the Evidence budget")
         failed = [t.id for t in tasks if t.id in failed_subtasks]
         if failed:
             reasons.append(f"Sub-task(s) {', '.join(failed)} failed")
@@ -237,7 +230,6 @@ def assess(ledger: RequirementLedger, plan: SubTaskPlan, research: ResearchResul
         missing = [p for k, p in enumerate(parts, start=1) if k not in stated]
         if good and missing:
             status: Status = "partial"
-            reasons.append("not established: " + ", ".join(missing))
         elif good:
             status = "supported"
         elif items:
@@ -250,6 +242,8 @@ def assess(ledger: RequirementLedger, plan: SubTaskPlan, research: ResearchResul
             status = "incomplete"
         elif check_failed or unjudged:
             status = "verification_incomplete"
+        elif omitted:
+            status = "budget_omitted"
         else:
             status = "no_evidence"
         out.append(RequirementStatus(id=req.id, question=req.question, priority=req.priority,
@@ -304,6 +298,7 @@ def unreported_supported(statuses: list[RequirementStatus], draft: ReportDraft) 
 _WHY = {"contradictory": "the Evidence found conflicts",
         "incomplete": "the research for it did not complete",
         "verification_incomplete": "Evidence for it could not be checked (a check failed)",
+        "budget_omitted": "its verified Evidence was left out to fit the Evidence budget",
         "no_evidence": "no Evidence for it passed the support check",
         "background": "only earlier Reports bear on it"}
 
@@ -315,16 +310,16 @@ def gap_lines(statuses: list[RequirementStatus]) -> list[str]:
     for s in statuses:
         if s.status in ("supported", "reported"):
             continue
+        detail = f" ({'; '.join(s.reasons)})" if s.reasons else ""
         if s.status == "partial":
             out.append(f"Requirement {s.id} ({s.question}): answered only in part; this research "
-                       f"did not establish {', '.join(s.missing_parts)}.")
+                       f"did not establish {', '.join(s.missing_parts)}{detail}.")
             continue
         if s.status == "reported_unverified":
             out.append(f"Requirement {s.id} ({s.question}): the Claim(s) answering it "
                        f"({', '.join(s.claims)}) failed the independent fact-check and are "
                        "marked [UNVERIFIED]; treat that answer as unconfirmed.")
             continue
-        detail = f" ({'; '.join(s.reasons)})" if s.reasons else ""
         out.append(f"Requirement {s.id} ({s.question}): this research did not establish it; "
                    f"{_WHY[s.status]}{detail}.")
     return out

@@ -236,31 +236,8 @@ def test_an_answer_quote_that_is_not_in_the_statement_does_not_count(make_deps):
     assert answers.answers == {"R1": []} and answers.failed == ["R1"]
 
 
-def test_brief_terms_no_requirement_covers_are_sent_back_once_then_recorded(make_deps):
-    from insightforge_agent.pipeline.requirements import derive_requirements
-
-    plan = SubTaskPlan(aspects=[Aspect(id="a1", name="Cloud")], sub_tasks=[
-        SubTask(id="s1", aspect_id="a1", query="q", source_type="web",
-                time_horizon_months=12, priority=1)])
-    first = {"requirements": [{"id": "R1", "question": "AWS 2025 revenue growth?",
-                               "aspect_ids": ["a1"]}]}
-    second = {"requirements": first["requirements"] + [
-        {"id": "R2", "question": "AWS capital spending on AI infrastructure?",
-         "aspect_ids": ["a1"]}]}
-    replies = iter([first, second])
-    deps = make_deps(light_model=ScriptedChat(
-        reply=lambda m: AIMessage(content=json.dumps(next(replies)))))
-    brief = "Assess AWS revenue growth in 2025 and its capital spending on AI infrastructure."
-    ledger = derive_requirements(deps, "alice", "run_1", brief, plan)
-    assert ledger.ids() == {"R1", "R2"} and ledger.uncovered_brief_terms == []
-    retry = str(deps.light_model.seen[1][-1].content)
-    assert "capital" in retry and "spending" in retry
-
-    stubborn = ScriptedChat(reply=lambda m: AIMessage(content=json.dumps(first)))
-    deps = make_deps(light_model=stubborn)
-    ledger = derive_requirements(deps, "alice", "run_1", brief, plan)
-    assert len(stubborn.seen) == 2  # one retry, no more
-    assert {"capital", "spending"} <= set(ledger.uncovered_brief_terms)
+# The lexical Brief-coverage retry this block tested was replaced by the semantic coverage
+# check (final PR #77 review): see test_research_integrity_review3.py, block 1.
 
 
 # ==== P1: logical operators are not disposable ===============================================
@@ -386,16 +363,8 @@ def test_a_summary_sentence_the_published_claims_do_not_support_is_removed(make_
     assert draft.summary == BYD
 
 
-def test_a_stated_limit_of_the_research_stays_in_the_summary_unjudged(make_deps):
-    limit = "This research did not establish BYD's battery outlook."
-    writer = one_shot_writer([{"text": BYD, "evidence_id": "ev_0"}], f"{BYD} {limit}")
-    deps = make_deps(light_model=judge(joint=lambda s, ts: "INSUFFICIENT_EVIDENCE"),
-                     writer_model=writer)
-    _, bundle = evidence(deps, [BYD])
-    draft = write_report(deps, "alice", "run_1", "EV sales", bundle, [])
-    assert draft.summary == f"{BYD} {limit}"
-    (checked,) = events(deps, "summary_checked")
-    assert (checked["judged"], checked["limitations"]) == (0, 1)
+# A research-limit sentence is no longer exempt from the summary check (final PR #77
+# review): see test_research_integrity_review3.py, block 3.
 
 
 # ==== P2: the ledger reflects the Fact-Checker =============================================
