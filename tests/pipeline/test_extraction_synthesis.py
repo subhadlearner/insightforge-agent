@@ -41,7 +41,25 @@ class Light(ScriptedChat):
                 if str(next(m.content for m in c if isinstance(m, SystemMessage))).startswith(prefix)]
 
 
-def light(extract_=None, draft=None, entail=None) -> Light:
+def statement_of(user: str) -> str:
+    return user.split("\n", 1)[0].removeprefix("Statement: ")
+
+
+def mapped(entail):
+    """An ADR-0006 support handler from a verdict-only one: each SUPPORTED verdict gets the
+    permissive 'full' support map (the whole statement as one part, the whole shown passage as
+    its excerpt), so code's figure check still applies but nothing else is assumed."""
+    def handler(ps, user):
+        text = dict(ps)
+        return [{**v, "parts": [{"part": statement_of(user), "excerpts": [text[v["passage"]]]}]}
+                if v.get("verdict") == "SUPPORTED" and v.get("passage") in text else v
+                for v in entail(ps, user)]
+    return handler
+
+
+def light(extract_=None, draft=None, entail=None, support=None) -> Light:
+    """`support` answers the ADR-0006 support judgment; without it, `entail` (verdicts only)
+    answers it through `mapped`."""
     def numbered(user):
         return [(int(n), t) for n, t in re.findall(r"^\[(\d+)\] (.+)$", user, re.MULTILINE)]
 
@@ -53,6 +71,8 @@ def light(extract_=None, draft=None, entail=None) -> Light:
             handler, key = draft, "items"
         elif system.startswith("You judge whether"):
             handler, key = entail, "verdicts"
+        elif system.startswith("You check whether"):
+            handler, key = support or (mapped(entail) if entail else None), "verdicts"
         else:
             return AIMessage(content="A summary.")
         items = handler(numbered(user), user) if handler else []
