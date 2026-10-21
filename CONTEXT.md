@@ -41,12 +41,20 @@ One addressable paragraph of an Observation: a paragraph of a web page, or a chu
 _Avoid_: chunk (outside PDF ingestion), snippet, excerpt
 
 **Evidence item**:
-A de-duplicated fact derived from one or more Passages, carrying a confidence level. Only Passages verified as supporting it count; it names one of them as its primary Passage, which is the one its citation shows. An item no Passage supports is dropped.
+A de-duplicated fact derived from one or more Passages, carrying a confidence level. It starts as a fact Extraction proposed and is kept only if the support judgment, which must show the cited Passage's own words for every part of it, finds it SUPPORTED. Only Passages verified as supporting it count; it names one of them as its primary Passage, which is the one its citation shows. An item no Passage supports is dropped.
 _Avoid_: fact, finding
 
 **Claim**:
 A statement in a Report that cites an Evidence item and is subject to fact-checking.
 _Avoid_: fact, assertion
+
+**Analytical Claim**:
+A Claim (a comparison, reconciliation or conclusion) that also cites further Evidence items as its premises. It may state only what follows directly from all of them, derives no new number, is judged against all of their Passages together before publication, and never becomes a Finding or Historical background.
+_Avoid_: insight, derived fact
+
+**Requirement**:
+One atomic question the Brief asks, linked to the Aspects that research it, with a status decided from the Run's records (supported, contradictory, incomplete, no evidence, background, reported). A requirement is reported only when a Claim cites an item linked to it, never because its Aspect has a Claim. One that is not answered is stated in Gaps & limitations.
+_Avoid_: question (alone), goal
 
 **Finding**:
 A Claim normalised into a triple (subject, predicate, object) with a polarity, a scope and an As-of period, so it can be compared with the Baseline. A single-valued predicate (a price, a CEO) identifies a Finding by subject, predicate and scope; a multi-valued one (competes with, offers) by the whole triple and scope. The As-of period is never part of its identity, so a value can change across time. An older value never replaces a newer established one. Historical Claims never become Findings.
@@ -97,7 +105,7 @@ A Claim backed only by prior Reports rather than by Sources fetched in the curre
 _Avoid_: memory claim, old claim
 
 **Claim verdicts**:
-A sampled Claim is `verified`, `unverified` (re-fetched, no match at or above the similarity threshold) or `unchecked` (re-fetch failed). Only `unverified` Claims are marked `[UNVERIFIED]`; `unchecked` ones are excluded from the pass rate.
+A sampled Claim is `verified` (a candidate, always including its own cited Passage, was judged SUPPORTED with a support map code could check), `unverified` (none was) or `unchecked` (re-fetch failed). Similarity only finds and orders candidates. Only `unverified` Claims are marked `[UNVERIFIED]`; `unchecked` ones are excluded from the pass rate.
 
 **Failed Run**:
 A Run in the terminal `FAILED` state: planning could not produce at least 3 Sub-tasks, every Sub-task failed, the Writer exhausted its retries, or a Run-level limit tripped. It produces no Report, fires no Alert, and never feeds the memory researcher. Its raw material expires after a retention period; a small failure record survives. A single failed Sub-task does not fail the Run; it is listed in Gaps & limitations.
