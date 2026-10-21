@@ -22,8 +22,8 @@ the setup and test sections is [`docs/t17-verification.md`](docs/t17-verificatio
 
 ## Status at a glance
 
-Everything below is on `main` (last merged PR: #77, ADR-0006). There are no open PRs or
-unmerged feature branches.
+This describes the code as of ADR-0006 (PR #77). Open work is tracked in
+[GitHub issues](https://github.com/subhadlearner/insightforge-agent/issues).
 
 | Area | Status |
 |---|---|
@@ -31,7 +31,7 @@ unmerged feature branches.
 | Live end-to-end Runs on Anthropic (Claude Haiku 5.5) after ADR-0006 | **Three COMPLETE Runs**: two budget-capped harness Runs and one Run through the web UI, recorded on video ([Live end-to-end Runs](#live-end-to-end-runs-after-adr-0006)) |
 | Formal T18 Anthropic verification (#19) | **Historical gates FAILED and stay failed**: B-1 FAIL, Stage C FAIL, Stage D not run ([T18 results](#anthropic-verification-results-t18-historical)) |
 | ADR-0006 live support gate (Gate A) | **FAILED** on its one attempt; not re-run |
-| Open follow-ups | #75 and #76 (post-submission, research quality), #49 (T20 hardening), #19 (T18), #20 (T19 demo post) |
+| Follow-up tickets | T17 README (#18), T18 verification (#19), T19 demo post (#20), T20 hardening (#49), post-submission research quality (#75, #76) |
 
 ## Contents
 
@@ -634,7 +634,8 @@ Merged to `main` in PR #77. The T18 results below are unchanged and remain the f
 
 - **Evidence-bound support.** Synthesis, the Writer's checks and the Fact-Checker share one
   judgment that must show, for every part of a statement, the exact words of the cited Passage
-  that state it; code verifies the quotes, the coverage and the figures. No lexical name rule
+  that state it; code verifies that the quotes occur in the Passage, that the parts cover the
+  statement and that its figures are stated. No lexical name rule
   refuses a candidate before the judge (the rule that lost Stage C's six-programmes fact is
   retired), and an uploaded document's company is given to the judge as identity context only.
 - **One Evidence pipeline.** Extraction proposes every fact once, anchored to its Passage;
@@ -761,29 +762,37 @@ they do not mean those tickets' other work is complete.
   Source metadata. It does not expose uploaded-PDF Passage text, Run events, internal Evidence
   objects or other Reports. Set `SHARE_JWT_SECRET` to separate its signing key from
   `SESSION_SECRET`; when blank, the demo deliberately reuses `SESSION_SECRET`.
-- **Extraction and judgements are LLM-based.** Entities, structured facts, Evidence drafts,
-  entailment verdicts, Finding normalisation for predicates outside the vocabulary, and
-  synthesis scores all come from models. The deterministic checks narrow what a model can slip
-  through. Every figure and named entity in an Evidence item must appear in its Passage.
-  Structured values and stated periods must be stated in the text. Citations must resolve to
-  stored Passages. Writer Claims may use only their item's figures and names. These checks are
-  lexical. They do not prove that a value belongs to the entity it is attributed to, that two
-  differently written names are the same entity, or that a paraphrase means the same thing.
-  Since rules ledger row 17 (2026-10-21) the Writer's figure and name match is retry feedback
-  for current Claims: a Claim that still breaks it goes to the semantic check against its cited
-  Passage and is published only if that check supports it. Confidence reflects source count and
-  credibility, not truth.
-- **Fact-checking is a sample.** It checks 20% of Claims (at least 5). Since ADR-0006 a
+- **Extraction and judgements are LLM-based.** Entities, structured facts, support verdicts,
+  requirement answers, Finding normalisation for predicates outside the vocabulary, and
+  synthesis scores all come from models. Since ADR-0006, support is a semantic judgment bound
+  to the cited Passage: for a SUPPORTED verdict the model must return a support map that
+  quotes, for each part of the statement, the exact words of the cited Passage that state it.
+  Code then checks, and fails closed, that every quote occurs in the cited unit, that the parts
+  cover the statement's content words, that every figure is stated by the quotes, and that an
+  identity part is used only with document identity context (an uploaded document whose own
+  text names its company). Citations must resolve to stored Passages.
+  - **What code does not decide.** Whether a quote *means* its part (a paraphrase, a negation
+    or hedge, "only", a comparison, an attribution) is the model's judgment. The negation,
+    hedge and comparison word lists were retired after Gate A, so code no longer checks
+    operators.
+  - **Retired lexical gates.** The pre-ADR-0006 lexical gate refused any candidate whose
+    capitalised names the Passage did not repeat; it is retired in production. The Writer's
+    figure and name match is now retry feedback for current Claims (rules ledger row 17,
+    2026-10-21): a Claim that still breaks it goes to the semantic check against its cited
+    Passage and is published only if that check supports it.
+  - **Limits.** Gate A, the one live measurement of this judgment, FAILED, and qualifier leaks
+    (#75) remain open, so a SUPPORTED verdict is not a guarantee of entailment. Confidence
+    reflects source count and credibility, not truth.
+- **Fact-checking is a sample, by the same model.** It checks 20% of Claims (at least 5). A
   `verified` Claim had a candidate (its own cited Passage, or a span at or above the 0.85
   similarity threshold) containing the Claim's figures that the light model judged SUPPORTED
-  with a support map code could check (quotes present, statement covered, figures stated,
-  operators such as "not" or "expected" quoted). Only the Passage the Claim cites can verify
-  it: support elsewhere in the Source leaves it unverified. Unsampled Claims are not checked by
-  the Fact-Checker, and `[UNVERIFIED]` means only that the check found no support. Before
-  publication every published Evidence item was judged against its cited Passages during
+  with a support map that passed the code checks above. Only the Passage the Claim cites can
+  verify it: support elsewhere in the Source leaves it unverified. Unsampled Claims are not
+  checked by the Fact-Checker, and `[UNVERIFIED]` means only that the check found no support.
+  Before publication every published Evidence item was judged against its cited Passages during
   Synthesis, every Claim that rewords its item against the item's primary Passage, and every
-  summary sentence against the published Claims, by the same contract and model (not an
-  independent check).
+  summary sentence against the published Claims. These use the same contract and model as the
+  Fact-Checker, so they are not an independent check.
 - **Data handling.** Everything is stored locally: SQLite files (`*.db`, git-ignored), Qdrant,
   and the model cache. Fetched web pages and uploaded PDFs are kept for as long as a Report
   cites them. Other raw material is swept after `RETENTION_DAYS` (default 30). Reports are never
