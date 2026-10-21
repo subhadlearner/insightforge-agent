@@ -660,8 +660,8 @@ causes T18 exposed ([ADR-0006](docs/adr/0006-evidence-bound-support-and-requirem
   established, could not be checked, or failed the Fact-Checker becomes a gap line, so "Gaps &
   limitations" matches what is missing.
 - **Checked before publication.** A Claim that rewords its Evidence is judged against the cited
-  Passage, and a summary sentence against the published Claims; what fails is restated
-  verbatim or removed. A comparison or conclusion may cite several items, is checked against
+  Passage, and a summary sentence against the published Claims; what fails is omitted, with the
+  reason logged, never replaced by the bare Evidence statement. A comparison or conclusion may cite several items, is checked against
   all of them, and the citation drawer shows every premise.
 
 What is proven offline, and what is not, is in the

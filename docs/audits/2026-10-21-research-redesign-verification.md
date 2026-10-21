@@ -282,3 +282,69 @@ The Writer's last draft, rebuilt from the saved records, was run through the new
 - **Every judgment INSUFFICIENT:** 32 Claims, all verbatim, each item once, the 3 duplicates removed.
 
 **Not established offline.** What the coverage check of each split, the verifier and the support judgments of the 25 Claims actually return can only be measured live. The Writer's attempt 3 also wrote "This research did not establish ..." Claims because of the wrong gap lines; with those fixed, its drafts will differ. A fresh capped end-to-end Run needs its own authorisation.
+
+## 15. Second capped end-to-end Run and the omission correction
+
+**The Run.** Authorised by the owner with a $1.00 cap and a 20-search limit, on `9ddf640` (the corrections of §14 and the approved row 17 change), with the same Brief and every role on Claude Haiku 5.5. The harness was as in §14, but the Run wrote to a SQLite file and a fresh connection read it back afterwards.
+
+Result: `run_846d12a50177` **COMPLETE** in 52 minutes, with every stage passed and one Report stored. It cost **$0.385**: 852 model calls (4 planner, 12 researcher, 3 writer, 833 light) and 6 searches, with no call refused and no provider error.
+
+Claude Code then stopped the harness for low system memory, about a second after the Run completed, before it had written its result files. Those files were produced offline from a copy of the database. The record is kept outside the repository (`insightforge-e2e/20261021T133437Z/`).
+
+| Area | Outcome |
+|---|---|
+| Requirement coverage | All six requirements `reported`. The Brief coverage check and all six answer checks completed (`coverage-2`, `answers-4`; all seven failed in §14). One claimed answer was UNSURE and was not counted. |
+| Report consistency | No gap line contradicts a published Claim; no duplicate Claim text; no item cited by two plain Claims. The writer's number and name rules flagged 14 Claims, which went to the semantic check: 27 judged, 5 rejected. |
+| Citations | All 33 Claims' citations resolve from a fresh connection (2 with premise citations). The Fact-Checker sampled 7 Claims and verified all 7, each SUPPORTED by its cited Passage. |
+| Graceful failure | No Sub-task failed. 8 paywalled sources were skipped and 35 work units retried. Two extraction calls and one writer draft hit their output limits; the extraction units were recovered and the writer was retried. The budget-stop path was exercised only in the offline rehearsal, where a $0.10 cap gave FAILED with "spending allowance of $0.1 reached" persisted. |
+| Persistence | After the abrupt stop, a fresh connection read the Run as COMPLETE: 1,472 events, the Report, the Markdown export and the public projection. |
+
+**Submission-blocking defect found: a figure published without its scope.** The Report said "Tesla sold 50,300 vehicles in 2025, a 10% decline from 2024." next to Tesla's 1,636,129 global deliveries. The figure is the UK's. Extraction recorded `scope: "UK"`, but neither the statement nor the sentence it came from says so.
+
+The Writer had qualified it ("this research did not establish its scope"). The semantic check rejected that wording, since the sentence does not state it, and then restated the bare statement in its place.
+
+Replaying the check offline with the Run's own logged verdicts reproduced this exactly: 39 Claims in, 33 out, the bare figure published, and the Run's quality flags (`claims_restated_verbatim:5`, `analytical_claims_removed:6`).
+
+**Correction.** A rejected reworded Claim is now omitted, with its reason logged (`writer_claims_checked`, `action: "omitted"`, `write.OMITTED`), and never replaced by its item's statement. No existing check verifies that a bare statement keeps the scope or context the rejected wording carried. Verifying it would need a new rule or a new judgment, both out of scope, so the Claim is omitted rather than restated. The same replay now gives 28 Claims and no UK figure, with the flag `claims_removed:5`.
+
+The regression test is `tests/pipeline/test_research_integrity_e2e2.py`, using the Run's texts. It fails on `9ddf640`, where the bare figure is published. Tests that pinned restatement now pin omission. The review reversal test now ends with repair filling the emptied section, as before.
+
+**What the correction costs.** The other four rejected Claims are omitted too, including two accurate facts that the Report showed only through their restatement: Tesla's 8.6% decline from 1,789,226 in 2024, and the Model Y estimate. The others were BYD's vertical integration and the Flash Charger rollout. Two of those restatements read badly ("This is an 8.6% decline …", "The company had surpassed …"); they are now gone rather than kept out of context.
+
+The replay re-ran only the Claim check. The summary check, which may now drop the summary's 8.6% sentence because the Claim behind it is omitted, and the Fact-Checker sample were not replayed.
+
+**Further corrections (the owner's additional instructions), each verified on the saved Run.**
+
+- **The missing comparison (P0).** Six of the eight analytical Claims were rejected by the joint check:
+  - **0.3** like-for-like caveat: INSUFFICIENT_EVIDENCE, the model's judgment that no passage says the measures differ.
+  - **0.4** "BYD's 2025 passenger BEV sales (2,256,714) exceeded Tesla's 2025 deliveries (1,636,129)": the model said **SUPPORTED**, but code returned VERIFICATION_ERROR, "excerpt not in the cited unit".
+  - **0.6** "almost three times … in 2025": SUPPORTED by the model, then INSUFFICIENT_EVIDENCE by the existing figure check, because no excerpt states "2025".
+  - **1.10, 2.7 and 2.14**: INSUFFICIENT_EVIDENCE, the model's judgment (dates, a reconciliation and an LMFP attribution no passage states).
+
+  Only 0.4 is a defect in the workflow. The quoted words ended "… over a full year". The page (fetched 2026-10-21) has `over a full year<sup><a href="#fn-3">3</a></sup>.`, which the text extractor stores as "year3.", and the exact-words check refused "year". The quote check (`support.find_excerpt`) now accepts a footnote number glued to a plain word of the unit, the form difference `provenance._same` already documents for names. It never applies to model numbers (B30A1 is not B30A), and the quoted word must still match.
+
+  On the saved data, the logged excerpt is now found in the stored passage. Because `check_joint` stops at the first refused quote, the rest of that support map (coverage, figures) was never checked in the Run and cannot be replayed without the model's reply. So whether the Run's own comparison would now be published is not established offline. Tests (`test_research_integrity_e2e2.py`):
+  - a supported comparison quoting the footnoted sentence is published with both citations;
+  - a comparison judged INSUFFICIENT_EVIDENCE, or one quoting words that are not the passage's, is still rejected;
+  - the footnote form rule never matches a plural or a model number.
+- **Context-free Claims (P1).** The fragments ("This is an 8.6% decline …", "The company had surpassed …") were restatements, and the omission correction above removes them: replayed, neither is published. The Writer's contextual wordings that their cited Passage supports are kept (24 of 33 Claims in the Run). The two contextual wordings that were rejected (Tesla's 8.6% decline; the UK figure) rest on a neighbouring sentence the Claim does not cite ("In 2025, deliveries reached 1,636,129 vehicles."; "The UK market also declined …"), so they are omitted. Publishing them would need support from an uncited Passage, which the citation contract does not allow.
+- **Character decoding (P1): no defect.** §15's earlier report of U+FFFD in page text was wrong. No stored passage of the Run contains a replacement character; the stored text has U+2019 apostrophes and degree signs. The "�" seen came from printing that text on a Windows console. Nothing was changed.
+- **Publication dates (P1).** On the live page (fetched 2026-10-21), roadgenius.com's statistics pages state `datePublished: 2024-09-30` and `dateModified: 2026-10-05` (BYD) or `2026-09-22` (Tesla). The Run recorded the publication date as stated, so it was not wrong, but it was misleading for 2025 figures.
+  - The page's own later modification date is now kept beside it as `Source.updated_at`, never as the publication date. It is recorded only when the page states both dates and the modification is later.
+  - Citations and the Markdown export show both ("2024-09-30, updated 2026-10-05").
+  - Older databases gain the column on opening, with no dates for their earlier sources.
+  - Tests: `tests/pipeline/test_e2e2_source_dates.py`.
+  - Fetching the live HTML shows these dates; the saved Run's Sources predate the change, so they hold none.
+
+**Remaining limitations (documented, not fixed):**
+- **Context outside the cited sentence.** Passages are single sentences, so Extraction accepts statements whose subject or scope is in a neighbouring sentence: "This is an 8.6% decline …"; the UK figure, whose scope Extraction recorded only in `scope`. Such facts are now omitted when reworded and rejected, but they are not caught at Extraction.
+- **Repair still fills verbatim.** `_fill_uncovered` and `_fill_requirements` still fill an emptied section or unanswered requirement with an item's statement, unchecked for context. They did not fire in this Run.
+- **Footnote numbers stay in Evidence text.** The extractor still stores them glued to words ("year3"); only the quote check tolerates them.
+- **Source titles.** They carry page clutter ("ElectrekElectrek Logo9to5Mac …"). Deferred (P2).
+- **Section confidence.** Every section shows LOW though 89 of 133 items are MEDIUM. Deferred (P2).
+- **Summary.** It ends on a weak sentence ("Tesla's battery type is not listed in its configurator or specifications"). Deferred (P2).
+- **The web citation drawer.** It shows the publication date only, not `updated_at`.
+- **Cost per Run.** 852 calls and 52 minutes for one Brief; support judgments (548) dominate.
+- **Harness memory.** The machine ran low on memory at the end of the Run.
+
+**Not established.** Whether a fresh live Run with these corrections produces a better Report can only be measured live: whether the comparison is published, and how the summary check and Fact-Checker respond to the omissions. No further paid call was made.
